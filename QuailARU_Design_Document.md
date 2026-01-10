@@ -1,0 +1,398 @@
+# Autonomous Recording Unit for Quail Population Monitoring
+
+**Design Documentation**
+
+*Version 1.1 — January 10, 2026*
+
+Low-Cost GPS-Synchronized Bioacoustic Recording Platform
+
+---
+
+## 1. Project Overview
+
+### 1.1 Purpose
+
+This document defines the design specifications for a network of low-cost Autonomous Recording Units (ARUs) intended for monitoring quail populations through passive acoustic surveillance. The units will be deployed across property boundaries to capture quail vocalizations, enabling population estimates, movement tracking, and behavioral studies.
+
+### 1.2 Key Features
+
+- GPS-synchronized timestamps with microsecond accuracy across all stations
+- High-fidelity audio recording at 48 kHz sample rate
+- 3-month autonomous operation on battery power
+- Target unit cost under $40
+- BLE connectivity for configuration and status monitoring
+- Weatherproof enclosure suitable for SE USA temperate climate
+
+### 1.3 Design Requirements
+
+| Parameter | Requirement |
+|-----------|-------------|
+| Operating Temperature | -10°C to +50°C |
+| Battery Life | ≥90 days continuous |
+| Time Sync Accuracy | ±1 ms across network |
+| Audio Sample Rate | 48 kHz |
+| Audio Bit Depth | 16-bit |
+| Audio Channels | Mono |
+| Audio Format | WAV (PCM) |
+| Storage Capacity | ≥32 GB |
+| Wireless Config | BLE 4.2+ |
+| Enclosure Rating | IP65 minimum |
+
+---
+
+## 2. System Architecture
+
+### 2.1 Block Diagram
+
+```mermaid
+flowchart TB
+    subgraph Power["Power Subsystem"]
+        BAT["4× 18650 Li-ion<br/>1S4P Configuration<br/>3.7V nominal"]
+        LDO["HT7333 LDO<br/>3.3V Output"]
+        BAT --> LDO
+    end
+
+    subgraph GPS["GPS Module"]
+        L76K["Quectel L76K"]
+        ANT["Patch Antenna"]
+        PPS["PPS Output"]
+        ANT --> L76K
+        L76K --> PPS
+    end
+
+    subgraph MCU["Microcontroller"]
+        ESP["ESP32<br/>Dual-Core"]
+        BLE["BLE Radio"]
+        I2S["I2S Interface"]
+        SPI["SPI Interface"]
+        MCLK["MCLK Output"]
+        ESP --- BLE
+        ESP --- I2S
+        ESP --- SPI
+        ESP --- MCLK
+    end
+
+    subgraph Audio["Audio Subsystem"]
+        MIC["PUI AOM-5024L-HD-R<br/>Electret Mic<br/>80 dB SNR"]
+        ADC["PCM1808<br/>24-bit I2S ADC<br/>99 dB SNR"]
+        MIC --> ADC
+    end
+
+    subgraph Storage["Storage"]
+        SD["MicroSD Card<br/>32 GB Class 10"]
+    end
+
+    LDO -->|3.3V| ESP
+    LDO -->|3.3V| ADC
+    LDO -->|3.3V| L76K
+    LDO -->|3.3V| SD
+
+    PPS -->|Time Sync| ESP
+    ADC -->|I2S Data| I2S
+    MCLK -->|System Clock| ADC
+    SPI <-->|Data| SD
+```
+
+### 2.2 Audio Signal Chain
+
+```mermaid
+flowchart LR
+    subgraph Acoustic["Acoustic Input"]
+        SOUND["Sound Waves<br/>20Hz - 20kHz"]
+    end
+
+    subgraph Microphone["Microphone Stage"]
+        MIC["PUI AOM-5024L-HD-R<br/>80 dB SNR<br/>-24 dB Sensitivity"]
+        BIAS["Bias Circuit<br/>3.3V / 2.2kΩ"]
+        CAP["10µF DC Block"]
+        BIAS --> MIC
+        MIC --> CAP
+    end
+
+    subgraph ADC["ADC Stage"]
+        PCM["PCM1808<br/>24-bit / 48kHz<br/>99 dB SNR"]
+    end
+
+    subgraph Digital["Digital Output"]
+        I2S["I2S Bus<br/>BCK / LRCK / DOUT"]
+    end
+
+    SOUND --> MIC
+    CAP --> PCM
+    PCM --> I2S
+```
+
+### 2.3 Power Distribution
+
+```mermaid
+flowchart TD
+    subgraph Battery["Battery Pack (1S4P)"]
+        B1["18650 Cell"]
+        B2["18650 Cell"]
+        B3["18650 Cell"]
+        B4["18650 Cell"]
+    end
+
+    REG["HT7333 LDO<br/>Vin: 3.0-12V<br/>Vout: 3.3V<br/>Iq: 4µA"]
+
+    B1 & B2 & B3 & B4 -->|"3.7V nominal<br/>13,600 mAh"| REG
+
+    REG -->|3.3V| ESP32["ESP32"]
+    REG -->|3.3V| AUDIO["PUI Mic +<br/>PCM1808"]
+    REG -->|3.3V| SDCARD["SD Card"]
+    REG -->|3.3V| GPSSW["GPS<br/>(GPIO switched)"]
+```
+
+---
+
+## 3. Component Selection Rationale
+
+### 3.1 Microcontroller: ESP32 (Dual-Core)
+
+The ESP32 (original dual-core variant) was selected to support the high-performance analog microphone subsystem:
+
+- Dual Xtensa LX6 cores for concurrent audio processing and control
+- Two I2S peripherals with proper MCLK output support (GPIO 0, 1, or 3)
+- Integrated BLE 4.2 and WiFi for wireless configuration
+- Well-documented audio examples and library support
+- Deep sleep current ~10µA (acceptable with 1S4P battery)
+- Unit cost $3-4 for DevKit modules
+
+### 3.2 GPS Module: Quectel L76K
+
+The Quectel L76K is under evaluation as a cost-effective alternative to the u-blox MAX-M10S:
+
+| Parameter | L76K | MAX-M10S |
+|-----------|------|----------|
+| Price | $8.89 | $13.00 |
+| Voltage Range | 2.8-4.3V | 2.7-3.6V |
+| Current (tracking) | 29mA | 25mA |
+| PPS Output | Yes | Yes |
+| PPS Accuracy | ±10ns | ±10ns |
+
+If testing confirms reliable PPS output and Li-ion voltage compatibility, the L76K enables a simplified 1S parallel battery configuration.
+
+### 3.3 Audio Subsystem: PUI AOM-5024L-HD-R + PCM1808 ADC
+
+The PUI AOM-5024L-HD-R electret condenser microphone was selected for its exceptional signal-to-noise ratio, which dramatically increases detection range:
+
+**Microphone Specifications:**
+- Signal-to-noise ratio: 80 dBA (+19 dB over INMP441)
+- Frequency response: 20 Hz - 20 kHz
+- Omnidirectional polar pattern
+- Acoustic overload point: 110 dB SPL
+- Unit cost: ~$3.67
+
+**ADC Specifications (PCM1808):**
+- 24-bit resolution at up to 96 kHz sample rate
+- 99 dB SNR (well above mic's 80 dB — not the limiting factor)
+- I2S digital output compatible with ESP32
+- Simpler interface than PCM1802 (no FSYNC pin)
+- Unit cost: ~$2.50
+
+**Detection Range Comparison:**
+
+| Microphone | SNR | Est. Detection Range | TDOA Coverage (10 stations) |
+|------------|-----|---------------------|----------------------------|
+| INMP441 | 61 dB | ~250-300m | 4-6 coveys |
+| ICS-43434 | 64 dB | ~350-400m | 6-7 coveys |
+| **PUI AOM-5024L** | **80 dB** | **~800-1200m** | **11-16 coveys** |
+
+The 19 dB SNR improvement translates to approximately 3x greater detection range, reducing required station count while dramatically improving coverage.
+
+**Bias Circuit:**
+
+The electret microphone requires a simple bias circuit: 3.3V through a 2.2kΩ load resistor, with a 10µF DC-blocking capacitor to the ADC input.
+
+---
+
+## 4. Bill of Materials
+
+### 4.1 Electronics BOM
+
+| # | Component | Description | Qty | Unit $ | Total $ |
+|---|-----------|-------------|-----|--------|---------|
+| 1 | ESP32 DevKit Module | ESP32-WROOM-32 DevKit | 1 | $3.50 | $3.50 |
+| 2 | GPS Module | Quectel L76K | 1 | $8.89 | $8.89 |
+| 3 | GPS Antenna | 25×25mm ceramic patch | 1 | $2.00 | $2.00 |
+| 4 | Electret Microphone | PUI AOM-5024L-HD-R (80dB SNR) | 1 | $3.67 | $3.67 |
+| 5 | I2S ADC Module | PCM1808 24-bit stereo ADC | 1 | $2.50 | $2.50 |
+| 6 | MicroSD Module | SPI interface, 3.3V | 1 | $0.50 | $0.50 |
+| 7 | MicroSD Card | 32GB Class 10 | 1 | $4.00 | $4.00 |
+| 8 | Voltage Regulator | HT7333 LDO, 3.3V 250mA | 1 | $0.30 | $0.30 |
+| 9 | Battery Holder | 4× 18650 parallel | 1 | $1.50 | $1.50 |
+| 10 | 18650 Cells | 3400mAh Li-ion | 2 | $3.00 | $6.00 |
+| 11 | Capacitors | 100µF, 10µF, 0.1µF assorted | 1 | $0.50 | $0.50 |
+| 12 | Resistors | 2.2kΩ (mic bias), assorted | 1 | $0.20 | $0.20 |
+| | | | | **Total:** | **$33.56** |
+
+### 4.2 Mechanical BOM
+
+| # | Component | Description | Qty | Unit $ | Total $ |
+|---|-----------|-------------|-----|--------|---------|
+| 1 | Enclosure | IP65 junction box, 150×100×70mm | 1 | $5.00 | $5.00 |
+| 2 | Cable Glands | PG7 waterproof | 2 | $0.50 | $1.00 |
+| 3 | Mounting Hardware | Stainless screws, standoffs | 1 | $1.50 | $1.50 |
+| 4 | Acoustic Vent | GORE or equivalent | 1 | $2.00 | $2.00 |
+| | | | | **Total:** | **$9.50** |
+
+**Grand Total: ~$43/unit** (slightly over $40 target, can be reduced with volume purchasing)
+
+---
+
+## 5. Wiring
+
+### 5.1 Pin Assignments
+
+| ESP32 Pin | Function | Connected To |
+|-----------|----------|--------------|
+| GPIO32 | I2S Data In | PCM1808 DOUT |
+| GPIO15 | I2S Word Select | PCM1808 LRCK |
+| GPIO14 | I2S Bit Clock | PCM1808 BCK |
+| GPIO0 | I2S Master Clock | PCM1808 SCKI |
+| GPIO16 | UART RX | GPS TX |
+| GPIO17 | UART TX | GPS RX |
+| GPIO4 | PPS Input | GPS PPS |
+| GPIO5 | SPI CS | SD Card CS |
+| GPIO18 | SPI CLK | SD Card CLK |
+| GPIO19 | SPI MISO | SD Card MISO |
+| GPIO23 | SPI MOSI | SD Card MOSI |
+| GPIO2 | GPS Power | GPS VCC (via MOSFET) |
+
+### 5.2 I2S Timing
+
+```mermaid
+sequenceDiagram
+    participant MCLK as MCLK (12.288 MHz)
+    participant BCK as BCK (3.072 MHz)
+    participant LRCK as LRCK (48 kHz)
+    participant DATA as DOUT (24-bit)
+
+    Note over MCLK,DATA: 256× oversampling (MCLK = 256 × Fs)
+    Note over BCK,DATA: 64 BCK per frame (32 per channel)
+    
+    MCLK->>BCK: ÷4
+    BCK->>LRCK: ÷64
+    LRCK->>DATA: Left/Right channel select
+```
+
+---
+
+## 6. Power Budget
+
+### 6.1 Current Consumption
+
+| State | ESP32 | GPS | Audio | SD Card | Total |
+|-------|-------|-----|-------|---------|-------|
+| Recording | 80 mA | 29 mA | 10 mA | 100 mA | 219 mA |
+| Idle (GPS on) | 20 mA | 29 mA | 10 mA | 0.1 mA | 59 mA |
+| Deep Sleep | 0.01 mA | 0 mA | 0 mA | 0.1 mA | 0.11 mA |
+
+### 6.2 Battery Life Estimates
+
+With 1S4P configuration (13,600 mAh):
+
+| Duty Cycle | Daily Recording | Estimated Battery Life |
+|------------|-----------------|----------------------|
+| Dawn/Dusk only | 4 hours | 90+ days |
+| Extended morning | 6 hours | 70+ days |
+| Continuous | 24 hours | 18+ days |
+
+---
+
+## 7. Software Architecture
+
+### 7.1 Firmware Overview
+
+```mermaid
+stateDiagram-v2
+    [*] --> Boot
+    Boot --> GPSSync: Power On
+    GPSSync --> Idle: Time Acquired
+    Idle --> Recording: Schedule Trigger
+    Recording --> Idle: Recording Complete
+    Idle --> DeepSleep: Outside Schedule
+    DeepSleep --> GPSSync: RTC Wake
+    
+    Recording --> Recording: PPS Interrupt (timestamp)
+```
+
+### 7.2 Recording Schedule
+
+The system uses GPS-derived sunrise/sunset times to automatically adjust recording windows throughout the season. The NOAA solar calculation algorithm requires ~50 lines of C code and executes in <1ms.
+
+---
+
+## 8. Enclosure Design
+
+### 8.1 Component Layout
+
+```mermaid
+block-beta
+    columns 3
+    
+    block:top:3
+        GPS["GPS Module + Antenna<br/>(top, sky-facing)"]
+    end
+    
+    block:middle:3
+        ESP["ESP32"] ADC["PCM1808"] SD["SD Card"]
+    end
+    
+    block:bottom:3
+        BAT["Battery Holder (1S4P)"]
+    end
+    
+    block:external:3
+        MIC["Microphone<br/>(external, acoustic vent)"]
+    end
+```
+
+### 8.2 Key Design Points
+
+- GPS antenna positioned at top of enclosure with clear sky view
+- Microphone mounted externally or through waterproof acoustic vent
+- Batteries accessible without disassembly (hot-swap capable)
+- All electronics conformal coated for humidity protection
+- Desiccant pack inside enclosure
+
+---
+
+## 9. TDOA Network Coverage
+
+### 9.1 Detection Range Impact
+
+With the PUI microphone (80 dB SNR), estimated detection range for bobwhite whistle calls is 800-1200m, compared to 250-300m with INMP441.
+
+### 9.2 Station Layout (10-Station Pilot)
+
+```mermaid
+graph TD
+    subgraph Coverage["Western Cluster Coverage"]
+        A01((ARU 01))
+        A02((ARU 02))
+        A03((ARU 03))
+        A04((ARU 04))
+        A05((ARU 05))
+        A06((ARU 06))
+        A07((ARU 07))
+        A08((ARU 08))
+        A09((ARU 09))
+        A10((ARU 10))
+    end
+
+    subgraph Results["Coverage Results"]
+        TDOA["TDOA Capable: 11/17 coveys"]
+        DET["Detection Only: 5/17 coveys"]
+        NONE["No Coverage: 1/17 coveys"]
+    end
+```
+
+---
+
+## Appendix A: Document Revision History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.0 | January 2026 | Initial release |
+| 1.1 | January 10, 2026 | Audio subsystem redesign: Changed MCU from ESP32-C3 to ESP32 (dual-core). Replaced INMP441 (61dB SNR) with PUI AOM-5024L-HD-R (80dB SNR) + PCM1808 ADC for ~3x detection range increase. Updated BOM, wiring, and block diagrams. |
