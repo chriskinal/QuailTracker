@@ -14,6 +14,9 @@
 | J2 | S2B-PH-SM4-TB | C295747 | Battery Connector, JST PH 2-pin |
 | J3 | B2B-XH-A | C158012 | Mic Connector, JST XH 2-pin |
 | R1 | 2.2k 0603 | C4190 | Mic Bias Resistor |
+| R2 | 1M 0603 | C22935 | VBAT Divider High |
+| R3 | 1M 0603 | C22935 | VBAT Divider Low |
+| C13 | 1uF 0603 | C14664 | VBAT ADC Buffer |
 | C1 | 10uF 0805 | C89827 | LDO Input Cap |
 | C2 | 10uF 0805 | C89827 | LDO Output Cap |
 | C3 | 100nF 0603 | C14663 | LDO Decoupling |
@@ -88,6 +91,8 @@
 | C12 | 2 | - (REFP bypass) |
 | C9 | 2 | - |
 | C10 | 2 | - |
+| R3 | 2 | VBAT divider low |
+| C13 | 2 | VBAT ADC buffer |
 | U4 | GND | Ground (multiple pins) |
 
 **VBAT (Battery Input)**
@@ -97,6 +102,7 @@
 | C1 | 1 | + |
 | U2 | 1 | VIN |
 | U2 | 3 | EN (tie to VIN) |
+| R2 | 1 | VBAT divider high |
 
 ⚠️ **J2 Battery Polarity Warning:** JST PH connectors have no universal polarity standard. Verify your battery's connector polarity matches J2 before connecting. The LCSC footprint pin 1 position determines which pad is VBAT+.
 
@@ -217,6 +223,38 @@ U2 Pin 4 (NC) --- No connection
 
 ---
 
+### Battery Voltage Monitor
+
+```
+VBAT (J2+) ---[R2 1M]---+--- U4 GPIO35 (ADC1_CH7)
+                        |
+                       [C13 1uF]
+                        |
+                       [R3 1M]
+                        |
+                       GND
+```
+
+| From | To | Notes |
+|------|----|-------|
+| VBAT | R2 pin 1 | Battery positive |
+| R2 pin 2 | R3 pin 1 | Divider midpoint |
+| R2 pin 2 | C13 pin 1 | ADC buffer cap |
+| R2 pin 2 | U4 GPIO35 | ADC input |
+| C13 pin 2 | GND | Buffer cap ground |
+| R3 pin 2 | GND | Divider ground |
+
+**Voltage scaling:** VBAT ÷ 2
+- 4.2V (full) → 2.1V ADC
+- 3.7V (nominal) → 1.85V ADC
+- 3.0V (empty) → 1.5V ADC
+
+**Current draw:** ~2.1µA continuous (10x improvement over 100k divider)
+
+**Note:** C13 (1µF) buffers the ADC input, allowing accurate readings despite high-impedance divider. Settling time ~500ms after voltage change.
+
+---
+
 ## U4 (ESP32 DevKitC) Pin Summary
 
 | U4 Pin | Function | Connected To |
@@ -234,6 +272,7 @@ U2 Pin 4 (NC) --- No connection
 | GPIO22 | I2C SCL | U1 pin 19 |
 | GPIO23 | SPI MOSI | J1 pin 3 |
 | GPIO32 | I2S SDOUT | U1 pin 3 |
+| GPIO35 | VBAT ADC | R2/R3 divider midpoint |
 | 3V3 | Power | 3V3 rail |
 | GND | Ground | GND rail |
 
