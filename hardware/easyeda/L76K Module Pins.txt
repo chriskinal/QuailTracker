@@ -1,0 +1,10 @@
+Connector JST-SH 1.25mm pitch 8-pins
+
+Brown - GND 1, 10, 12
+Orange - Ve_3v3 8
+White - VDD_3v3 6
+Blue - TX_GPS 2
+Green - RX_GPS 3
+Yellow - Wake_UP 5
+Black - PPS 4
+Red - RST_GPS 9
