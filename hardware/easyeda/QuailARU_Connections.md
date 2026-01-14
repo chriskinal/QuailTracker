@@ -16,9 +16,9 @@
 | R1 | 2.2k 0603 | C4190 | Mic Bias Resistor |
 | R2 | 1M 0603 | C22935 | VBAT Divider High |
 | R3 | 1M 0603 | C22935 | VBAT Divider Low |
-| C13 | 1uF 0603 | C14664 | VBAT ADC Buffer |
-| C1 | 10uF 0805 | C89827 | LDO Input Cap |
-| C2 | 10uF 0805 | C89827 | LDO Output Cap |
+| C13 | 1uF 0805 | C28323 | VBAT ADC Buffer (Basic) |
+| C1 | 10uF 0805 | C15850 | LDO Input Cap (Basic) |
+| C2 | 10uF 0805 | C15850 | LDO Output Cap (Basic) |
 | C3 | 100nF 0603 | C14663 | LDO Decoupling |
 | C4 | 100nF 0603 | C14663 | ES7243E VDDD Decoupling |
 | C5 | 100nF 0603 | C14663 | ES7243E VDDA Decoupling |
@@ -26,9 +26,9 @@
 | C7 | 100nF 0603 | C14663 | SD Card Decoupling |
 | C8 | 100nF 0603 | C14663 | ES7243E REFQ Bypass |
 | C12 | 100nF 0603 | C14663 | ES7243E REFP Bypass |
-| C9 | 4.7uF 0805 | C123624 | ES7243E VDDA Bulk |
-| C10 | 4.7uF 0805 | C123624 | Bulk |
-| C11 | 10uF 0805 | C89827 | Mic DC Block |
+| C9 | 4.7uF 0805 | C1779 | ES7243E VDDA Bulk (Basic) |
+| C10 | 4.7uF 0805 | C1779 | Bulk (Basic) |
+| C11 | 10uF 0805 | C15850 | Mic DC Block (Basic) |
 
 
 ---
