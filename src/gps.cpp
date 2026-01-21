@@ -76,6 +76,7 @@ static double parseCoordinate(const char* str, char direction)
 static void parseGGA(char* sentence)
 {
     char* token;
+    char* dirToken;
     int field = 0;
 
     token = strtok(sentence, ",");
@@ -92,13 +93,17 @@ static void parseGGA(char* sentence)
                 }
                 break;
             case 2:  // Latitude
-                s_gpsData.latitude = parseCoordinate(token,
-                    (strtok(NULL, ","))[0]);  // Includes N/S
+                dirToken = strtok(NULL, ",");
+                if (dirToken != NULL && strlen(dirToken) > 0) {
+                    s_gpsData.latitude = parseCoordinate(token, dirToken[0]);
+                }
                 field++;  // Skip the N/S field
                 break;
             case 4:  // Longitude
-                s_gpsData.longitude = parseCoordinate(token,
-                    (strtok(NULL, ","))[0]);  // Includes E/W
+                dirToken = strtok(NULL, ",");
+                if (dirToken != NULL && strlen(dirToken) > 0) {
+                    s_gpsData.longitude = parseCoordinate(token, dirToken[0]);
+                }
                 field++;  // Skip the E/W field
                 break;
             case 6:  // Fix quality
