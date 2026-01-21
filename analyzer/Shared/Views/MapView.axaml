@@ -1,0 +1,153 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:QuailTracker.Analyzer.Shared.ViewModels"
+             x:Class="QuailTracker.Analyzer.Shared.Views.MapView"
+             x:DataType="vm:MapViewModel">
+
+    <Grid RowDefinitions="Auto,*,Auto" Margin="8">
+        <!-- Map Controls -->
+        <Border Grid.Row="0"
+                Classes="CardPanel"
+                Margin="0,0,0,8">
+            <Grid ColumnDefinitions="*,Auto">
+                <!-- Layer Toggles and Filters -->
+                <StackPanel Orientation="Horizontal" Spacing="16">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Layers:" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <CheckBox Content="Stations" IsChecked="{Binding ShowStations}" VerticalAlignment="Center" />
+                        <CheckBox Content="Detections" IsChecked="{Binding ShowDetections}" VerticalAlignment="Center" />
+                        <CheckBox Content="Localizations" IsChecked="{Binding ShowLocalizations}" VerticalAlignment="Center" />
+                    </StackPanel>
+
+                    <Border Width="1" Background="#E0E0E0" Margin="8,0" />
+
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Time Filter:" VerticalAlignment="Center" />
+                        <DatePicker SelectedDate="{Binding FilterStartTime}" Width="120" />
+                        <TextBlock Text="to" VerticalAlignment="Center" />
+                        <DatePicker SelectedDate="{Binding FilterEndTime}" Width="120" />
+                        <Button Content="Clear"
+                                Classes="ToolbarButton"
+                                Command="{Binding ClearTimeFilterCommand}" />
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- View Buttons -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                    <Button Content="Fit All"
+                            Classes="SecondaryButton"
+                            Command="{Binding FlyToAllCommand}" />
+                    <Button Content="Refresh"
+                            Classes="ToolbarButton"
+                            Command="{Binding RefreshMapCommand}" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Map Container -->
+        <Grid Grid.Row="1" ColumnDefinitions="*,250">
+            <!-- WebView for Cesium (placeholder until actual WebView integration) -->
+            <Border Grid.Column="0"
+                    Background="#1B1B1D"
+                    CornerRadius="4"
+                    ClipToBounds="True"
+                    Margin="0,0,8,0">
+                <Grid>
+                    <!-- Placeholder when map not ready -->
+                    <StackPanel VerticalAlignment="Center"
+                                HorizontalAlignment="Center"
+                                IsVisible="{Binding !IsMapReady}">
+                        <PathIcon Data="M20.5,3L20.34,3.03L15,5.1L9,3L3.36,4.9C3.15,4.97 3,5.15 3,5.38V20.5A0.5,0.5 0 0,0 3.5,21L3.66,20.97L9,18.9L15,21L20.64,19.1C20.85,19.03 21,18.85 21,18.62V3.5A0.5,0.5 0 0,0 20.5,3M15,19L9,16.89V5L15,7.11V19Z"
+                                  Width="64" Height="64"
+                                  Foreground="#4A4A4D" />
+                        <TextBlock Text="Cesium Map Loading..."
+                                   HorizontalAlignment="Center"
+                                   Foreground="#808080"
+                                   Margin="0,16,0,0" />
+                        <TextBlock Text="WebView will be initialized when available"
+                                   HorizontalAlignment="Center"
+                                   Foreground="#606060"
+                                   FontSize="12"
+                                   Margin="0,4,0,0" />
+                    </StackPanel>
+
+                    <!-- WebView placeholder - actual WebView added in code-behind -->
+                    <ContentControl x:Name="WebViewContainer"
+                                    IsVisible="{Binding IsMapReady}" />
+                </Grid>
+            </Border>
+
+            <!-- Side Panel -->
+            <Grid Grid.Column="1" RowDefinitions="*,*,Auto">
+                <!-- Stations List -->
+                <Grid Grid.Row="0" RowDefinitions="Auto,*" Margin="0,0,0,4">
+                    <TextBlock Grid.Row="0" Text="Stations" FontWeight="SemiBold" Margin="0,0,0,4" />
+                    <ListBox Grid.Row="1"
+                             ItemsSource="{Binding Stations}"
+                             SelectedItem="{Binding SelectedStation}"
+                             BorderBrush="#E0E0E0"
+                             BorderThickness="1">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <PathIcon Data="M12,11.5A2.5,2.5 0 0,1 9.5,9A2.5,2.5 0 0,1 12,6.5A2.5,2.5 0 0,1 14.5,9A2.5,2.5 0 0,1 12,11.5M12,2A7,7 0 0,0 5,9C5,14.25 12,22 12,22C12,22 19,14.25 19,9A7,7 0 0,0 12,2Z"
+                                              Width="12" Height="12"
+                                              Foreground="{StaticResource QuailPrimaryBrush}" />
+                                    <TextBlock Text="{Binding Id}" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+
+                <!-- Localizations List -->
+                <Grid Grid.Row="1" RowDefinitions="Auto,*" Margin="0,4,0,0">
+                    <TextBlock Grid.Row="0" Text="Localizations" FontWeight="SemiBold" Margin="0,0,0,4" />
+                    <ListBox Grid.Row="1"
+                             ItemsSource="{Binding Localizations}"
+                             SelectedItem="{Binding SelectedLocalization}"
+                             BorderBrush="#E0E0E0"
+                             BorderThickness="1">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Species}" FontWeight="SemiBold" />
+                                    <TextBlock Text="{Binding CoordinateString}" FontSize="11" Foreground="#757575" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+
+                <!-- Actions -->
+                <StackPanel Grid.Row="2" Spacing="4" Margin="0,8,0,0">
+                    <Button Content="Fly to Station"
+                            Classes="SecondaryButton"
+                            Command="{Binding FlyToStationCommand}"
+                            IsEnabled="{Binding SelectedStation, Converter={x:Static ObjectConverters.IsNotNull}}"
+                            HorizontalAlignment="Stretch" />
+                    <Button Content="Fly to Localization"
+                            Classes="SecondaryButton"
+                            Command="{Binding FlyToLocalizationCommand}"
+                            IsEnabled="{Binding SelectedLocalization, Converter={x:Static ObjectConverters.IsNotNull}}"
+                            HorizontalAlignment="Stretch" />
+                </StackPanel>
+            </Grid>
+        </Grid>
+
+        <!-- Export Bar -->
+        <Border Grid.Row="2"
+                Classes="CardPanel"
+                Margin="0,8,0,0">
+            <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Text="Export data to KML for use in Google Earth"
+                           VerticalAlignment="Center"
+                           Classes="DataLabel" />
+                <Button Grid.Column="1"
+                        Content="Export to KML..."
+                        Classes="AccentButton"
+                        Click="OnExportKmlClick" />
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

@@ -1,0 +1,146 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:QuailTracker.Analyzer.Shared.ViewModels"
+             x:Class="QuailTracker.Analyzer.Shared.Views.ImportView"
+             x:DataType="vm:ImportViewModel">
+
+    <Grid ColumnDefinitions="*,300" Margin="8">
+        <!-- Left: File List -->
+        <Grid Grid.Column="0" RowDefinitions="Auto,*,Auto" Margin="0,0,8,0">
+            <TextBlock Grid.Row="0" Text="Audio Files" Classes="SectionHeader" />
+
+            <!-- Drop Zone / File List -->
+            <Border Grid.Row="1"
+                    Classes="DropZone"
+                    DragDrop.AllowDrop="True">
+                <Grid>
+                    <!-- Empty state with drop hint -->
+                    <StackPanel VerticalAlignment="Center"
+                                HorizontalAlignment="Center"
+                                IsVisible="{Binding !AudioFiles.Count}">
+                        <PathIcon Data="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M13.5,16V19H10.5V16H8L12,12L16,16H13.5M13,9V3.5L18.5,9H13Z"
+                                  Width="48" Height="48"
+                                  Foreground="#BDBDBD" />
+                        <TextBlock Text="Drop WAV files here"
+                                   HorizontalAlignment="Center"
+                                   Foreground="#757575"
+                                   Margin="0,12,0,0" />
+                        <TextBlock Text="or use the buttons below"
+                                   HorizontalAlignment="Center"
+                                   Foreground="#9E9E9E"
+                                   FontSize="12" />
+                    </StackPanel>
+
+                    <!-- File list -->
+                    <DataGrid ItemsSource="{Binding AudioFiles}"
+                              SelectedItem="{Binding SelectedAudioFile}"
+                              IsVisible="{Binding AudioFiles.Count}"
+                              AutoGenerateColumns="False"
+                              IsReadOnly="True"
+                              GridLinesVisibility="Horizontal"
+                              BorderThickness="0">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="File" Binding="{Binding FileName}" Width="*" />
+                            <DataGridTextColumn Header="Station" Binding="{Binding StationId}" Width="80" />
+                            <DataGridTextColumn Header="Timestamp" Binding="{Binding Timestamp, StringFormat='{}{0:yyyy-MM-dd HH:mm}'}" Width="120" />
+                            <DataGridTextColumn Header="Duration" Binding="{Binding Duration, StringFormat='{}{0:mm\\:ss}'}" Width="70" />
+                            <DataGridTextColumn Header="Sample Rate" Binding="{Binding SampleRate, StringFormat='{}{0} Hz'}" Width="90" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </Border>
+
+            <!-- Import Progress -->
+            <Grid Grid.Row="2" Margin="0,8,0,0" IsVisible="{Binding IsImporting}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <TextBlock Text="{Binding CurrentFileName}" FontSize="12" />
+                <ProgressBar Grid.Row="1"
+                             Minimum="0"
+                             Maximum="{Binding ImportTotal}"
+                             Value="{Binding ImportProgress}"
+                             Margin="0,4,0,0" />
+            </Grid>
+
+            <!-- File Actions -->
+            <StackPanel Grid.Row="2"
+                        Orientation="Horizontal"
+                        Spacing="8"
+                        Margin="0,8,0,0"
+                        IsVisible="{Binding !IsImporting}">
+                <Button Content="Import Files..."
+                        Classes="PrimaryButton"
+                        Click="OnImportFilesClick" />
+                <Button Content="Import Folder..."
+                        Classes="SecondaryButton"
+                        Click="OnImportFolderClick" />
+                <Button Content="Remove Selected"
+                        Classes="ToolbarButton"
+                        Command="{Binding RemoveAudioFileCommand}"
+                        IsEnabled="{Binding SelectedAudioFile, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                <Button Content="Clear All"
+                        Classes="DangerButton"
+                        Command="{Binding ClearAllFilesCommand}"
+                        IsEnabled="{Binding AudioFiles.Count}" />
+            </StackPanel>
+            <Button Grid.Row="2"
+                    Content="Cancel"
+                    Classes="DangerButton"
+                    Command="{Binding CancelImportCommand}"
+                    IsVisible="{Binding IsImporting}"
+                    Margin="0,8,0,0" />
+        </Grid>
+
+        <!-- Right: Station Configuration -->
+        <Grid Grid.Column="1" RowDefinitions="Auto,*,Auto">
+            <TextBlock Grid.Row="0" Text="Stations" Classes="SectionHeader" />
+
+            <!-- Station List -->
+            <DataGrid Grid.Row="1"
+                      ItemsSource="{Binding Stations}"
+                      SelectedItem="{Binding SelectedStation}"
+                      AutoGenerateColumns="False"
+                      IsReadOnly="True"
+                      GridLinesVisibility="Horizontal"
+                      BorderBrush="#E0E0E0"
+                      BorderThickness="1">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="ID" Binding="{Binding Id}" Width="80" />
+                    <DataGridTextColumn Header="Latitude" Binding="{Binding Latitude, StringFormat='{}{0:F6}'}" Width="*" />
+                    <DataGridTextColumn Header="Longitude" Binding="{Binding Longitude, StringFormat='{}{0:F6}'}" Width="*" />
+                </DataGrid.Columns>
+            </DataGrid>
+
+            <!-- Add Station Form -->
+            <Border Grid.Row="2"
+                    Classes="CardPanel"
+                    Margin="0,8,0,0">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="Add/Update Station" FontWeight="SemiBold" FontSize="12" />
+                    <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto">
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="ID:" VerticalAlignment="Center" Margin="0,0,8,0" />
+                        <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding NewStationId}" Margin="0,0,0,4" />
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Lat:" VerticalAlignment="Center" Margin="0,0,8,0" />
+                        <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding NewStationLatitude}" Watermark="e.g., 29.123456" Margin="0,0,0,4" />
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Lon:" VerticalAlignment="Center" Margin="0,0,8,0" />
+                        <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding NewStationLongitude}" Watermark="e.g., -99.123456" Margin="0,0,0,4" />
+
+                        <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Spacing="4">
+                            <Button Content="Add/Update"
+                                    Classes="PrimaryButton"
+                                    Command="{Binding AddStationCommand}" />
+                            <Button Content="Remove"
+                                    Classes="DangerButton"
+                                    Command="{Binding RemoveStationCommand}"
+                                    IsEnabled="{Binding SelectedStation, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

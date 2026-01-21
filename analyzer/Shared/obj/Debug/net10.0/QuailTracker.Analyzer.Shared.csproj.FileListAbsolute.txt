@@ -1,0 +1,15 @@
+/Users/chris/Code/QuailTracker/analyzer/Shared/obj/Debug/net10.0/QuailTracker.Analyzer.Shared.csproj.AssemblyReference.cache
+/Users/chris/Code/QuailTracker/analyzer/Shared/obj/Debug/net10.0/Avalonia/Resources.Inputs.cache
+/Users/chris/Code/QuailTracker/analyzer/Shared/obj/Debug/net10.0/Avalonia/resources
+/Users/chris/Code/QuailTracker/analyzer/Shared/obj/Debug/net10.0/QuailTracker.Analyzer.Shared.GeneratedMSBuildEditorConfig.editorconfig
+/Users/chris/Code/QuailTracker/analyzer/Shared/obj/Debug/net10.0/QuailTracker.Analyzer.Shared.AssemblyInfoInputs.cache
+/Users/chris/Code/QuailTracker/analyzer/Shared/obj/Debug/net10.0/QuailTracker.Analyzer.Shared.AssemblyInfo.cs
+/Users/chris/Code/QuailTracker/analyzer/Shared/obj/Debug/net10.0/QuailTracker.Analyzer.Shared.csproj.CoreCompileInputs.cache
+/Users/chris/Code/QuailTracker/analyzer/Shared/obj/Debug/net10.0/QuailTracker.Analyzer.Shared.sourcelink.json
+/Users/chris/Code/QuailTracker/analyzer/Shared/obj/Debug/net10.0/Avalonia/QuailTracker.Analyzer.Shared.dll
+/Users/chris/Code/QuailTracker/analyzer/Shared/obj/Debug/net10.0/Avalonia/QuailTracker.Analyzer.Shared.pdb
+/Users/chris/Code/QuailTracker/analyzer/Shared/obj/Debug/net10.0/refint/Avalonia/QuailTracker.Analyzer.Shared.dll
+/Users/chris/Code/QuailTracker/analyzer/Shared/bin/Debug/net10.0/QuailTracker.Analyzer.Shared.deps.json
+/Users/chris/Code/QuailTracker/analyzer/Shared/bin/Debug/net10.0/QuailTracker.Analyzer.Shared.dll
+/Users/chris/Code/QuailTracker/analyzer/Shared/bin/Debug/net10.0/QuailTracker.Analyzer.Shared.pdb
+/Users/chris/Code/QuailTracker/analyzer/Shared/obj/Debug/net10.0/ref/QuailTracker.Analyzer.Shared.dll

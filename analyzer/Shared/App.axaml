@@ -1,0 +1,25 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="QuailTracker.Analyzer.Shared.App"
+             RequestedThemeVariant="Dark">
+
+    <Application.Resources>
+        <ResourceDictionary>
+            <!-- QuailTracker Brand Colors -->
+            <Color x:Key="QuailPrimary">#2E7D32</Color>
+            <Color x:Key="QuailSecondary">#81C784</Color>
+            <Color x:Key="QuailAccent">#FF8F00</Color>
+
+            <SolidColorBrush x:Key="QuailPrimaryBrush" Color="{StaticResource QuailPrimary}" />
+            <SolidColorBrush x:Key="QuailSecondaryBrush" Color="{StaticResource QuailSecondary}" />
+            <SolidColorBrush x:Key="QuailAccentBrush" Color="{StaticResource QuailAccent}" />
+        </ResourceDictionary>
+    </Application.Resources>
+
+    <Application.Styles>
+        <FluentTheme />
+        <StyleInclude Source="avares://Avalonia.Controls.DataGrid/Themes/Fluent.xaml" />
+        <!-- QuailTracker Shared Styles -->
+        <StyleInclude Source="avares://QuailTracker.Analyzer.Shared/Styles/SharedStyles.axaml" />
+    </Application.Styles>
+</Application>

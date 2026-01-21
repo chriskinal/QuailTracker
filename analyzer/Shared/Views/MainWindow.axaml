@@ -1,0 +1,134 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:QuailTracker.Analyzer.Shared.ViewModels"
+        xmlns:views="using:QuailTracker.Analyzer.Shared.Views"
+        x:Class="QuailTracker.Analyzer.Shared.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="QuailTracker Analyzer"
+        Width="1200" Height="800"
+        MinWidth="900" MinHeight="600">
+
+    <Design.DataContext>
+        <vm:MainWindowViewModel />
+    </Design.DataContext>
+
+    <Grid RowDefinitions="Auto,*,Auto">
+        <!-- Header -->
+        <Border Grid.Row="0"
+                Background="{StaticResource QuailPrimaryBrush}"
+                Padding="16,12">
+            <Grid ColumnDefinitions="*,Auto">
+                <StackPanel>
+                    <TextBlock Text="QuailTracker Analyzer"
+                               FontSize="20"
+                               FontWeight="Bold"
+                               Foreground="White" />
+                    <TextBlock Text="Bird Detection &amp; TDOA Localization"
+                               FontSize="12"
+                               Foreground="White"
+                               Opacity="0.8" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Main Content with Tabs -->
+        <TabControl Grid.Row="1"
+                    SelectedIndex="{Binding SelectedTabIndex}"
+                    Margin="8">
+
+            <!-- Import Tab -->
+            <TabItem Header="Import">
+                <TabItem.HeaderTemplate>
+                    <DataTemplate>
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <PathIcon Data="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z"
+                                      Width="16" Height="16" />
+                            <TextBlock Text="Import" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </DataTemplate>
+                </TabItem.HeaderTemplate>
+                <views:ImportView DataContext="{Binding ImportViewModel}" />
+            </TabItem>
+
+            <!-- Processing Tab -->
+            <TabItem Header="Processing">
+                <TabItem.HeaderTemplate>
+                    <DataTemplate>
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <PathIcon Data="M12,3V13L17.5,16.5L16.25,18.25L10,14V3H12M20,20V22H4V20H20Z"
+                                      Width="16" Height="16" />
+                            <TextBlock Text="Processing" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </DataTemplate>
+                </TabItem.HeaderTemplate>
+                <views:ProcessingView DataContext="{Binding ProcessingViewModel}" />
+            </TabItem>
+
+            <!-- Localization Tab -->
+            <TabItem Header="Localization">
+                <TabItem.HeaderTemplate>
+                    <DataTemplate>
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <PathIcon Data="M12,11.5A2.5,2.5 0 0,1 9.5,9A2.5,2.5 0 0,1 12,6.5A2.5,2.5 0 0,1 14.5,9A2.5,2.5 0 0,1 12,11.5M12,2A7,7 0 0,0 5,9C5,14.25 12,22 12,22C12,22 19,14.25 19,9A7,7 0 0,0 12,2Z"
+                                      Width="16" Height="16" />
+                            <TextBlock Text="Localization" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </DataTemplate>
+                </TabItem.HeaderTemplate>
+                <views:LocalizationView DataContext="{Binding LocalizationViewModel}" />
+            </TabItem>
+
+            <!-- Map Tab -->
+            <TabItem Header="Map">
+                <TabItem.HeaderTemplate>
+                    <DataTemplate>
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <PathIcon Data="M20.5,3L20.34,3.03L15,5.1L9,3L3.36,4.9C3.15,4.97 3,5.15 3,5.38V20.5A0.5,0.5 0 0,0 3.5,21L3.66,20.97L9,18.9L15,21L20.64,19.1C20.85,19.03 21,18.85 21,18.62V3.5A0.5,0.5 0 0,0 20.5,3M15,19L9,16.89V5L15,7.11V19Z"
+                                      Width="16" Height="16" />
+                            <TextBlock Text="Map" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </DataTemplate>
+                </TabItem.HeaderTemplate>
+                <views:MapView DataContext="{Binding MapViewModel}" />
+            </TabItem>
+        </TabControl>
+
+        <!-- Status Bar -->
+        <Border Grid.Row="2"
+                Background="#DD1E2930"
+                Padding="12,6"
+                BorderThickness="0,1,0,0"
+                BorderBrush="#DD475A6E">
+            <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto">
+                <TextBlock Text="{Binding StatusMessage}"
+                           VerticalAlignment="Center"
+                           FontSize="12"
+                           Foreground="#AAAAAA" />
+                <TextBlock Grid.Column="1"
+                           Text="{Binding AudioFiles.Count, StringFormat='Files: {0}'}"
+                           VerticalAlignment="Center"
+                           FontSize="12"
+                           Foreground="White"
+                           Margin="16,0" />
+                <TextBlock Grid.Column="2"
+                           Text="{Binding Detections.Count, StringFormat='Detections: {0}'}"
+                           VerticalAlignment="Center"
+                           FontSize="12"
+                           Foreground="White"
+                           Margin="16,0" />
+                <TextBlock Grid.Column="3"
+                           Text="{Binding Localizations.Count, StringFormat='Localizations: {0}'}"
+                           VerticalAlignment="Center"
+                           FontSize="12"
+                           Foreground="White"
+                           Margin="16,0" />
+                <TextBlock Grid.Column="4"
+                           Text="{Binding Stations.Count, StringFormat='Stations: {0}'}"
+                           VerticalAlignment="Center"
+                           FontSize="12"
+                           Foreground="White"
+                           Margin="16,0,0,0" />
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

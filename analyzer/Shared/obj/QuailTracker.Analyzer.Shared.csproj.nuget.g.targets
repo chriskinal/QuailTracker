@@ -1,0 +1,10 @@
+﻿<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<Project ToolsVersion="14.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ImportGroup Condition=" '$(ExcludeRestorePackageImports)' != 'true' ">
+    <Import Project="$(NuGetPackageRoot)microsoft.ml.onnxruntime.managed/1.19.2/build/netstandard2.0/Microsoft.ML.OnnxRuntime.Managed.targets" Condition="Exists('$(NuGetPackageRoot)microsoft.ml.onnxruntime.managed/1.19.2/build/netstandard2.0/Microsoft.ML.OnnxRuntime.Managed.targets')" />
+    <Import Project="$(NuGetPackageRoot)microsoft.ml.onnxruntime/1.19.2/build/netstandard2.1/Microsoft.ML.OnnxRuntime.targets" Condition="Exists('$(NuGetPackageRoot)microsoft.ml.onnxruntime/1.19.2/build/netstandard2.1/Microsoft.ML.OnnxRuntime.targets')" />
+    <Import Project="$(NuGetPackageRoot)communitytoolkit.mvvm/8.3.2/buildTransitive/CommunityToolkit.Mvvm.targets" Condition="Exists('$(NuGetPackageRoot)communitytoolkit.mvvm/8.3.2/buildTransitive/CommunityToolkit.Mvvm.targets')" />
+    <Import Project="$(NuGetPackageRoot)avalonia.buildservices/0.0.31/buildTransitive/Avalonia.BuildServices.targets" Condition="Exists('$(NuGetPackageRoot)avalonia.buildservices/0.0.31/buildTransitive/Avalonia.BuildServices.targets')" />
+    <Import Project="$(NuGetPackageRoot)avalonia/11.2.8/buildTransitive/Avalonia.targets" Condition="Exists('$(NuGetPackageRoot)avalonia/11.2.8/buildTransitive/Avalonia.targets')" />
+  </ImportGroup>
+</Project>

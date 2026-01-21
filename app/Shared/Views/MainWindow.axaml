@@ -65,18 +65,16 @@
 
         <!-- Bottom Status Bar -->
         <Border Grid.Row="2"
-                Background="#F5F5F5"
-                Padding="8"
-                BorderThickness="0,1,0,0"
-                BorderBrush="#E0E0E0">
+                Classes="StatusBar">
             <Grid ColumnDefinitions="*,Auto">
                 <TextBlock Text="{Binding DeviceName}"
                            VerticalAlignment="Center"
-                           FontSize="12" />
+                           FontSize="12"
+                           Foreground="#AAAAAA" />
                 <Button Grid.Column="1"
                         Content="{Binding ConnectButtonText}"
                         Command="{Binding ConnectCommand}"
-                        Padding="16,8" />
+                        Classes="PrimaryButton" />
             </Grid>
         </Border>
     </Grid>

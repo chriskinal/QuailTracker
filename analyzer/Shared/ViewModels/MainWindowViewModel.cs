@@ -1,0 +1,98 @@
+/*
+ * QuailTracker - GPS-synchronized Autonomous Recording Unit
+ * Copyright (C) 2026 QuailTracker Project
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+using System.Collections.ObjectModel;
+using CommunityToolkit.Mvvm.ComponentModel;
+using QuailTracker.Analyzer.Shared.Models;
+using QuailTracker.Analyzer.Shared.Services;
+
+namespace QuailTracker.Analyzer.Shared.ViewModels;
+
+public partial class MainWindowViewModel : ObservableObject
+{
+    [ObservableProperty]
+    private int _selectedTabIndex;
+
+    [ObservableProperty]
+    private string _statusMessage = "Ready";
+
+    // Shared data collections
+    public ObservableCollection<AudioFile> AudioFiles { get; } = [];
+    public ObservableCollection<Station> Stations { get; } = [];
+    public ObservableCollection<Detection> Detections { get; } = [];
+    public ObservableCollection<Localization> Localizations { get; } = [];
+
+    // Child ViewModels
+    [ObservableProperty]
+    private ImportViewModel _importViewModel;
+
+    [ObservableProperty]
+    private ProcessingViewModel _processingViewModel;
+
+    [ObservableProperty]
+    private LocalizationViewModel _localizationViewModel;
+
+    [ObservableProperty]
+    private MapViewModel _mapViewModel;
+
+    public MainWindowViewModel()
+        : this(
+            new AudioFileService(),
+            new BirdNetService(),
+            new TdoaService(),
+            new MapService(),
+            new KmlExportService())
+    {
+    }
+
+    public MainWindowViewModel(
+        IAudioFileService audioFileService,
+        IBirdNetService birdNetService,
+        ITdoaService tdoaService,
+        IMapService mapService,
+        IKmlExportService kmlExportService)
+    {
+        _importViewModel = new ImportViewModel(
+            audioFileService,
+            AudioFiles,
+            Stations,
+            status => StatusMessage = status);
+
+        _processingViewModel = new ProcessingViewModel(
+            audioFileService,
+            birdNetService,
+            AudioFiles,
+            Detections,
+            status => StatusMessage = status);
+
+        _localizationViewModel = new LocalizationViewModel(
+            tdoaService,
+            Stations,
+            Detections,
+            Localizations,
+            status => StatusMessage = status);
+
+        _mapViewModel = new MapViewModel(
+            mapService,
+            kmlExportService,
+            Stations,
+            Detections,
+            Localizations,
+            status => StatusMessage = status);
+    }
+}

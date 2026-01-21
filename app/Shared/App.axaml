@@ -1,9 +1,11 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="QuailTracker.Shared.App"
-             RequestedThemeVariant="Light">
+             RequestedThemeVariant="Dark">
     <Application.Styles>
         <FluentTheme />
+        <!-- QuailTracker Shared Styles -->
+        <StyleInclude Source="avares://QuailTracker.Shared/Styles/SharedStyles.axaml" />
     </Application.Styles>
 
     <Application.Resources>

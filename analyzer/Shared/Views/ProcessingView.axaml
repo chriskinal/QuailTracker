@@ -1,0 +1,164 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:QuailTracker.Analyzer.Shared.ViewModels"
+             x:Class="QuailTracker.Analyzer.Shared.Views.ProcessingView"
+             x:DataType="vm:ProcessingViewModel">
+
+    <Grid RowDefinitions="Auto,Auto,*" Margin="8">
+        <!-- Model Loading Section -->
+        <Border Grid.Row="0"
+                Classes="CardPanel"
+                Margin="0,0,0,8">
+            <Grid ColumnDefinitions="Auto,*,Auto">
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                    <PathIcon Data="M21,16.5C21,16.88 20.79,17.21 20.47,17.38L12.57,21.82C12.41,21.94 12.21,22 12,22C11.79,22 11.59,21.94 11.43,21.82L3.53,17.38C3.21,17.21 3,16.88 3,16.5V7.5C3,7.12 3.21,6.79 3.53,6.62L11.43,2.18C11.59,2.06 11.79,2 12,2C12.21,2 12.41,2.06 12.57,2.18L20.47,6.62C20.79,6.79 21,7.12 21,7.5V16.5M12,4.15L5,8.09V15.91L12,19.85L19,15.91V8.09L12,4.15Z"
+                              Width="20" Height="20"
+                              Foreground="#757575" />
+                    <TextBlock Text="BirdNet Model:" VerticalAlignment="Center" FontWeight="SemiBold" />
+                    <TextBlock Text="Not Loaded"
+                               IsVisible="{Binding !IsModelLoaded}"
+                               VerticalAlignment="Center"
+                               Foreground="#F44336" />
+                    <TextBlock Text="Loaded"
+                               IsVisible="{Binding IsModelLoaded}"
+                               VerticalAlignment="Center"
+                               Foreground="#4CAF50" />
+                </StackPanel>
+                <TextBlock Grid.Column="1"
+                           Text="{Binding ModelPath}"
+                           VerticalAlignment="Center"
+                           Margin="12,0"
+                           TextTrimming="CharacterEllipsis"
+                           Foreground="#757575" />
+                <Button Grid.Column="2"
+                        Content="Load Model..."
+                        Classes="SecondaryButton"
+                        Click="OnLoadModelClick" />
+            </Grid>
+        </Border>
+
+        <!-- Processing Controls -->
+        <Border Grid.Row="1"
+                Classes="CardPanel"
+                Margin="0,0,0,8">
+            <Grid RowDefinitions="Auto,Auto,Auto">
+                <!-- Settings Row -->
+                <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="16">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Confidence Threshold:" VerticalAlignment="Center" />
+                        <Slider Value="{Binding ConfidenceThreshold}"
+                                Minimum="0.1"
+                                Maximum="0.99"
+                                Width="120"
+                                VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding ConfidenceThreshold, StringFormat='{}{0:P0}'}"
+                                   Width="40"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                    <CheckBox Content="Quail species only"
+                              IsChecked="{Binding FilterQuailOnly}"
+                              VerticalAlignment="Center" />
+                </StackPanel>
+
+                <!-- Progress Row (visible during processing) -->
+                <Grid Grid.Row="1"
+                      Margin="0,12,0,0"
+                      IsVisible="{Binding IsProcessing}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="16">
+                        <TextBlock Text="{Binding CurrentFileName}" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding DetectionsFound, StringFormat='Detections: {0}'}" />
+                    </StackPanel>
+                    <ProgressBar Grid.Row="1"
+                                 Minimum="0"
+                                 Maximum="{Binding TotalSegments}"
+                                 Value="{Binding CurrentSegment}"
+                                 Margin="0,4" />
+                    <TextBlock Grid.Row="2"
+                               Text="{Binding CurrentFile, StringFormat='File {0}'}"
+                               FontSize="12"
+                               Foreground="#757575">
+                        <TextBlock.Text>
+                            <MultiBinding StringFormat="File {0} of {1} - Segment {2} of {3}">
+                                <Binding Path="CurrentFile" />
+                                <Binding Path="TotalFiles" />
+                                <Binding Path="CurrentSegment" />
+                                <Binding Path="TotalSegments" />
+                            </MultiBinding>
+                        </TextBlock.Text>
+                    </TextBlock>
+                </Grid>
+
+                <!-- Action Buttons -->
+                <StackPanel Grid.Row="2"
+                            Orientation="Horizontal"
+                            Spacing="8"
+                            Margin="0,12,0,0">
+                    <Button Content="Start Processing"
+                            Classes="PrimaryButton"
+                            Command="{Binding StartProcessingCommand}"
+                            IsVisible="{Binding !IsProcessing}" />
+                    <Button Content="Cancel"
+                            Classes="DangerButton"
+                            Command="{Binding CancelProcessingCommand}"
+                            IsVisible="{Binding IsProcessing}" />
+                    <Button Content="Clear Detections"
+                            Classes="ToolbarButton"
+                            Command="{Binding ClearDetectionsCommand}"
+                            IsVisible="{Binding !IsProcessing}" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Detection Results -->
+        <Grid Grid.Row="2" RowDefinitions="Auto,*,Auto">
+            <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,0,0,8">
+                <TextBlock Text="Detections" Classes="SectionHeader" VerticalAlignment="Center" />
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                    <TextBox Text="{Binding SpeciesFilter}"
+                             Watermark="Filter by species..."
+                             Width="150" />
+                </StackPanel>
+            </Grid>
+
+            <DataGrid Grid.Row="1"
+                      ItemsSource="{Binding FilteredDetections}"
+                      SelectedItem="{Binding SelectedDetection}"
+                      AutoGenerateColumns="False"
+                      IsReadOnly="False"
+                      GridLinesVisibility="Horizontal"
+                      BorderBrush="#E0E0E0"
+                      BorderThickness="1">
+                <DataGrid.Columns>
+                    <DataGridCheckBoxColumn Header="" Binding="{Binding IsSelected}" Width="40" />
+                    <DataGridTextColumn Header="Species" Binding="{Binding CommonName}" Width="*" IsReadOnly="True" />
+                    <DataGridTextColumn Header="Scientific Name" Binding="{Binding ScientificName}" Width="*" IsReadOnly="True" />
+                    <DataGridTextColumn Header="Confidence" Binding="{Binding ConfidencePercent}" Width="80" IsReadOnly="True" />
+                    <DataGridTextColumn Header="Station" Binding="{Binding StationId}" Width="80" IsReadOnly="True" />
+                    <DataGridTextColumn Header="Time" Binding="{Binding Timestamp, StringFormat='{}{0:HH:mm:ss}'}" Width="80" IsReadOnly="True" />
+                    <DataGridTextColumn Header="Offset" Binding="{Binding OffsetSeconds, StringFormat='{}{0:F1}s'}" Width="60" IsReadOnly="True" />
+                </DataGrid.Columns>
+            </DataGrid>
+
+            <StackPanel Grid.Row="2"
+                        Orientation="Horizontal"
+                        Spacing="8"
+                        Margin="0,8,0,0">
+                <Button Content="Select All Filtered"
+                        Classes="SecondaryButton"
+                        Command="{Binding SelectAllForLocalizationCommand}" />
+                <Button Content="Deselect All"
+                        Classes="ToolbarButton"
+                        Command="{Binding DeselectAllCommand}" />
+                <TextBlock Text="{Binding FilteredDetections.Count, StringFormat='Showing {0} detections'}"
+                           VerticalAlignment="Center"
+                           Margin="12,0,0,0"
+                           Foreground="#757575" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</UserControl>

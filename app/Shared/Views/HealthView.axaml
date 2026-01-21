@@ -8,29 +8,27 @@
         <StackPanel Spacing="16">
 
             <!-- Device Info Card -->
-            <Border Background="#FFFFFF" CornerRadius="8" Padding="16"
-                    BoxShadow="0 2 4 0 #20000000">
+            <Border Classes="CardPanel">
                 <StackPanel Spacing="8">
-                    <TextBlock Text="Device" FontWeight="SemiBold" FontSize="14" Foreground="#666666" />
+                    <TextBlock Text="Device" Classes="SectionHeader" />
                     <Grid ColumnDefinitions="*,*">
                         <StackPanel>
-                            <TextBlock Text="Station ID" FontSize="12" Foreground="#888888" />
-                            <TextBlock Text="{Binding StationId}" FontSize="18" FontWeight="Bold" />
+                            <TextBlock Text="Station ID" Classes="DataLabel" />
+                            <TextBlock Text="{Binding StationId}" FontSize="18" FontWeight="Bold" Foreground="White" />
                         </StackPanel>
                         <StackPanel Grid.Column="1">
-                            <TextBlock Text="Firmware" FontSize="12" Foreground="#888888" />
-                            <TextBlock Text="{Binding FirmwareVersion}" FontSize="18" />
+                            <TextBlock Text="Firmware" Classes="DataLabel" />
+                            <TextBlock Text="{Binding FirmwareVersion}" FontSize="18" Foreground="White" />
                         </StackPanel>
                     </Grid>
                 </StackPanel>
             </Border>
 
             <!-- Battery Card -->
-            <Border Background="#FFFFFF" CornerRadius="8" Padding="16"
-                    BoxShadow="0 2 4 0 #20000000">
+            <Border Classes="CardPanel">
                 <StackPanel Spacing="8">
                     <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Text="Battery" FontWeight="SemiBold" FontSize="14" Foreground="#666666" />
+                        <TextBlock Text="Battery" Classes="SectionHeader" />
                         <Border Grid.Column="1" CornerRadius="4" Padding="8,4"
                                 Background="{Binding BatteryColor}">
                             <TextBlock Text="{Binding BatteryStatus}" Foreground="White" FontSize="12" />
@@ -41,18 +39,17 @@
                                      Height="8" CornerRadius="4"
                                      Foreground="{Binding BatteryColor}" />
                         <TextBlock Grid.Column="1" Text="{Binding BatteryPercentage, StringFormat={}{0}%}"
-                                   Margin="8,0,0,0" FontWeight="Bold" />
+                                   Margin="8,0,0,0" FontWeight="Bold" Foreground="White" />
                     </Grid>
-                    <TextBlock Text="{Binding BatteryVoltage}" FontSize="12" Foreground="#888888" />
+                    <TextBlock Text="{Binding BatteryVoltage}" Classes="DataLabel" />
                 </StackPanel>
             </Border>
 
             <!-- GPS Card -->
-            <Border Background="#FFFFFF" CornerRadius="8" Padding="16"
-                    BoxShadow="0 2 4 0 #20000000">
+            <Border Classes="CardPanel">
                 <StackPanel Spacing="8">
                     <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Text="GPS" FontWeight="SemiBold" FontSize="14" Foreground="#666666" />
+                        <TextBlock Text="GPS" Classes="SectionHeader" />
                         <Border Grid.Column="1" CornerRadius="4" Padding="8,4"
                                 Background="{Binding GpsColor}">
                             <TextBlock Text="{Binding GpsStatus}" Foreground="White" FontSize="12" />
@@ -60,46 +57,44 @@
                     </Grid>
                     <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto">
                         <StackPanel>
-                            <TextBlock Text="Satellites" FontSize="12" Foreground="#888888" />
-                            <TextBlock Text="{Binding GpsSatellites}" FontSize="16" />
+                            <TextBlock Text="Satellites" Classes="DataLabel" />
+                            <TextBlock Text="{Binding GpsSatellites}" FontSize="16" Foreground="White" />
                         </StackPanel>
                         <StackPanel Grid.Column="1">
-                            <TextBlock Text="PPS" FontSize="12" Foreground="#888888" />
-                            <TextBlock Text="{Binding PpsStatus}" FontSize="16" />
+                            <TextBlock Text="PPS" Classes="DataLabel" />
+                            <TextBlock Text="{Binding PpsStatus}" FontSize="16" Foreground="White" />
                         </StackPanel>
                         <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Margin="0,8,0,0">
-                            <TextBlock Text="Position" FontSize="12" Foreground="#888888" />
-                            <TextBlock Text="{Binding GpsPosition}" FontSize="14" />
+                            <TextBlock Text="Position" Classes="DataLabel" />
+                            <TextBlock Text="{Binding GpsPosition}" FontSize="14" Foreground="White" />
                         </StackPanel>
                     </Grid>
-                    <TextBlock Text="{Binding GpsTime}" FontSize="12" Foreground="#888888" />
+                    <TextBlock Text="{Binding GpsTime}" Classes="DataLabel" />
                 </StackPanel>
             </Border>
 
             <!-- Environment Card -->
-            <Border Background="#FFFFFF" CornerRadius="8" Padding="16"
-                    BoxShadow="0 2 4 0 #20000000">
+            <Border Classes="CardPanel">
                 <StackPanel Spacing="8">
-                    <TextBlock Text="Environment" FontWeight="SemiBold" FontSize="14" Foreground="#666666" />
+                    <TextBlock Text="Environment" Classes="SectionHeader" />
                     <Grid ColumnDefinitions="*,*">
                         <StackPanel>
-                            <TextBlock Text="Temperature" FontSize="12" Foreground="#888888" />
-                            <TextBlock Text="{Binding Temperature}" FontSize="24" FontWeight="Bold" />
+                            <TextBlock Text="Temperature" Classes="DataLabel" />
+                            <TextBlock Text="{Binding Temperature}" Classes="LargeValue" />
                         </StackPanel>
                         <StackPanel Grid.Column="1">
-                            <TextBlock Text="Humidity" FontSize="12" Foreground="#888888" />
-                            <TextBlock Text="{Binding Humidity}" FontSize="24" FontWeight="Bold" />
+                            <TextBlock Text="Humidity" Classes="DataLabel" />
+                            <TextBlock Text="{Binding Humidity}" Classes="LargeValue" />
                         </StackPanel>
                     </Grid>
                 </StackPanel>
             </Border>
 
             <!-- SD Card -->
-            <Border Background="#FFFFFF" CornerRadius="8" Padding="16"
-                    BoxShadow="0 2 4 0 #20000000">
+            <Border Classes="CardPanel">
                 <StackPanel Spacing="8">
                     <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Text="SD Card" FontWeight="SemiBold" FontSize="14" Foreground="#666666" />
+                        <TextBlock Text="SD Card" Classes="SectionHeader" />
                         <Border Grid.Column="1" CornerRadius="4" Padding="8,4"
                                 Background="{Binding SdColor}">
                             <TextBlock Text="{Binding SdStatus}" Foreground="White" FontSize="12" />
@@ -110,18 +105,17 @@
                                      Height="8" CornerRadius="4"
                                      Foreground="{Binding SdColor}" />
                         <TextBlock Grid.Column="1" Text="{Binding SdUsagePercent, StringFormat={}{0}%}"
-                                   Margin="8,0,0,0" />
+                                   Margin="8,0,0,0" Foreground="White" />
                     </Grid>
-                    <TextBlock Text="{Binding SdUsage}" FontSize="12" Foreground="#888888" />
+                    <TextBlock Text="{Binding SdUsage}" Classes="DataLabel" />
                 </StackPanel>
             </Border>
 
             <!-- Recording Card -->
-            <Border Background="#FFFFFF" CornerRadius="8" Padding="16"
-                    BoxShadow="0 2 4 0 #20000000">
+            <Border Classes="CardPanel">
                 <StackPanel Spacing="8">
                     <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Text="Recording" FontWeight="SemiBold" FontSize="14" Foreground="#666666" />
+                        <TextBlock Text="Recording" Classes="SectionHeader" />
                         <Border Grid.Column="1" CornerRadius="4" Padding="8,4"
                                 Background="{Binding RecordingColor}">
                             <TextBlock Text="{Binding RecordingStatus}" Foreground="White" FontSize="12" />
@@ -129,28 +123,28 @@
                     </Grid>
                     <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto">
                         <StackPanel>
-                            <TextBlock Text="File" FontSize="12" Foreground="#888888" />
-                            <TextBlock Text="{Binding CurrentFile}" FontSize="14" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="File" Classes="DataLabel" />
+                            <TextBlock Text="{Binding CurrentFile}" FontSize="14" TextTrimming="CharacterEllipsis" Foreground="White" />
                         </StackPanel>
                         <StackPanel Grid.Column="1">
-                            <TextBlock Text="Size" FontSize="12" Foreground="#888888" />
-                            <TextBlock Text="{Binding FileSize}" FontSize="14" />
+                            <TextBlock Text="Size" Classes="DataLabel" />
+                            <TextBlock Text="{Binding FileSize}" FontSize="14" Foreground="White" />
                         </StackPanel>
                         <StackPanel Grid.Row="1" Margin="0,8,0,0">
-                            <TextBlock Text="Buffer" FontSize="12" Foreground="#888888" />
-                            <TextBlock Text="{Binding BufferStatus}" FontSize="14" />
+                            <TextBlock Text="Buffer" Classes="DataLabel" />
+                            <TextBlock Text="{Binding BufferStatus}" FontSize="14" Foreground="White" />
                         </StackPanel>
                         <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,8,0,0">
-                            <TextBlock Text="Overflows" FontSize="12" Foreground="#888888" />
-                            <TextBlock Text="{Binding Overflows}" FontSize="14" />
+                            <TextBlock Text="Overflows" Classes="DataLabel" />
+                            <TextBlock Text="{Binding Overflows}" FontSize="14" Foreground="White" />
                         </StackPanel>
                     </Grid>
 
                     <!-- Audio Level -->
                     <StackPanel Margin="0,8,0,0">
                         <Grid ColumnDefinitions="*,Auto">
-                            <TextBlock Text="Audio Level" FontSize="12" Foreground="#888888" />
-                            <TextBlock Grid.Column="1" Text="{Binding PeakLevel}" FontSize="12" Foreground="#888888" />
+                            <TextBlock Text="Audio Level" Classes="DataLabel" />
+                            <TextBlock Grid.Column="1" Text="{Binding PeakLevel}" Classes="DataLabel" />
                         </Grid>
                         <ProgressBar Value="{Binding AudioLevel}" Maximum="100"
                                      Height="16" CornerRadius="4"
@@ -171,7 +165,7 @@
 
             <!-- Refresh Button -->
             <Button HorizontalAlignment="Stretch"
-                    Padding="16,12"
+                    Classes="ToolbarButton"
                     Command="{Binding RefreshCommand}">
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8">
                     <PathIcon Data="M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z"
@@ -183,7 +177,7 @@
             <!-- Last Updated -->
             <TextBlock Text="{Binding LastUpdated, StringFormat=Last updated: {0}}"
                        HorizontalAlignment="Center"
-                       FontSize="12" Foreground="#888888" />
+                       Classes="DataLabel" />
 
         </StackPanel>
     </ScrollViewer>

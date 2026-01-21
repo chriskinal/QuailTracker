@@ -8,12 +8,11 @@
         <StackPanel Spacing="16">
 
             <!-- Station Identity -->
-            <Border Background="#FFFFFF" CornerRadius="8" Padding="16"
-                    BoxShadow="0 2 4 0 #20000000">
+            <Border Classes="CardPanel">
                 <StackPanel Spacing="12">
-                    <TextBlock Text="Station Identity" FontWeight="SemiBold" FontSize="14" Foreground="#666666" />
+                    <TextBlock Text="Station Identity" Classes="SectionHeader" />
                     <StackPanel Spacing="4">
-                        <TextBlock Text="Station ID" FontSize="12" Foreground="#888888" />
+                        <TextBlock Text="Station ID" Classes="DataLabel" />
                         <TextBox Text="{Binding StationId}"
                                  Watermark="e.g., QT001" />
                     </StackPanel>
@@ -21,27 +20,26 @@
             </Border>
 
             <!-- Audio Settings -->
-            <Border Background="#FFFFFF" CornerRadius="8" Padding="16"
-                    BoxShadow="0 2 4 0 #20000000">
+            <Border Classes="CardPanel">
                 <StackPanel Spacing="12">
-                    <TextBlock Text="Audio Settings" FontWeight="SemiBold" FontSize="14" Foreground="#666666" />
+                    <TextBlock Text="Audio Settings" Classes="SectionHeader" />
 
                     <StackPanel Spacing="4">
-                        <TextBlock Text="Microphone Gain" FontSize="12" Foreground="#888888" />
+                        <TextBlock Text="Microphone Gain" Classes="DataLabel" />
                         <ComboBox ItemsSource="{Binding GainOptions}"
                                   SelectedIndex="{Binding SelectedGainIndex}"
                                   HorizontalAlignment="Stretch" />
                     </StackPanel>
 
                     <StackPanel Spacing="4">
-                        <TextBlock Text="High-Pass Filter" FontSize="12" Foreground="#888888" />
+                        <TextBlock Text="High-Pass Filter" Classes="DataLabel" />
                         <ComboBox ItemsSource="{Binding HighPassOptions}"
                                   SelectedIndex="{Binding SelectedHighPassIndex}"
                                   HorizontalAlignment="Stretch" />
                     </StackPanel>
 
                     <StackPanel Spacing="4">
-                        <TextBlock Text="Sample Rate" FontSize="12" Foreground="#888888" />
+                        <TextBlock Text="Sample Rate" Classes="DataLabel" />
                         <ComboBox ItemsSource="{Binding SampleRateOptions}"
                                   SelectedIndex="{Binding SelectedSampleRateIndex}"
                                   HorizontalAlignment="Stretch" />
@@ -50,13 +48,12 @@
             </Border>
 
             <!-- Recording Schedule -->
-            <Border Background="#FFFFFF" CornerRadius="8" Padding="16"
-                    BoxShadow="0 2 4 0 #20000000">
+            <Border Classes="CardPanel">
                 <StackPanel Spacing="12">
-                    <TextBlock Text="Recording Schedule" FontWeight="SemiBold" FontSize="14" Foreground="#666666" />
+                    <TextBlock Text="Recording Schedule" Classes="SectionHeader" />
 
                     <StackPanel Spacing="4">
-                        <TextBlock Text="Schedule Mode" FontSize="12" Foreground="#888888" />
+                        <TextBlock Text="Schedule Mode" Classes="DataLabel" />
                         <ComboBox ItemsSource="{Binding ScheduleModeOptions}"
                                   SelectedIndex="{Binding SelectedScheduleModeIndex}"
                                   HorizontalAlignment="Stretch" />
@@ -67,13 +64,13 @@
                                 IsVisible="{Binding SelectedScheduleModeIndex, Converter={x:Static ObjectConverters.Equal}, ConverterParameter=1}">
                         <Grid ColumnDefinitions="*,12,*">
                             <StackPanel Spacing="4">
-                                <TextBlock Text="Before Sunrise (min)" FontSize="12" Foreground="#888888" />
+                                <TextBlock Text="Before Sunrise (min)" Classes="DataLabel" />
                                 <NumericUpDown Value="{Binding SunriseOffset}"
                                                Minimum="-120" Maximum="0"
                                                Increment="5" />
                             </StackPanel>
                             <StackPanel Grid.Column="2" Spacing="4">
-                                <TextBlock Text="After Sunset (min)" FontSize="12" Foreground="#888888" />
+                                <TextBlock Text="After Sunset (min)" Classes="DataLabel" />
                                 <NumericUpDown Value="{Binding SunsetOffset}"
                                                Minimum="0" Maximum="120"
                                                Increment="5" />
@@ -86,11 +83,11 @@
                                 IsVisible="{Binding SelectedScheduleModeIndex, Converter={x:Static ObjectConverters.Equal}, ConverterParameter=0}">
                         <Grid ColumnDefinitions="*,12,*">
                             <StackPanel Spacing="4">
-                                <TextBlock Text="Start Time" FontSize="12" Foreground="#888888" />
+                                <TextBlock Text="Start Time" Classes="DataLabel" />
                                 <TimePicker SelectedTime="{Binding ManualStartTime}" />
                             </StackPanel>
                             <StackPanel Grid.Column="2" Spacing="4">
-                                <TextBlock Text="End Time" FontSize="12" Foreground="#888888" />
+                                <TextBlock Text="End Time" Classes="DataLabel" />
                                 <TimePicker SelectedTime="{Binding ManualEndTime}" />
                             </StackPanel>
                         </Grid>
@@ -99,11 +96,10 @@
             </Border>
 
             <!-- Amplitude Triggering -->
-            <Border Background="#FFFFFF" CornerRadius="8" Padding="16"
-                    BoxShadow="0 2 4 0 #20000000">
+            <Border Classes="CardPanel">
                 <StackPanel Spacing="12">
                     <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Text="Amplitude Trigger" FontWeight="SemiBold" FontSize="14" Foreground="#666666" />
+                        <TextBlock Text="Amplitude Trigger" Classes="SectionHeader" />
                         <ToggleSwitch Grid.Column="1"
                                       IsChecked="{Binding AmplitudeTriggerEnabled}"
                                       OnContent="On" OffContent="Off" />
@@ -112,9 +108,9 @@
                     <StackPanel Spacing="12" IsEnabled="{Binding AmplitudeTriggerEnabled}">
                         <StackPanel Spacing="4">
                             <Grid ColumnDefinitions="*,Auto">
-                                <TextBlock Text="Threshold" FontSize="12" Foreground="#888888" />
+                                <TextBlock Text="Threshold" Classes="DataLabel" />
                                 <TextBlock Grid.Column="1" Text="{Binding AmplitudeThreshold, StringFormat={}{0} dB}"
-                                           FontSize="12" Foreground="#888888" />
+                                           Classes="DataLabel" />
                             </Grid>
                             <Slider Value="{Binding AmplitudeThreshold}"
                                     Minimum="-60" Maximum="-10"
@@ -123,13 +119,13 @@
 
                         <Grid ColumnDefinitions="*,12,*">
                             <StackPanel Spacing="4">
-                                <TextBlock Text="Pre-trigger (sec)" FontSize="12" Foreground="#888888" />
+                                <TextBlock Text="Pre-trigger (sec)" Classes="DataLabel" />
                                 <NumericUpDown Value="{Binding PreTriggerSeconds}"
                                                Minimum="0" Maximum="10"
                                                Increment="1" />
                             </StackPanel>
                             <StackPanel Grid.Column="2" Spacing="4">
-                                <TextBlock Text="Post-trigger (sec)" FontSize="12" Foreground="#888888" />
+                                <TextBlock Text="Post-trigger (sec)" Classes="DataLabel" />
                                 <NumericUpDown Value="{Binding PostTriggerSeconds}"
                                                Minimum="1" Maximum="30"
                                                Increment="1" />
@@ -140,16 +136,15 @@
             </Border>
 
             <!-- Power Management -->
-            <Border Background="#FFFFFF" CornerRadius="8" Padding="16"
-                    BoxShadow="0 2 4 0 #20000000">
+            <Border Classes="CardPanel">
                 <StackPanel Spacing="12">
-                    <TextBlock Text="Power Management" FontWeight="SemiBold" FontSize="14" Foreground="#666666" />
+                    <TextBlock Text="Power Management" Classes="SectionHeader" />
 
                     <StackPanel Spacing="4">
                         <Grid ColumnDefinitions="*,Auto">
-                            <TextBlock Text="Low Battery Threshold" FontSize="12" Foreground="#888888" />
+                            <TextBlock Text="Low Battery Threshold" Classes="DataLabel" />
                             <TextBlock Grid.Column="1" Text="{Binding LowBatteryThreshold, StringFormat={}{0}%}"
-                                       FontSize="12" Foreground="#888888" />
+                                       Classes="DataLabel" />
                         </Grid>
                         <Slider Value="{Binding LowBatteryThreshold}"
                                 Minimum="5" Maximum="30"
@@ -157,7 +152,8 @@
                     </StackPanel>
 
                     <CheckBox IsChecked="{Binding AutoStopOnLowBattery}"
-                              Content="Auto-stop recording on low battery" />
+                              Content="Auto-stop recording on low battery"
+                              Foreground="White" />
                 </StackPanel>
             </Border>
 
@@ -165,29 +161,28 @@
             <Grid ColumnDefinitions="*,12,*">
                 <Button Grid.Column="0"
                         HorizontalAlignment="Stretch"
-                        Padding="16,12"
+                        Classes="ToolbarButton"
                         Command="{Binding ResetToDefaultsCommand}">
                     <TextBlock Text="Reset Defaults" HorizontalAlignment="Center" />
                 </Button>
                 <Button Grid.Column="2"
                         HorizontalAlignment="Stretch"
-                        Padding="16,12"
+                        Classes="PrimaryButton"
                         Command="{Binding SaveConfigCommand}"
-                        IsEnabled="{Binding HasChanges}"
-                        Background="{StaticResource QuailPrimaryBrush}">
-                    <TextBlock Text="Save Config" Foreground="White" HorizontalAlignment="Center" />
+                        IsEnabled="{Binding HasChanges}">
+                    <TextBlock Text="Save Config" HorizontalAlignment="Center" />
                 </Button>
             </Grid>
 
             <!-- Status Message -->
             <TextBlock Text="{Binding StatusMessage}"
                        HorizontalAlignment="Center"
-                       FontSize="12" Foreground="#888888"
+                       Classes="DataLabel"
                        IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 
             <!-- Load Button -->
             <Button HorizontalAlignment="Stretch"
-                    Padding="16,12"
+                    Classes="SecondaryButton"
                     Command="{Binding LoadConfigCommand}">
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8">
                     <PathIcon Data="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z"

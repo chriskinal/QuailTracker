@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>QuailTracker Map</title>
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.119/Build/Cesium/Cesium.js"></script>
+    <link href="https://cesium.com/downloads/cesiumjs/releases/1.119/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+    <style>
+        html, body, #cesiumContainer {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #1B1B1D;
+        }
+    </style>
+</head>
+<body>
+    <div id="cesiumContainer"></div>
+    <script>
+        // User should set their own Cesium ion access token
+        // Get one free at https://cesium.com/ion/tokens
+        Cesium.Ion.defaultAccessToken = 'YOUR_CESIUM_ION_TOKEN';
+
+        const viewer = new Cesium.Viewer('cesiumContainer', {
+            terrain: Cesium.Terrain.fromWorldTerrain(),
+            baseLayerPicker: false,
+            geocoder: false,
+            homeButton: false,
+            sceneModePicker: false,
+            navigationHelpButton: false,
+            animation: false,
+            timeline: false,
+            fullscreenButton: false,
+            infoBox: true,
+            selectionIndicator: true
+        });
+
+        // Entity collections for different layer types
+        let stationDataSource = new Cesium.CustomDataSource('stations');
+        let detectionDataSource = new Cesium.CustomDataSource('detections');
+        let localizationDataSource = new Cesium.CustomDataSource('localizations');
+
+        viewer.dataSources.add(stationDataSource);
+        viewer.dataSources.add(detectionDataSource);
+        viewer.dataSources.add(localizationDataSource);
+
+        // Station icon (blue marker)
+        const stationBillboard = {
+            image: 'data:image/svg+xml;base64,' + btoa(`
+                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24">
+                    <path fill="#2196F3" d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2Z"/>
+                    <path fill="white" d="M12,6A6,6 0 0,0 6,12A6,6 0 0,0 12,18A6,6 0 0,0 18,12A6,6 0 0,0 12,6Z"/>
+                </svg>
+            `),
+            width: 24,
+            height: 24,
+            verticalOrigin: Cesium.VerticalOrigin.BOTTOM
+        };
+
+        // Detection icon (yellow dot)
+        const detectionBillboard = {
+            image: 'data:image/svg+xml;base64,' + btoa(`
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+                    <circle cx="8" cy="8" r="6" fill="#FFEB3B" stroke="#FFC107" stroke-width="2"/>
+                </svg>
+            `),
+            width: 12,
+            height: 12
+        };
+
+        // Localization icon (red target)
+        const localizationBillboard = {
+            image: 'data:image/svg+xml;base64,' + btoa(`
+                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="10" fill="none" stroke="#F44336" stroke-width="2"/>
+                    <circle cx="12" cy="12" r="6" fill="none" stroke="#F44336" stroke-width="2"/>
+                    <circle cx="12" cy="12" r="2" fill="#F44336"/>
+                </svg>
+            `),
+            width: 28,
+            height: 28
+        };
+
+        // API functions called from C#
+
+        function setStations(stations) {
+            stationDataSource.entities.removeAll();
+
+            stations.forEach(s => {
+                stationDataSource.entities.add({
+                    id: 'station_' + s.id,
+                    name: s.name || s.id,
+                    position: Cesium.Cartesian3.fromDegrees(s.lon, s.lat, s.elevation || 0),
+                    billboard: stationBillboard,
+                    label: {
+                        text: s.name || s.id,
+                        font: '12px sans-serif',
+                        fillColor: Cesium.Color.WHITE,
+                        outlineColor: Cesium.Color.BLACK,
+                        outlineWidth: 2,
+                        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                        verticalOrigin: Cesium.VerticalOrigin.TOP,
+                        pixelOffset: new Cesium.Cartesian2(0, 8)
+                    },
+                    properties: {
+                        type: 'station',
+                        stationId: s.id
+                    }
+                });
+            });
+        }
+
+        function setDetections(detections) {
+            detectionDataSource.entities.removeAll();
+
+            detections.forEach(d => {
+                detectionDataSource.entities.add({
+                    id: 'detection_' + d.id,
+                    name: d.species,
+                    position: Cesium.Cartesian3.fromDegrees(d.lon, d.lat),
+                    billboard: {
+                        ...detectionBillboard,
+                        color: Cesium.Color.YELLOW.withAlpha(0.5 + d.confidence * 0.5)
+                    },
+                    description: `
+                        <table>
+                            <tr><td><b>Species:</b></td><td>${d.species}</td></tr>
+                            <tr><td><b>Confidence:</b></td><td>${(d.confidence * 100).toFixed(1)}%</td></tr>
+                            <tr><td><b>Station:</b></td><td>${d.stationId}</td></tr>
+                            <tr><td><b>Time:</b></td><td>${new Date(d.timestamp).toLocaleString()}</td></tr>
+                        </table>
+                    `,
+                    properties: {
+                        type: 'detection',
+                        detectionId: d.id,
+                        timestamp: d.timestamp
+                    }
+                });
+            });
+        }
+
+        function setLocalizations(localizations) {
+            localizationDataSource.entities.removeAll();
+
+            localizations.forEach(l => {
+                // Point marker
+                localizationDataSource.entities.add({
+                    id: 'localization_' + l.id,
+                    name: l.species,
+                    position: Cesium.Cartesian3.fromDegrees(l.lon, l.lat),
+                    billboard: localizationBillboard,
+                    description: `
+                        <table>
+                            <tr><td><b>Species:</b></td><td>${l.species}</td></tr>
+                            <tr><td><b>Location:</b></td><td>${l.lat.toFixed(6)}, ${l.lon.toFixed(6)}</td></tr>
+                            <tr><td><b>Quality:</b></td><td>${(l.quality * 100).toFixed(0)}%</td></tr>
+                            <tr><td><b>Error (major):</b></td><td>${l.ellipseMajor.toFixed(1)}m</td></tr>
+                            <tr><td><b>Error (minor):</b></td><td>${l.ellipseMinor.toFixed(1)}m</td></tr>
+                            <tr><td><b>Time:</b></td><td>${new Date(l.timestamp).toLocaleString()}</td></tr>
+                        </table>
+                    `,
+                    properties: {
+                        type: 'localization',
+                        localizationId: l.id,
+                        timestamp: l.timestamp
+                    }
+                });
+
+                // Confidence ellipse
+                if (l.ellipseMajor > 0) {
+                    localizationDataSource.entities.add({
+                        id: 'ellipse_' + l.id,
+                        position: Cesium.Cartesian3.fromDegrees(l.lon, l.lat),
+                        ellipse: {
+                            semiMajorAxis: l.ellipseMajor,
+                            semiMinorAxis: l.ellipseMinor,
+                            rotation: Cesium.Math.toRadians(l.ellipseRotation),
+                            material: Cesium.Color.RED.withAlpha(0.2),
+                            outline: true,
+                            outlineColor: Cesium.Color.RED,
+                            outlineWidth: 2,
+                            height: 0,
+                            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND
+                        }
+                    });
+                }
+            });
+        }
+
+        function clearAll() {
+            stationDataSource.entities.removeAll();
+            detectionDataSource.entities.removeAll();
+            localizationDataSource.entities.removeAll();
+        }
+
+        function setLayerVisibility(stations, detections, localizations) {
+            stationDataSource.show = stations;
+            detectionDataSource.show = detections;
+            localizationDataSource.show = localizations;
+        }
+
+        function setTimeFilter(startTime, endTime) {
+            // Filter entities by timestamp
+            const start = startTime ? new Date(startTime) : null;
+            const end = endTime ? new Date(endTime) : null;
+
+            [detectionDataSource, localizationDataSource].forEach(ds => {
+                ds.entities.values.forEach(entity => {
+                    const ts = entity.properties?.timestamp?.getValue();
+                    if (ts) {
+                        const entityTime = new Date(ts);
+                        const visible = (!start || entityTime >= start) && (!end || entityTime <= end);
+                        entity.show = visible;
+                    }
+                });
+            });
+        }
+
+        function flyTo(lat, lon, alt) {
+            viewer.camera.flyTo({
+                destination: Cesium.Cartesian3.fromDegrees(lon, lat, alt || 1000),
+                duration: 1.5
+            });
+        }
+
+        function flyToAll() {
+            const entities = [
+                ...stationDataSource.entities.values,
+                ...detectionDataSource.entities.values,
+                ...localizationDataSource.entities.values
+            ].filter(e => e.position);
+
+            if (entities.length > 0) {
+                viewer.flyTo(entities, { duration: 1.5 });
+            }
+        }
+
+        function highlightEntity(id) {
+            const entity = viewer.entities.getById(id) ||
+                           stationDataSource.entities.getById(id) ||
+                           detectionDataSource.entities.getById(id) ||
+                           localizationDataSource.entities.getById(id);
+
+            if (entity) {
+                viewer.selectedEntity = entity;
+            }
+        }
+
+        // Event handlers
+        viewer.selectedEntityChanged.addEventListener(entity => {
+            if (entity) {
+                const type = entity.properties?.type?.getValue();
+                const msg = {
+                    type: 'entitySelected',
+                    entityType: type
+                };
+
+                if (type === 'station') {
+                    msg.stationId = entity.properties.stationId.getValue();
+                } else if (type === 'detection') {
+                    msg.detectionId = entity.properties.detectionId.getValue();
+                } else if (type === 'localization') {
+                    msg.localizationId = entity.properties.localizationId.getValue();
+                }
+
+                window.postMessage(msg, '*');
+            }
+        });
+
+        // Notify parent that map is ready
+        window.postMessage({ type: 'mapReady' }, '*');
+    </script>
+</body>
+</html>

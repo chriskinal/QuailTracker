@@ -1,0 +1,147 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:QuailTracker.Analyzer.Shared.ViewModels"
+             x:Class="QuailTracker.Analyzer.Shared.Views.LocalizationView"
+             x:DataType="vm:LocalizationViewModel">
+
+    <Grid RowDefinitions="Auto,*,Auto" Margin="8">
+        <!-- Settings and Controls -->
+        <Border Grid.Row="0"
+                Classes="CardPanel"
+                Margin="0,0,0,8">
+            <Grid RowDefinitions="Auto,Auto,Auto">
+                <!-- TDOA Settings -->
+                <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="24">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Max Time Difference (ms):" VerticalAlignment="Center" />
+                        <NumericUpDown Value="{Binding MaxTimeDifferenceMs}"
+                                       Minimum="100"
+                                       Maximum="10000"
+                                       Increment="100"
+                                       Width="100" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Speed of Sound (m/s):" VerticalAlignment="Center" />
+                        <NumericUpDown Value="{Binding SpeedOfSound}"
+                                       Minimum="300"
+                                       Maximum="400"
+                                       Increment="1"
+                                       FormatString="F1"
+                                       Width="100" />
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- Status -->
+                <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="16" Margin="0,12,0,0">
+                    <TextBlock Text="{Binding SelectedDetectionCount, StringFormat='Selected detections: {0}'}" />
+                    <TextBlock Text="{Binding StationsWithLocationCount, StringFormat='Stations with GPS: {0}'}" />
+                    <TextBlock Text="{Binding Matches.Count, StringFormat='Potential matches: {0}'}" />
+                </StackPanel>
+
+                <!-- Progress (visible during localization) -->
+                <Grid Grid.Row="2"
+                      Margin="0,12,0,0"
+                      IsVisible="{Binding IsLocalizing}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <TextBlock Text="{Binding CurrentMatch, StringFormat='Processing match {0}'}" />
+                    <ProgressBar Grid.Row="1"
+                                 Minimum="0"
+                                 Maximum="{Binding TotalMatches}"
+                                 Value="{Binding CurrentMatch}"
+                                 Margin="0,4" />
+                </Grid>
+
+                <!-- Action Buttons -->
+                <StackPanel Grid.Row="2"
+                            Orientation="Horizontal"
+                            Spacing="8"
+                            Margin="0,12,0,0"
+                            IsVisible="{Binding !IsLocalizing}">
+                    <Button Content="1. Find Matches"
+                            Classes="SecondaryButton"
+                            Command="{Binding FindMatchesCommand}" />
+                    <Button Content="2. Run Localization"
+                            Classes="PrimaryButton"
+                            Command="{Binding LocalizeCommand}"
+                            IsEnabled="{Binding Matches.Count}" />
+                    <Button Content="Clear Results"
+                            Classes="ToolbarButton"
+                            Command="{Binding ClearLocalizationsCommand}" />
+                </StackPanel>
+                <Button Grid.Row="2"
+                        Content="Cancel"
+                        Classes="DangerButton"
+                        Command="{Binding CancelLocalizationCommand}"
+                        IsVisible="{Binding IsLocalizing}"
+                        Margin="0,12,0,0" />
+            </Grid>
+        </Border>
+
+        <!-- Results Grid -->
+        <Grid Grid.Row="1" ColumnDefinitions="*,*">
+            <!-- Matches List -->
+            <Grid Grid.Column="0" RowDefinitions="Auto,*" Margin="0,0,4,0">
+                <TextBlock Grid.Row="0" Text="Detection Matches" Classes="SectionHeader" />
+                <DataGrid Grid.Row="1"
+                          ItemsSource="{Binding Matches}"
+                          AutoGenerateColumns="False"
+                          IsReadOnly="True"
+                          GridLinesVisibility="Horizontal"
+                          BorderBrush="#E0E0E0"
+                          BorderThickness="1">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Time" Binding="{Binding ReferenceTime, StringFormat='{}{0:HH:mm:ss}'}" Width="80" />
+                        <DataGridTextColumn Header="Species" Binding="{Binding Species}" Width="*" />
+                        <DataGridTextColumn Header="Stations" Binding="{Binding StationCount}" Width="70" />
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Grid>
+
+            <!-- Localization Results -->
+            <Grid Grid.Column="1" RowDefinitions="Auto,*" Margin="4,0,0,0">
+                <TextBlock Grid.Row="0" Text="Localization Results" Classes="SectionHeader" />
+                <DataGrid Grid.Row="1"
+                          ItemsSource="{Binding Localizations}"
+                          SelectedItem="{Binding SelectedLocalization}"
+                          AutoGenerateColumns="False"
+                          IsReadOnly="True"
+                          GridLinesVisibility="Horizontal"
+                          BorderBrush="#E0E0E0"
+                          BorderThickness="1">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Species" Binding="{Binding Species}" Width="*" />
+                        <DataGridTextColumn Header="Latitude" Binding="{Binding Latitude, StringFormat='{}{0:F6}'}" Width="90" />
+                        <DataGridTextColumn Header="Longitude" Binding="{Binding Longitude, StringFormat='{}{0:F6}'}" Width="90" />
+                        <DataGridTextColumn Header="Quality" Binding="{Binding QualityLabel}" Width="70" />
+                        <DataGridTextColumn Header="Stations" Binding="{Binding StationIds.Count}" Width="60" />
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Grid>
+        </Grid>
+
+        <!-- Details Panel -->
+        <Border Grid.Row="2"
+                Classes="CardPanel"
+                Margin="0,8,0,0"
+                IsVisible="{Binding SelectedLocalization, Converter={x:Static ObjectConverters.IsNotNull}}">
+            <Grid ColumnDefinitions="*,Auto">
+                <StackPanel>
+                    <TextBlock Text="Selected Localization" FontWeight="SemiBold" Margin="0,0,0,8" />
+                    <StackPanel Orientation="Horizontal" Spacing="24">
+                        <TextBlock Text="{Binding SelectedLocalization.CoordinateString, StringFormat='Location: {0}'}" />
+                        <TextBlock Text="{Binding SelectedLocalization.QualityScore, StringFormat='Quality: {0:P0}'}" />
+                        <TextBlock Text="{Binding SelectedLocalization.ErrorEllipseMajor, StringFormat='Error (major): {0:F1}m'}" />
+                        <TextBlock Text="{Binding SelectedLocalization.ErrorEllipseMinor, StringFormat='Error (minor): {0:F1}m'}" />
+                    </StackPanel>
+                </StackPanel>
+                <Button Grid.Column="1"
+                        Content="Remove"
+                        Classes="DangerButton"
+                        Command="{Binding RemoveLocalizationCommand}" />
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>
