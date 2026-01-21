@@ -8,6 +8,7 @@
 |-----|------|--------|-------------|
 | U1 | ES7243E | C2929446 | 24-bit I2S ADC, QFN-20 |
 | U2 | NCP170ASN300T2G | C603670 | 3.0V LDO Regulator, TSOP-5, 500nA Iq |
+| U3 | SHT30-DIS-B2.5kS/TR | C78592 | Temp/Humidity Sensor, DFN-8, I2C |
 | J4 | WAFER-MX1.25-8PZZ | C3029401 | GPS Connector, 1.25mm 8-pin Vertical |
 | U4 | ESP32 DevKitC | - | 38-pin module (hand soldered) |
 | J1 | TF-015 | C113206 | MicroSD Card Socket |
@@ -29,6 +30,7 @@
 | C9 | 4.7uF 0805 | C1779 | ES7243E VDDA Bulk (Basic) |
 | C10 | 4.7uF 0805 | C1779 | Bulk (Basic) |
 | C11 | 10uF 0805 | C15850 | Mic DC Block (Basic) |
+| C14 | 100nF 0603 | C14663 | SHT30 Decoupling |
 
 
 ---
@@ -58,6 +60,8 @@
 | C7 | 1 | + |
 | C9 | 1 | + |
 | C10 | 1 | + |
+| C14 | 1 | + |
+| U3 | 5 | VDD |
 | U4 | 3V3 | 3.3V |
 
 **GND (Ground)**
@@ -91,6 +95,9 @@
 | C12 | 2 | - (REFP bypass) |
 | C9 | 2 | - |
 | C10 | 2 | - |
+| C14 | 2 | - |
+| U3 | 2 | ADDR (sets 0x44) |
+| U3 | 4 | VSS |
 | R3 | 2 | VBAT divider low |
 | C13 | 2 | VBAT ADC buffer |
 | U4 | GND | Ground (multiple pins) |
@@ -117,14 +124,16 @@
 | LRCK | GPIO15 | 7 (LRCK) | U4 -> U1 |
 | SDOUT | GPIO32 | 3 (SDOUT) | U1 -> U4 |
 
-### I2C (U4 to U1)
+### I2C Bus (U4 to U1, U3)
 
-| Signal | U4 Pin | U1 Pin | Direction |
-|--------|--------|--------|-----------|
-| SDA | GPIO21 | 18 (CDATA) | Bidirectional |
-| SCL | GPIO22 | 19 (CCLK) | U4 -> U1 |
+| Signal | U4 Pin | U1 Pin | U3 Pin | Direction |
+|--------|--------|--------|--------|-----------|
+| SDA | GPIO21 | 18 (CDATA) | 1 (SDA) | Bidirectional |
+| SCL | GPIO22 | 19 (CCLK) | 6 (SCL) | U4 -> devices |
 
-**ES7243E I2C Address:** Pin 17 (AD0), Pin 8 (AD1) -> GND = Address 0x40
+**I2C Addresses:**
+- ES7243E (U1): Pin 17 (AD0), Pin 8 (AD1) -> GND = Address **0x10**
+- SHT30 (U3): Pin 2 (ADDR) -> GND = Address **0x44**
 
 **ES7243E Reference Pins:**
 - Pin 11 (REFQ) -> C8 -> GND
@@ -255,6 +264,46 @@ VBAT (J2+) ---[R2 1M]---+--- U4 GPIO35 (ADC1_CH7)
 
 ---
 
+### Temperature/Humidity Sensor (U3 - SHT30)
+
+```
+3V3 ---+--- U3 Pin 5 (VDD)
+       |
+      [C14 100nF]
+       |
+      GND
+
+U4 GPIO21 (SDA) --- U3 Pin 1 (SDA)
+U4 GPIO22 (SCL) --- U3 Pin 6 (SCL)
+
+U3 Pin 2 (ADDR) --- GND (I2C address 0x44)
+U3 Pin 3 (ALERT) --- NC (not used)
+U3 Pin 4 (VSS) --- GND
+U3 Pin 7 (nRESET) --- NC (internal pull-up)
+U3 Pin 8 (R) --- NC (reserved)
+```
+
+**SHT30-DIS DFN-8 Pinout:**
+| Pin | Function | Connection |
+|-----|----------|------------|
+| 1 | SDA | GPIO21 (I2C bus) |
+| 2 | ADDR | GND (address 0x44) |
+| 3 | ALERT | NC |
+| 4 | VSS | GND |
+| 5 | VDD | 3V3 |
+| 6 | SCL | GPIO22 (I2C bus) |
+| 7 | nRESET | NC (internal pull-up) |
+| 8 | R | NC (reserved) |
+
+**Specifications:**
+- Temperature accuracy: ±0.2°C
+- Humidity accuracy: ±2% RH
+- Operating range: -40°C to +125°C
+- Supply current: ~1.5µA average (single shot mode)
+- I2C speed: Up to 1 MHz
+
+---
+
 ## U4 (ESP32 DevKitC) Pin Summary
 
 | U4 Pin | Function | Connected To |
@@ -268,8 +317,8 @@ VBAT (J2+) ---[R2 1M]---+--- U4 GPIO35 (ADC1_CH7)
 | GPIO17 | UART TX (GPS) | J4 pin 5 |
 | GPIO18 | SPI CLK | J1 pin 5 |
 | GPIO19 | SPI MISO | J1 pin 7 |
-| GPIO21 | I2C SDA | U1 pin 18 |
-| GPIO22 | I2C SCL | U1 pin 19 |
+| GPIO21 | I2C SDA | U1 pin 18, U3 pin 1 |
+| GPIO22 | I2C SCL | U1 pin 19, U3 pin 6 |
 | GPIO23 | SPI MOSI | J1 pin 3 |
 | GPIO32 | I2S SDOUT | U1 pin 3 |
 | GPIO35 | VBAT ADC | R2/R3 divider midpoint |

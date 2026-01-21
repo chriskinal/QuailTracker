@@ -1,3 +1,19 @@
 # macOS
 .DS_Store
-.pdf
+
+# PDFs
+*.pdf
+
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# VSCode
+.vscode/
+
+# Build artifacts
+*.o
+*.a
+*.elf
+*.bin
