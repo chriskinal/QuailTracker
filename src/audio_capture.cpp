@@ -123,9 +123,12 @@ static bool es7243eInit()
     // Step 6: Start ADC
     es7243eWriteReg(ES7243E_REG_RESET, 0x01);     // Start ADC
 
-    // Read back a register to verify communication
-    uint8_t sdp = es7243eReadReg(ES7243E_REG_SDP);
-    Serial.printf("  ES7243E SDP register readback: 0x%02X\n", sdp);
+    // Read back registers to verify configuration
+    Serial.println("  ES7243E register dump:");
+    for (uint8_t reg = 0; reg <= 0x10; reg++) {
+        uint8_t val = es7243eReadReg(reg);
+        Serial.printf("    [0x%02X] = 0x%02X\n", reg, val);
+    }
 
     Serial.println("  ES7243E configured");
     return true;
