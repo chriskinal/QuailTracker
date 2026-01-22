@@ -229,13 +229,18 @@ bool audioInit(RingBuffer* buffer)
 {
     s_audioBuffer = buffer;
 
+    // Start I2S FIRST to get MCLK running - ES7243E needs clock before config
+    if (!i2sInit()) {
+        return false;
+    }
+
+    // Give MCLK time to stabilize
+    delay(50);
+
+    // Now configure ES7243E with MCLK running
     if (!es7243eInit()) {
         Serial.println("ES7243E init failed - continuing anyway for testing");
         // Don't return false - allow testing without ES7243E
-    }
-
-    if (!i2sInit()) {
-        return false;
     }
 
     return true;
