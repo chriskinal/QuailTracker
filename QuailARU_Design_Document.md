@@ -84,7 +84,7 @@ flowchart TB
     end
 
     subgraph Environment["Environment Sensor"]
-        SHT30["SHT30-DIS<br/>Temp/Humidity<br/>I2C Address 0x44"]
+        SHT30["SHT30 External Module<br/>via J5 Connector<br/>I2C Address 0x44"]
     end
 
     LDO -->|3.3V| ESP
@@ -220,19 +220,18 @@ The 19 dB SNR improvement translates to approximately 3x greater detection range
 
 The electret microphone requires a simple bias circuit: 3.3V through a 2.2kΩ load resistor, with a 1µF DC-blocking capacitor (C11) to the ADC AINLP input per the ES7243E reference design. The ES7243E provides internal bias via REFQ (~1.45V), so no external bias resistor is needed on AINLP when the differential inputs are properly AC-coupled.
 
-### 3.4 Environment Sensor: SHT30-DIS
+### 3.4 Environment Sensor: SHT30 External Module
 
-The SHT30-DIS temperature and humidity sensor enables environmental monitoring for data quality assessment and habitat characterization:
+The SHT30 temperature and humidity sensor enables environmental monitoring for data quality assessment and habitat characterization. An external 4-wire module is used, connected via J5 (4-pin header: 1=GND, 2=VCC, 3=SDA, 4=SCL).
 
-**Specifications:**
+**Module Specifications:**
 - Temperature accuracy: ±0.2°C (typical)
 - Humidity accuracy: ±2% RH (typical)
 - Operating range: -40°C to +125°C
 - Supply voltage: 2.4V to 5.5V
-- Supply current: ~1.5µA average (single shot mode)
-- I2C interface (address 0x44 with ADDR pin to GND)
-- DFN-8 package, SMT assembly compatible
-- Unit cost: ~$1.50 (LCSC C78592)
+- I2C interface (default address 0x44)
+- Module has onboard decoupling capacitor
+- Unit cost: ~$2-3 (sourced separately)
 
 **Use Cases:**
 - Correlate detection rates with temperature/humidity conditions
@@ -240,7 +239,7 @@ The SHT30-DIS temperature and humidity sensor enables environmental monitoring f
 - Provide environmental context for acoustic recordings
 - Support habitat analysis and seasonal studies
 
-The SHT30 shares the I2C bus with the ES7243E ADC, using address 0x44 (ES7243E uses 0x10).
+The SHT30 module shares the I2C bus with the ES7243E ADC, using address 0x44 (ES7243E uses 0x10).
 
 ---
 
@@ -256,7 +255,7 @@ The SHT30 shares the I2C bus with the ES7243E ADC, using address 0x44 (ES7243E u
 | 4 | Mic Connector | JST XH 2-pin B2B-XH-A (for remote mic) | 1 | $0.02 | $0.02 |
 | 4a | Electret Microphone | PUI AOM-5024L-HD-R (sourced separately) | 1 | $1.83 | $1.83 |
 | 5 | I2S ADC | ES7243E 24-bit (3.3V native) | 1 | $0.24 | $0.24 |
-| 6 | Temp/Humidity Sensor | SHT30-DIS | 1 | $1.50 | $1.50 |
+| 6 | Temp/Humidity Sensor | SHT30 External Module (via J5) | 1 | $2.50 | $2.50 |
 | 7 | MicroSD Socket | TF-015 push-push | 1 | $0.08 | $0.08 |
 | 8 | MicroSD Card | 32GB Class 10 | 1 | $4.00 | $4.00 |
 | 9 | Voltage Regulator | HT7333 LDO, 3.3V 250mA | 1 | $0.04 | $0.04 |
@@ -265,14 +264,14 @@ The SHT30 shares the I2C bus with the ES7243E ADC, using address 0x44 (ES7243E u
 | 12 | 18650 Cells | 3400mAh Li-ion | 4 | $3.00 | $12.00 |
 | 13 | Capacitors | Assorted (see LCSC BOM) | 1 | $0.15 | $0.15 |
 | 14 | Resistors | 2.2kΩ (mic bias), 4.7kΩ (I2C pull-ups) | 3 | $0.01 | $0.03 |
-| | | | | **Total:** | **$34.40** |
+| 6a | SHT30 Connector | 4-pin header for J5 | 1 | $0.05 | $0.05 |
+| | | | | **Total:** | **$35.45** |
 
 ### 4.2 LCSC Parts BOM (for JLCPCB Assembly)
 
 | LCSC # | Component | Description | Package | Qty | Price |
 |--------|-----------|-------------|---------|-----|-------|
 | C2929446 | ES7243E | 24-bit I2S ADC, 3.3V | QFN-20 | 1 | $0.24 |
-| C78592 | SHT30-DIS-B2.5kS | Temp/humidity sensor | DFN-8 | 1 | $1.50 |
 | C21583 | HT7333-A | 3.3V 250mA LDO | SOT-89 | 1 | $0.04 |
 | C2838031 | Quectel L76K | GPS module with PPS | LCC-18 | 1 | $8.89 |
 | C2938372 | SI2301 | P-channel MOSFET | SOT-23 | 1 | $0.02 |
@@ -292,7 +291,8 @@ The SHT30 shares the I2C bus with the ES7243E ADC, using address 0x44 (ES7243E u
 - Microphone (PUI AOM-5024L-HD-R) connected via JST XH 2-pin connector for remote mounting
 - Remote mic placement reduces RF noise pickup from ESP32 WiFi/BLE
 - ES7243E requires AC-coupling caps on AINLN, AINRN, AINRP (see critical requirements)
-- I2C bus shared between ES7243E (0x10) and SHT30 (0x44)
+- SHT30 external module sourced separately, connects via J5 (4-pin header: 1=GND, 2=VCC, 3=SDA, 4=SCL)
+- I2C bus shared between ES7243E (0x10) and SHT30 module (0x44)
 
 ### 4.3 Mechanical BOM
 
@@ -318,8 +318,8 @@ The SHT30 shares the I2C bus with the ES7243E ADC, using address 0x44 (ES7243E u
 | GPIO15 | I2S Word Select | ES7243E LRCK |
 | GPIO14 | I2S Bit Clock | ES7243E SCLK |
 | GPIO0 | I2S Master Clock | ES7243E MCLK |
-| GPIO21 | I2C SDA | ES7243E SDA, SHT30 SDA (+ 4.7kΩ pull-up) |
-| GPIO22 | I2C SCL | ES7243E SCL, SHT30 SCL (+ 4.7kΩ pull-up) |
+| GPIO21 | I2C SDA | ES7243E SDA, J5 SHT30 Module pin 3 (+ 4.7kΩ pull-up) |
+| GPIO22 | I2C SCL | ES7243E SCL, J5 SHT30 Module pin 4 (+ 4.7kΩ pull-up) |
 | GPIO16 | UART RX | GPS TX |
 | GPIO17 | UART TX | GPS RX |
 | GPIO4 | PPS Input | GPS PPS |

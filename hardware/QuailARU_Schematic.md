@@ -221,36 +221,25 @@
 │  ┌───────────────────────────────────────────────────────────────────────────────────────┐  │
 │  │                                                                                       │  │
 │  │                         ┌───────────────────────────────────────┐                     │  │
-│  │                         │         SHT30-DIS (DFN-8)             │                     │  │
-│  │                         │    Temperature/Humidity Sensor        │                     │  │
+│  │                         │   J5 - SHT30 External Module Conn     │                     │  │
+│  │                         │         (4-pin header)                │                     │  │
 │  │                         │                                       │                     │  │
-│  │     3.3V ──────────────►│ Pin 5 VDD                             │                     │  │
-│  │            │            │                                       │                     │  │
-│  │           ─┴─           │                                       │                     │  │
-│  │           ───  100nF    │                                       │                     │  │
-│  │            │            │                                       │                     │  │
-│  │     GND ───┴───────────►│ Pin 4 VSS                             │                     │  │
+│  │     GND ───────────────►│ Pin 1 GND                             │                     │  │
 │  │                         │                                       │                     │  │
-│  │     GND ───────────────►│ Pin 2 ADDR  (I2C address 0x44)        │                     │  │
+│  │     3.3V ──────────────►│ Pin 2 VCC                             │                     │  │
 │  │                         │                                       │                     │  │
-│  │     GPIO21 ◄───────────►│ Pin 1 SDA   (shared I2C bus)          │                     │  │
+│  │     GPIO21 ◄───────────►│ Pin 3 SDA   (shared I2C bus)          │                     │  │
 │  │     ESP32               │                                       │                     │  │
 │  │                         │                                       │                     │  │
-│  │     GPIO22 ────────────►│ Pin 6 SCL   (shared I2C bus)          │                     │  │
+│  │     GPIO22 ────────────►│ Pin 4 SCL   (shared I2C bus)          │                     │  │
 │  │     ESP32               │                                       │                     │  │
-│  │                         │                                       │                     │  │
-│  │                      NC │ Pin 3 ALERT (not used)                │                     │  │
-│  │                      NC │ Pin 7 nRESET (internal pull-up)       │                     │  │
-│  │                      NC │ Pin 8 R (reserved)                    │                     │  │
-│  │                         │                                       │                     │  │
 │  │                         └───────────────────────────────────────┘                     │  │
 │  │                                                                                       │  │
-│  │    Specifications:                                                                    │  │
+│  │    External SHT30 Module Specifications:                                              │  │
+│  │    - I2C address: 0x44 (default)                                                      │  │
 │  │    - Temperature accuracy: ±0.2°C                                                     │  │
 │  │    - Humidity accuracy: ±2% RH                                                        │  │
-│  │    - Operating range: -40°C to +125°C                                                 │  │
-│  │    - Supply current: ~1.5µA average (single shot mode)                                │  │
-│  │    - I2C address: 0x44 (ADDR pin to GND)                                              │  │
+│  │    - Module has onboard decoupling capacitor                                          │  │
 │  │                                                                                       │  │
 │  │    Note: Shares I2C bus with ES7243E (0x10). Uses same 4.7kΩ pull-ups.                │  │
 │  │                                                                                       │  │
@@ -277,8 +266,8 @@
 | GPIO17 | 28 | UART2 TX | Output | L76K RX |
 | GPIO18 | 30 | SPI CLK | Output | SD Card CLK |
 | GPIO19 | 31 | SPI MISO | Input | SD Card MISO |
-| GPIO21 | 33 | I2C SDA | Bidir | ES7243E SDA, SHT30 SDA |
-| GPIO22 | 36 | I2C SCL | Output | ES7243E SCL, SHT30 SCL |
+| GPIO21 | 33 | I2C SDA | Bidir | ES7243E SDA, J5 SHT30 Module pin 3 |
+| GPIO22 | 36 | I2C SCL | Output | ES7243E SCL, J5 SHT30 Module pin 4 |
 | GPIO23 | 37 | SPI MOSI | Output | SD Card MOSI |
 | GPIO32 | 7 | I2S Data In | Input | ES7243E SDOUT |
 | 3V3 | 1 | Power | - | From HT7333 VOUT |
@@ -333,22 +322,26 @@
 | MOSI | SPI Data In | ESP32 GPIO23 |
 | MISO | SPI Data Out | ESP32 GPIO19 |
 
-### 3.5 SHT30-DIS Temperature/Humidity Sensor Connections
+### 3.5 SHT30 External Module Connector (J5)
 
-| SHT30 Pin | Function | Connected To |
-|-----------|----------|--------------|
-| Pin 1 SDA | I2C Data | ESP32 GPIO21 (shared bus) |
-| Pin 2 ADDR | Address Select | GND (I2C address 0x44) |
-| Pin 3 ALERT | Alert Output | NC (not used) |
-| Pin 4 VSS | Ground | Common GND |
-| Pin 5 VDD | Power Supply | 3.3V Rail + 100nF decoupling |
-| Pin 6 SCL | I2C Clock | ESP32 GPIO22 (shared bus) |
-| Pin 7 nRESET | Reset | NC (internal pull-up) |
-| Pin 8 R | Reserved | NC |
+The SHT30 is an external 4-wire module with onboard decoupling. No additional capacitors required.
+
+| J5 Pin | Function | Connected To |
+|--------|----------|--------------|
+| Pin 1 | GND | Common GND |
+| Pin 2 | VCC | 3.3V Rail |
+| Pin 3 | SDA | ESP32 GPIO21 (shared I2C bus) |
+| Pin 4 | SCL | ESP32 GPIO22 (shared I2C bus) |
+
+**External Module Specifications:**
+- I2C address: 0x44 (default)
+- Temperature accuracy: ±0.2°C
+- Humidity accuracy: ±2% RH
+- Module has onboard decoupling capacitor
 
 **I2C Bus Summary:**
 - ES7243E: Address 0x10
-- SHT30: Address 0x44
+- SHT30 Module: Address 0x44
 - Pull-ups: 4.7kΩ to 3.3V on SDA and SCL (shared)
 
 ---
@@ -367,8 +360,8 @@
                                     ├───► MicroSD Module   │
                                     │      (VCC)           │
                                     │                      │
-                                    ├───► SHT30 Sensor     │
-                                    │      (VDD)           │
+                                    ├───► J5 SHT30 Module  │
+                                    │      (VCC)           │
                                     │                      │
                                     └───► GPS L76K         │
                                            (via MOSFET)    │
@@ -641,7 +634,6 @@ All parts sourced from LCSC for JLCPCB assembly:
 | Component | LCSC Part # | Description |
 |-----------|-------------|-------------|
 | ES7243E | C2929446 | 24-bit I2S ADC, QFN-20 |
-| SHT30-DIS-B2.5kS | C78592 | Temp/humidity sensor, DFN-8 |
 | HT7333-A | C21583 | 3.3V 250mA LDO, SOT-89 |
 | L76K | C2838031 | GPS module with PPS |
 | SI2301 | C2938372 | P-channel MOSFET, SOT-23 |

@@ -8,7 +8,7 @@
 |-----|------|--------|-------------|
 | U1 | ES7243E | C2929446 | 24-bit I2S ADC, QFN-20 |
 | U2 | NCP170ASN300T2G | C603670 | 3.0V LDO Regulator, TSOP-5, 500nA Iq |
-| U3 | SHT30-DIS-B2.5kS/TR | C78592 | Temp/Humidity Sensor, DFN-8, I2C |
+| J5 | 4-pin header | - | SHT30 Module Connector (1=GND, 2=VCC, 3=SDA, 4=SCL) |
 | J4 | WAFER-MX1.25-8PZZ | C3029401 | GPS Connector, 1.25mm 8-pin Vertical |
 | U4 | ESP32 DevKitC | - | 38-pin module (hand soldered) |
 | J1 | TF-015 | C113206 | MicroSD Card Socket |
@@ -32,7 +32,6 @@
 | C11 | 1uF 0805 | C28323 | Mic DC Block / AINLP decoupling (Basic) |
 | C12 | 10uF 0805 | C15850 | ES7243E REFP Bypass (Basic) |
 | C13 | 1uF 0805 | C28323 | VBAT ADC Buffer (Basic) |
-| C14 | 100nF 0603 | C14663 | SHT30 Decoupling |
 | C15 | 1uF 0805 | C28323 | ES7243E AINLN AC-coupling (Basic) |
 | C16 | 1uF 0805 | C28323 | ES7243E AINRN AC-coupling (Basic) |
 | C17 | 1uF 0805 | C28323 | ES7243E AINRP AC-coupling (Basic) |
@@ -65,8 +64,7 @@
 | C7 | 100nF SD | C14663 | 1 | + |
 | C9 | 10uF VDDA Bulk | C15850 | 1 | + |
 | C10 | 4.7uF Bulk | C1779 | 1 | + |
-| C14 | 100nF SHT30 | C14663 | 1 | + |
-| U3 | SHT30 Sensor | C78592 | 5 | VDD |
+| J5 | SHT30 Module Conn | - | 2 | VCC |
 | U4 | ESP32 DevKitC | - | 3V3 | 3.3V |
 | R4 | 4.7k I2C Pull-up | C23162 | 1 | SDA pull-up |
 | R5 | 4.7k I2C Pull-up | C23162 | 1 | SCL pull-up |
@@ -99,12 +97,10 @@
 | C9 | 10uF VDDA Bulk | C15850 | 2 | - |
 | C10 | 4.7uF Bulk | C1779 | 2 | - |
 | C12 | 10uF REFP | C15850 | 2 | - (REFP bypass) |
-| C14 | 100nF SHT30 | C14663 | 2 | - |
 | C15 | 1uF AINLN | C28323 | 2 | - (AINLN AC-couple) |
 | C16 | 1uF AINRN | C28323 | 2 | - (AINRN AC-couple) |
 | C17 | 1uF AINRP | C28323 | 2 | - (AINRP AC-couple) |
-| U3 | SHT30 Sensor | C78592 | 2 | ADDR (sets 0x44) |
-| U3 | SHT30 Sensor | C78592 | 4 | VSS |
+| J5 | SHT30 Module Conn | - | 1 | GND |
 | R3 | 1M VBAT Low | C22935 | 2 | VBAT divider low |
 | C13 | 1uF VBAT ADC | C28323 | 2 | VBAT ADC buffer |
 | U4 | ESP32 DevKitC | - | GND | Ground (multiple pins) |
@@ -131,12 +127,12 @@
 | LRCK | GPIO15 | Pin 7 (LRCK) | U4 -> U1 |
 | SDOUT | GPIO32 | Pin 3 (SDOUT) | U1 -> U4 |
 
-### I2C Bus (U4 ESP32 to U1 ES7243E, U3 SHT30)
+### I2C Bus (U4 ESP32 to U1 ES7243E, J5 SHT30 Module)
 
-| Signal | U4 (ESP32 DevKitC) | U1 (ES7243E, C2929446) | U3 (SHT30, C78592) | Direction |
-|--------|---------------------|------------------------|---------------------|-----------|
-| SDA | GPIO21 | Pin 18 (CDATA) | Pin 1 (SDA) | Bidirectional |
-| SCL | GPIO22 | Pin 19 (CCLK) | Pin 6 (SCL) | U4 -> devices |
+| Signal | U4 (ESP32 DevKitC) | U1 (ES7243E, C2929446) | J5 (SHT30 Module) | Direction |
+|--------|---------------------|------------------------|-------------------|-----------|
+| SDA | GPIO21 | Pin 18 (CDATA) | Pin 3 (SDA) | Bidirectional |
+| SCL | GPIO22 | Pin 19 (CCLK) | Pin 4 (SCL) | U4 -> devices |
 
 **I2C Pull-up Resistors (required):**
 | Ref | Part | LCSC # | Connection |
@@ -146,7 +142,7 @@
 
 **I2C Addresses:**
 - U1 ES7243E (C2929446): Pin 17 (AD0), Pin 8 (AD1) -> GND = Address **0x10**
-- U3 SHT30 (C78592): Pin 2 (ADDR) -> GND = Address **0x44**
+- J5 SHT30 Module: Default address **0x44**
 
 **ES7243E Reference Pins:**
 | Ref | Part | LCSC # | U1 Pin | Connection |
@@ -298,43 +294,32 @@ VBAT (J2+) ---[R2 1M]---+--- U4 GPIO35 (ADC1_CH7)
 
 ---
 
-### Temperature/Humidity Sensor (U3 SHT30, C78592)
+### Temperature/Humidity Sensor (J5 SHT30 External Module)
 
 ```
-3V3 ---+--- U3 Pin 5 (VDD)
-       |
-      [C14 100nF]
-       |
-      GND
+J5 (4-pin header to external SHT30 module):
 
-U4 GPIO21 (SDA) --- U3 Pin 1 (SDA)
-U4 GPIO22 (SCL) --- U3 Pin 6 (SCL)
-
-U3 Pin 2 (ADDR) --- GND (I2C address 0x44)
-U3 Pin 3 (ALERT) --- NC (not used)
-U3 Pin 4 (VSS) --- GND
-U3 Pin 7 (nRESET) --- NC (internal pull-up)
-U3 Pin 8 (R) --- NC (reserved)
+  Pin 1 (GND) --- GND
+  Pin 2 (VCC) --- 3V3
+  Pin 3 (SDA) --- U4 GPIO21 (I2C SDA)
+  Pin 4 (SCL) --- U4 GPIO22 (I2C SCL)
 ```
 
-**U3 SHT30-DIS (C78592) DFN-8 Pinout:**
+**J5 SHT30 Module Connector Pinout:**
 | Pin | Function | Connection |
 |-----|----------|------------|
-| 1 | SDA | GPIO21 (I2C bus) |
-| 2 | ADDR | GND (address 0x44) |
-| 3 | ALERT | NC |
-| 4 | VSS | GND |
-| 5 | VDD | 3V3 |
-| 6 | SCL | GPIO22 (I2C bus) |
-| 7 | nRESET | NC (internal pull-up) |
-| 8 | R | NC (reserved) |
+| 1 | GND | Ground |
+| 2 | VCC | 3V3 |
+| 3 | SDA | GPIO21 (I2C bus) |
+| 4 | SCL | GPIO22 (I2C bus) |
 
-**Specifications:**
+**SHT30 Module Specifications:**
+- I2C address: 0x44 (default)
 - Temperature accuracy: ±0.2°C
 - Humidity accuracy: ±2% RH
 - Operating range: -40°C to +125°C
-- Supply current: ~1.5µA average (single shot mode)
-- I2C speed: Up to 1 MHz
+- Supply voltage: 2.4V to 5.5V
+- Module has onboard decoupling capacitor
 
 ---
 
@@ -351,8 +336,8 @@ U3 Pin 8 (R) --- NC (reserved)
 | GPIO17 | UART TX (GPS) | J4 (GPS Conn, C3029401) pin 5 |
 | GPIO18 | SPI CLK | J1 (MicroSD, C113206) pin 5 |
 | GPIO19 | SPI MISO | J1 (MicroSD, C113206) pin 7 |
-| GPIO21 | I2C SDA | U1 (ES7243E) pin 18, U3 (SHT30) pin 1 |
-| GPIO22 | I2C SCL | U1 (ES7243E) pin 19, U3 (SHT30) pin 6 |
+| GPIO21 | I2C SDA | U1 (ES7243E) pin 18, J5 (SHT30 Module) pin 3 |
+| GPIO22 | I2C SCL | U1 (ES7243E) pin 19, J5 (SHT30 Module) pin 4 |
 | GPIO23 | SPI MOSI | J1 (MicroSD, C113206) pin 3 |
 | GPIO32 | I2S SDOUT | U1 (ES7243E, C2929446) pin 3 |
 | GPIO35 | VBAT ADC | R2/R3 (1M, C22935) divider midpoint |
