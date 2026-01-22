@@ -37,7 +37,7 @@
 #include "temperature.h"
 
 // Global ring buffer for audio data
-static RingBuffer* audioBuffer = nullptr;
+static RingBuffer *audioBuffer = nullptr;
 
 // Recording state
 static bool isRecording = false;
@@ -68,10 +68,14 @@ void setup()
 
     audioBuffer = new RingBuffer(RING_BUFFER_SIZE);
 
-    if (!audioBuffer->isValid()) {
+    if (!audioBuffer->isValid())
+    {
         Serial.println("FATAL: Ring buffer allocation failed!");
         Serial.println("Halting...");
-        while(1) { delay(1000); }
+        while (1)
+        {
+            delay(1000);
+        }
     }
     Serial.printf("Free heap after: %d bytes\n", ESP.getFreeHeap());
     Serial.println("Ring buffer OK");
@@ -84,25 +88,29 @@ void setup()
 
     // SD Card
     bool sdOk = sdWriterInit(audioBuffer);
-    if (!sdOk) {
+    if (!sdOk)
+    {
         Serial.println("WARNING: SD card not available!");
     }
 
     // GPS
     bool gpsOk = gpsInit();
-    if (!gpsOk) {
+    if (!gpsOk)
+    {
         Serial.println("WARNING: GPS init failed!");
     }
 
     // Audio (I2S + ES7243E)
     bool audioOk = audioInit(audioBuffer);
-    if (!audioOk) {
+    if (!audioOk)
+    {
         Serial.println("WARNING: Audio init failed!");
     }
 
     // Temperature/Humidity sensor
     bool tempOk = tempInit();
-    if (!tempOk) {
+    if (!tempOk)
+    {
         Serial.println("WARNING: Temperature sensor not found!");
     }
 
@@ -113,7 +121,8 @@ void setup()
     gpsStart();
     sdWriterStart();
     audioStart();
-    if (tempIsPresent()) {
+    if (tempIsPresent())
+    {
         tempStart();
     }
 
@@ -123,116 +132,143 @@ void setup()
 
 void loop()
 {
-    if (Serial.available()) {
+    if (Serial.available())
+    {
         char c = Serial.read();
         // Flush extra characters
-        while (Serial.available()) Serial.read();
+        while (Serial.available())
+            Serial.read();
 
-        switch (c) {
-            case '1':
-                printStatus();
-                printMenu();
-                break;
+        switch (c)
+        {
+        case '1':
+            printStatus();
+            printMenu();
+            break;
 
-            case '2':
-                if (!isRecording) {
-                    startRecording();
-                } else {
-                    Serial.println("Already recording!");
-                }
-                printMenu();
-                break;
-
-            case '3':
-                if (isRecording) {
-                    stopRecording();
-                } else {
-                    Serial.println("Not recording!");
-                }
-                printMenu();
-                break;
-
-            case '4': {
-                SDCardInfo info = sdGetCardInfo();
-                if (info.mounted) {
-                    Serial.println("\n=== SD Card Info ===");
-                    Serial.printf("Total: %llu MB\n", info.totalBytes / (1024*1024));
-                    Serial.printf("Used:  %llu MB\n", info.usedBytes / (1024*1024));
-                    Serial.printf("Free:  %llu MB\n", info.freeBytes / (1024*1024));
-                } else {
-                    Serial.println("SD card not mounted!");
-                }
-                printMenu();
-                break;
+        case '2':
+            if (!isRecording)
+            {
+                startRecording();
             }
-
-            case '5': {
-                GPSData gps = gpsGetData();
-                Serial.println("\n=== GPS Data ===");
-                Serial.printf("Valid: %s\n", gps.valid ? "Yes" : "No");
-                Serial.printf("Satellites: %d\n", gps.satellites);
-                Serial.printf("Position: %.6f, %.6f\n", gps.latitude, gps.longitude);
-                Serial.printf("Altitude: %.1f m\n", gps.altitude);
-                Serial.printf("Time: %02d:%02d:%02d UTC\n",
-                              gps.hour, gps.minute, gps.second);
-                Serial.printf("Date: %04d-%02d-%02d\n",
-                              gps.year, gps.month, gps.day);
-                Serial.printf("PPS: %s (last: %lu ms ago)\n",
-                              gps.ppsValid ? "OK" : "No signal",
-                              millis() - gps.lastPpsTime);
-                printMenu();
-                break;
+            else
+            {
+                Serial.println("Already recording!");
             }
+            printMenu();
+            break;
 
-            case '6': {
-                BatteryData batt = batteryGetData();
-                Serial.println("\n=== Battery ===");
-                Serial.printf("Voltage: %.2f V\n", batt.voltage);
-                Serial.printf("Level: %d%%\n", batt.percentage);
-                Serial.printf("Status: %s\n",
-                    batt.level == BATTERY_OK ? "OK" :
-                    batt.level == BATTERY_LOW ? "LOW" : "CRITICAL");
-                printMenu();
-                break;
+        case '3':
+            if (isRecording)
+            {
+                stopRecording();
             }
+            else
+            {
+                Serial.println("Not recording!");
+            }
+            printMenu();
+            break;
 
-            case '7': {
-                if (tempIsPresent()) {
-                    TempHumidityData temp = tempGetData();
-                    Serial.println("\n=== Temperature/Humidity ===");
-                    if (temp.valid) {
-                        Serial.printf("Temperature: %.1f C (%.1f F)\n",
-                                      temp.temperature,
-                                      temp.temperature * 9.0f / 5.0f + 32.0f);
-                        Serial.printf("Humidity: %.1f%%\n", temp.humidity);
-                        Serial.printf("Last read: %lu ms ago\n",
-                                      millis() - temp.lastReadTime);
-                    } else {
-                        Serial.println("No valid reading yet");
-                    }
-                } else {
-                    Serial.println("\nTemperature sensor not present!");
+        case '4':
+        {
+            SDCardInfo info = sdGetCardInfo();
+            if (info.mounted)
+            {
+                Serial.println("\n=== SD Card Info ===");
+                Serial.printf("Total: %llu MB\n", info.totalBytes / (1024 * 1024));
+                Serial.printf("Used:  %llu MB\n", info.usedBytes / (1024 * 1024));
+                Serial.printf("Free:  %llu MB\n", info.freeBytes / (1024 * 1024));
+            }
+            else
+            {
+                Serial.println("SD card not mounted!");
+            }
+            printMenu();
+            break;
+        }
+
+        case '5':
+        {
+            GPSData gps = gpsGetData();
+            Serial.println("\n=== GPS Data ===");
+            Serial.printf("Valid: %s\n", gps.valid ? "Yes" : "No");
+            Serial.printf("Satellites: %d\n", gps.satellites);
+            Serial.printf("Position: %.6f, %.6f\n", gps.latitude, gps.longitude);
+            Serial.printf("Altitude: %.1f m\n", gps.altitude);
+            Serial.printf("Time: %02d:%02d:%02d UTC\n",
+                          gps.hour, gps.minute, gps.second);
+            Serial.printf("Date: %04d-%02d-%02d\n",
+                          gps.year, gps.month, gps.day);
+            Serial.printf("PPS: %s (last: %lu ms ago)\n",
+                          gps.ppsValid ? "OK" : "No signal",
+                          millis() - gps.lastPpsTime);
+            printMenu();
+            break;
+        }
+
+        case '6':
+        {
+            BatteryData batt = batteryGetData();
+            Serial.println("\n=== Battery ===");
+            Serial.printf("Voltage: %.2f V\n", batt.voltage);
+            Serial.printf("Level: %d%%\n", batt.percentage);
+            Serial.printf("Status: %s\n",
+                          batt.level == BATTERY_OK ? "OK" : batt.level == BATTERY_LOW ? "LOW"
+                                                                                      : "CRITICAL");
+            printMenu();
+            break;
+        }
+
+        case '7':
+        {
+            if (tempIsPresent())
+            {
+                TempHumidityData temp = tempGetData();
+                Serial.println("\n=== Temperature/Humidity ===");
+                if (temp.valid)
+                {
+                    Serial.printf("Temperature: %.1f C (%.1f F)\n",
+                                  temp.temperature,
+                                  temp.temperature * 9.0f / 5.0f + 32.0f);
+                    Serial.printf("Humidity: %.1f%%\n", temp.humidity);
+                    Serial.printf("Last read: %lu ms ago\n",
+                                  millis() - temp.lastReadTime);
                 }
-                printMenu();
-                break;
-            }
-
-            case 'r':
-            case 'R':
-                // Quick record toggle
-                if (isRecording) {
-                    stopRecording();
-                } else {
-                    startRecording();
+                else
+                {
+                    Serial.println("No valid reading yet");
                 }
-                break;
+            }
+            else
+            {
+                Serial.println("\nTemperature sensor not present!");
+            }
+            printMenu();
+            break;
+        }
+
+        case 'r':
+        case 'R':
+            // Quick record toggle
+            if (isRecording)
+            {
+                stopRecording();
+            }
+            else
+            {
+                startRecording();
+            }
+            break;
         }
     }
 
     // Check for low battery during recording
-    if (isRecording) {
+    if (isRecording)
+    {
         BatteryData batt = batteryGetData();
-        if (batt.level == BATTERY_CRITICAL) {
+        if (batt.level == BATTERY_CRITICAL)
+        {
             Serial.println("\n!!! CRITICAL BATTERY - STOPPING RECORDING !!!\n");
             stopRecording();
         }
@@ -259,7 +295,8 @@ void printStatus()
     SDWriterStats sd = sdWriterGetStats();
     Serial.println("Recording:");
     Serial.printf("  Active: %s\n", isRecording ? "Yes" : "No");
-    if (isRecording) {
+    if (isRecording)
+    {
         Serial.printf("  File: %s\n", sd.currentFilename);
         Serial.printf("  Size: %lu bytes\n", sd.currentFileSize);
         Serial.printf("  Errors: %lu\n", sd.writeErrors);
@@ -278,12 +315,16 @@ void printStatus()
     Serial.printf("  %.2fV (%d%%)\n", batt.voltage, batt.percentage);
 
     // Temperature/Humidity
-    if (tempIsPresent()) {
+    if (tempIsPresent())
+    {
         TempHumidityData temp = tempGetData();
         Serial.println("Environment:");
-        if (temp.valid) {
+        if (temp.valid)
+        {
             Serial.printf("  %.1fC / %.1f%% RH\n", temp.temperature, temp.humidity);
-        } else {
+        }
+        else
+        {
             Serial.println("  (no reading)");
         }
     }
@@ -319,7 +360,8 @@ void startRecording()
 
     // Start SD recording
     uint32_t timestamp = gpsGetTimestamp();
-    if (!sdWriterStartRecording(timestamp)) {
+    if (!sdWriterStartRecording(timestamp))
+    {
         Serial.println("Failed to start recording!");
         return;
     }
