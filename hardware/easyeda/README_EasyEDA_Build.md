@@ -71,9 +71,9 @@ Battery (J2: C295747) → 10µF ceramic → NCP170 (U2: C603670) → 3.0V rail
 ```
 3.3V → R1 (2.2kΩ) → Mic+ (MK1: C3273706)
                      ↓
-                   10µF DC block cap
+                   1µF DC block cap (C11)
                      ↓
-                   ES7243E AINL (U1: C2929446)
+                   ES7243E AINLP (U1: C2929446)
 ```
 
 **ES7243E Connections:**

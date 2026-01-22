@@ -111,7 +111,7 @@ flowchart LR
     subgraph Microphone["Microphone Stage"]
         MIC["PUI AOM-5024L-HD-R<br/>80 dB SNR<br/>-24 dB Sensitivity"]
         BIAS["Bias Circuit<br/>3.3V / 2.2kΩ"]
-        CAP["10µF DC Block"]
+        CAP["1µF DC Block"]
         BIAS --> MIC
         MIC --> CAP
     end
@@ -218,7 +218,7 @@ The 19 dB SNR improvement translates to approximately 3x greater detection range
 
 **Bias Circuit:**
 
-The electret microphone requires a simple bias circuit: 3.3V through a 2.2kΩ load resistor, with a 10µF DC-blocking capacitor to the ADC AINLP input. The ES7243E provides internal bias via REFQ (~1.45V), so no external bias resistor is needed on AINLP when the differential inputs are properly AC-coupled.
+The electret microphone requires a simple bias circuit: 3.3V through a 2.2kΩ load resistor, with a 1µF DC-blocking capacitor (C11) to the ADC AINLP input per the ES7243E reference design. The ES7243E provides internal bias via REFQ (~1.45V), so no external bias resistor is needed on AINLP when the differential inputs are properly AC-coupled.
 
 ### 3.4 Environment Sensor: SHT30-DIS
 

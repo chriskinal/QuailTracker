@@ -95,10 +95,10 @@
 │  │  │     │           │                                                                  │  │
 │  │  │ PUI │       ┌───┴───┐                                                              │  │
 │  │  │AOM- │       │       │   ┌─────────────────────────────────────────────────────┐    │  │
-│  │  │5024L│       │  10µF │   │              ES7243E ADC (QFN-20)                    │    │  │
+│  │  │5024L│       │  1µF  │   │              ES7243E ADC (QFN-20)                    │    │  │
 │  │  │-HD-R│       │  DC   │   │                                                     │    │  │
 │  │  │     │       │ Block │   │ Pin 9  AINLP ◄────────────────────────────────────────   │  │
-│  │  │ (+) ├───────┤  Cap  ├───┤        (Left + input, audio from mic via C11)       │    │  │
+│  │  │ (+) ├───────┤ (C11) ├───┤        (Left + input, audio from mic via C11)       │    │  │
 │  │  │     │       │       │   │                                                     │    │  │
 │  │  │ (-) ├───┐   └───────┘   │ Pin 10 AINLN ─────[1µF C15]───┬─ AGND               │    │  │
 │  │  └─────┘   │               │        (Left - input, AC-coupled to AGND)           │    │  │
@@ -300,7 +300,7 @@
 | Pin 6 SCLK | Bit Clock | ESP32 GPIO14 |
 | Pin 7 LRCK | L/R Word Clock | ESP32 GPIO15 |
 | Pin 3 SDOUT | Digital Audio Out | ESP32 GPIO32 |
-| Pin 9 AINLP | Left + Analog Input | Microphone via 10µF DC-block cap |
+| Pin 9 AINLP | Left + Analog Input | Microphone via 1µF DC-block cap (C11) |
 | Pin 10 AINLN | Left - Analog Input | **1µF cap to AGND (AC-coupled!)** |
 | Pin 16 AINRP | Right + Analog Input | **1µF cap to AGND (AC-coupled!)** |
 | Pin 15 AINRN | Right - Analog Input | **1µF cap to AGND (AC-coupled!)** |
@@ -403,7 +403,7 @@ bias circuitry (~1.45V from REFQ) and causes severe signal degradation.
          │      │  (+)    │      │
          │      │         │      │     ┌────────────┐
          │      │  PUI    │      │     │            │
-         │      │ AOM-5024├──────┼─────┤  10µF  ────├────► ES7243E Pin 9 (AINLP)
+         │      │ AOM-5024├──────┼─────┤  1µF   ────├────► ES7243E Pin 9 (AINLP)
          │      │  L-HD-R │      │     │  DC Block  │
          │      │         │      │     │  (C11)     │
          │      │  (-)    │      │     └────────────┘
@@ -420,7 +420,7 @@ bias circuitry (~1.45V from REFQ) and causes severe signal degradation.
 
     ES7243E Differential Input AC-Coupling (from datasheet reference design):
 
-    AINLP (Pin 9)  ◄──── Audio signal (from microphone via 10µF DC-block)
+    AINLP (Pin 9)  ◄──── Audio signal (from microphone via 1µF DC-block C11)
     AINLN (Pin 10) ────[1µF]──── AGND   ← AC-coupled, NOT direct ground!
     AINRN (Pin 15) ────[1µF]──── AGND   ← AC-coupled, NOT direct ground!
     AINRP (Pin 16) ────[1µF]──── AGND   ← AC-coupled, NOT direct ground!
@@ -441,7 +441,7 @@ bias circuitry (~1.45V from REFQ) and causes severe signal degradation.
 
     Component Values:
     - R1: 2.2kΩ (sets ~1.5mA bias current for electret mic)
-    - C11: 10µF (DC blocking, low freq cutoff ~7Hz)
+    - C11: 1µF (DC blocking / AINLP decoupling per reference design)
     - C15, C16, C17: 1µF (AC-coupling for AINLN, AINRN, AINRP)
     - C8, C12: 10µF (REFQ, REFP bypass)
     - C9: 10µF (VDDA bypass)

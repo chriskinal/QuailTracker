@@ -32,7 +32,7 @@
 | C12 | 10uF 0805 | C15850 | ES7243E REFP Bypass (Basic) |
 | C9 | 10uF 0805 | C15850 | ES7243E VDDA Bulk (Basic) |
 | C10 | 4.7uF 0805 | C1779 | Bulk (Basic) |
-| C11 | 10uF 0805 | C15850 | Mic DC Block (Basic) |
+| C11 | 1uF 0805 | C28323 | Mic DC Block / AINLP decoupling (Basic) |
 | C14 | 100nF 0603 | C14663 | SHT30 Decoupling |
 | R4 | 4.7k 0603 | C23162 | I2C SDA Pull-up |
 | R5 | 4.7k 0603 | C23162 | I2C SCL Pull-up |
@@ -202,7 +202,7 @@ Direct grounding disrupts the internal bias circuitry and causes signal degradat
 ```
 3V3 ---[R1 2.2k]---+--- J3 Pin 1 (Mic+)
                    |
-                  [C11 10uF]
+                  [C11 1uF]
                    |
                    +--- U1 Pin 9 (AINLP)
 
