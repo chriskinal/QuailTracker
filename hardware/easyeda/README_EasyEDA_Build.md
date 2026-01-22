@@ -145,12 +145,16 @@ $PMTK225,2,3000,12000,18000,72000*XX
 | MOSI | GPIO23 | Data In |
 | MISO | GPIO19 | Data Out |
 
-### 7. U4 - ESP32 Module Symbol
+### 7. U3 - ESP32 Module Symbol
 
-Since U4 (ESP32S NodeMCU 38-pin) is a through-hole module, create a custom symbol or use a generic 38-pin header:
+Since U3 (ESP32S NodeMCU 38-pin) is a through-hole module:
 
-1. Search "pin header 2x19" in library
-2. Or create custom schematic symbol
+1. Search "NODEMCU-32SLUA" in EasyEDA library for the correct footprint
+2. **Important:** Verify pin 1 is at top-left, pin 38 at top-right
+
+⚠️ **Footprint Warning:** Some ESP32 DevKit footprints have the right side pins reversed. The correct footprint (NODEMCU-32SLUA) has:
+- Left side: Pin 1 (top) to Pin 19 (bottom)
+- Right side: Pin 38 (top) to Pin 20 (bottom)
 
 **Key Pin Assignments:**
 | GPIO | Function | Direction |

@@ -10,7 +10,7 @@
 | U2 | NCP170ASN300T2G | C603670 | 3.0V LDO Regulator, TSOP-5, 500nA Iq |
 | J5 | 4-pin header | - | SHT30 Module Connector (1=GND, 2=VCC, 3=SDA, 4=SCL) |
 | J4 | WAFER-MX1.25-8PZZ | C3029401 | GPS Connector, 1.25mm 8-pin Vertical |
-| U3 | ESP32 DevKitC | - | 38-pin module (hand soldered) |
+| U3 | ESP32 DevKitC | - | 38-pin module, footprint: NODEMCU-32SLUA (hand soldered) |
 | J1 | TF-015 | C113206 | MicroSD Card Socket |
 | J2 | S2B-PH-SM4-TB | C295747 | Battery Connector, JST PH 2-pin |
 | J3 | B2B-XH-A | C158012 | Mic Connector, JST XH 2-pin |
