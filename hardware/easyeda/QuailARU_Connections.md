@@ -10,7 +10,7 @@
 | U2 | NCP170ASN300T2G | C603670 | 3.0V LDO Regulator, TSOP-5, 500nA Iq |
 | J5 | 4-pin header | - | SHT30 Module Connector (1=GND, 2=VCC, 3=SDA, 4=SCL) |
 | J4 | WAFER-MX1.25-8PZZ | C3029401 | GPS Connector, 1.25mm 8-pin Vertical |
-| U3 | ESP32 DevKitC | - | 38-pin module, footprint: NODEMCU-32SLUA (hand soldered) |
+| U3 | NODEMCU-32SLUA | - | 38-pin module, footprint: NODEMCU-32SLUA (hand soldered) |
 | J1 | TF-015 | C113206 | MicroSD Card Socket |
 | J2 | S2B-PH-SM4-TB | C295747 | Battery Connector, JST PH 2-pin |
 | J3 | B2B-XH-A | C158012 | Mic Connector, JST XH 2-pin |
@@ -64,7 +64,7 @@
 | C9 | 10uF VDDA Bulk | C15850 | 1 | + |
 | C10 | 4.7uF Bulk | C1779 | 1 | + |
 | J5 | SHT30 Module Conn | - | 2 | VCC |
-| U3 | ESP32 DevKitC | - | 3V3 | 3.3V |
+| U3 | NODEMCU-32SLUA | - | 3V3 | 3.3V |
 | R4 | 4.7k I2C Pull-up | C23162 | 1 | SDA pull-up |
 | R5 | 4.7k I2C Pull-up | C23162 | 1 | SCL pull-up |
 
@@ -103,7 +103,7 @@
 | J5 | SHT30 Module Conn | - | 1 | GND |
 | R3 | 1M VBAT Low | C22935 | 2 | VBAT divider low |
 | C13 | 1uF VBAT ADC | C28323 | 2 | VBAT ADC buffer |
-| U3 | ESP32 DevKitC | - | GND | Ground (multiple pins) |
+| U3 | NODEMCU-32SLUA | - | GND | Ground (multiple pins) |
 
 **VBAT (Battery Input)**
 | Ref | Part | LCSC # | Pin | Pin Name |
@@ -120,7 +120,7 @@
 
 ### I2S Audio (U3 ESP32 to U1 ES7243E)
 
-| Signal | U3 (ESP32 DevKitC) | U1 (ES7243E, C2929446) | Direction |
+| Signal | U3 (NODEMCU-32SLUA) | U1 (ES7243E, C2929446) | Direction |
 |--------|---------------------|------------------------|-----------|
 | MCLK | GPIO0 | Pin 20 (MCLK) | U3 -> U1 |
 | SCLK | GPIO14 | Pin 6 (SCLK) | U3 -> U1 |
@@ -129,7 +129,7 @@
 
 ### I2C Bus (U3 ESP32 to U1 ES7243E, J5 SHT30 Module)
 
-| Signal | U3 (ESP32 DevKitC) | U1 (ES7243E, C2929446) | J5 (SHT30 Module) | Direction |
+| Signal | U3 (NODEMCU-32SLUA) | U1 (ES7243E, C2929446) | J5 (SHT30 Module) | Direction |
 |--------|---------------------|------------------------|-------------------|-----------|
 | SDA | GPIO21 | Pin 18 (CDATA) | Pin 3 (SDA) | Bidirectional |
 | SCL | GPIO22 | Pin 19 (CCLK) | Pin 4 (SCL) | U3 -> devices |
@@ -162,7 +162,7 @@
 ### GPS Connector J4 (U3 ESP32 to L76K Module)
 
 **J4 (WAFER-MX1.25-8PZZ, C3029401) Pinout - matches L76K module header:**
-| J4 Pin | Signal | U3 (ESP32 DevKitC) | Direction | Notes |
+| J4 Pin | Signal | U3 (NODEMCU-32SLUA) | Direction | Notes |
 |--------|--------|---------------------|-----------|-------|
 | 1 | GND | GND | Ground | |
 | 2 | RST_GPS | 3V3 | (hold high) | Active low reset |
@@ -181,7 +181,7 @@
 
 ### SD Card SPI (U3 ESP32 to J1 MicroSD)
 
-| Signal | U3 (ESP32 DevKitC) | J1 (TF-015, C113206) | Direction |
+| Signal | U3 (NODEMCU-32SLUA) | J1 (TF-015, C113206) | Direction |
 |--------|---------------------|----------------------|-----------|
 | SD_CS | GPIO5 | Pin 2 (DAT3/CS) | U3 -> J1 |
 | SD_MOSI | GPIO23 | Pin 3 (CMD/DI) | U3 -> J1 |
@@ -323,7 +323,7 @@ J5 (4-pin header to external SHT30 module):
 
 ---
 
-## U3 (ESP32 DevKitC) Pin Summary
+## U3 (NODEMCU-32SLUA) Pin Summary
 
 | U3 Pin | Function | Connected To |
 |--------|----------|--------------|
