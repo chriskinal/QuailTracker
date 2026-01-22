@@ -10,7 +10,7 @@
 | U2 | NCP170ASN300T2G | C603670 | 3.0V LDO Regulator, TSOP-5, 500nA Iq |
 | J5 | 4-pin header | - | SHT30 Module Connector (1=GND, 2=VCC, 3=SDA, 4=SCL) |
 | J4 | WAFER-MX1.25-8PZZ | C3029401 | GPS Connector, 1.25mm 8-pin Vertical |
-| U4 | ESP32 DevKitC | - | 38-pin module (hand soldered) |
+| U3 | ESP32 DevKitC | - | 38-pin module (hand soldered) |
 | J1 | TF-015 | C113206 | MicroSD Card Socket |
 | J2 | S2B-PH-SM4-TB | C295747 | Battery Connector, JST PH 2-pin |
 | J3 | B2B-XH-A | C158012 | Mic Connector, JST XH 2-pin |
@@ -64,7 +64,7 @@
 | C9 | 10uF VDDA Bulk | C15850 | 1 | + |
 | C10 | 4.7uF Bulk | C1779 | 1 | + |
 | J5 | SHT30 Module Conn | - | 2 | VCC |
-| U4 | ESP32 DevKitC | - | 3V3 | 3.3V |
+| U3 | ESP32 DevKitC | - | 3V3 | 3.3V |
 | R4 | 4.7k I2C Pull-up | C23162 | 1 | SDA pull-up |
 | R5 | 4.7k I2C Pull-up | C23162 | 1 | SCL pull-up |
 
@@ -103,7 +103,7 @@
 | J5 | SHT30 Module Conn | - | 1 | GND |
 | R3 | 1M VBAT Low | C22935 | 2 | VBAT divider low |
 | C13 | 1uF VBAT ADC | C28323 | 2 | VBAT ADC buffer |
-| U4 | ESP32 DevKitC | - | GND | Ground (multiple pins) |
+| U3 | ESP32 DevKitC | - | GND | Ground (multiple pins) |
 
 **VBAT (Battery Input)**
 | Ref | Part | LCSC # | Pin | Pin Name |
@@ -118,21 +118,21 @@
 
 ---
 
-### I2S Audio (U4 ESP32 to U1 ES7243E)
+### I2S Audio (U3 ESP32 to U1 ES7243E)
 
-| Signal | U4 (ESP32 DevKitC) | U1 (ES7243E, C2929446) | Direction |
+| Signal | U3 (ESP32 DevKitC) | U1 (ES7243E, C2929446) | Direction |
 |--------|---------------------|------------------------|-----------|
-| MCLK | GPIO0 | Pin 20 (MCLK) | U4 -> U1 |
-| SCLK | GPIO14 | Pin 6 (SCLK) | U4 -> U1 |
-| LRCK | GPIO15 | Pin 7 (LRCK) | U4 -> U1 |
-| SDOUT | GPIO32 | Pin 3 (SDOUT) | U1 -> U4 |
+| MCLK | GPIO0 | Pin 20 (MCLK) | U3 -> U1 |
+| SCLK | GPIO14 | Pin 6 (SCLK) | U3 -> U1 |
+| LRCK | GPIO15 | Pin 7 (LRCK) | U3 -> U1 |
+| SDOUT | GPIO32 | Pin 3 (SDOUT) | U1 -> U3 |
 
-### I2C Bus (U4 ESP32 to U1 ES7243E, J5 SHT30 Module)
+### I2C Bus (U3 ESP32 to U1 ES7243E, J5 SHT30 Module)
 
-| Signal | U4 (ESP32 DevKitC) | U1 (ES7243E, C2929446) | J5 (SHT30 Module) | Direction |
+| Signal | U3 (ESP32 DevKitC) | U1 (ES7243E, C2929446) | J5 (SHT30 Module) | Direction |
 |--------|---------------------|------------------------|-------------------|-----------|
 | SDA | GPIO21 | Pin 18 (CDATA) | Pin 3 (SDA) | Bidirectional |
-| SCL | GPIO22 | Pin 19 (CCLK) | Pin 4 (SCL) | U4 -> devices |
+| SCL | GPIO22 | Pin 19 (CCLK) | Pin 4 (SCL) | U3 -> devices |
 
 **I2C Pull-up Resistors (required):**
 | Ref | Part | LCSC # | Connection |
@@ -159,17 +159,17 @@
 
 ---
 
-### GPS Connector J4 (U4 ESP32 to L76K Module)
+### GPS Connector J4 (U3 ESP32 to L76K Module)
 
 **J4 (WAFER-MX1.25-8PZZ, C3029401) Pinout - matches L76K module header:**
-| J4 Pin | Signal | U4 (ESP32 DevKitC) | Direction | Notes |
+| J4 Pin | Signal | U3 (ESP32 DevKitC) | Direction | Notes |
 |--------|--------|---------------------|-----------|-------|
 | 1 | GND | GND | Ground | |
 | 2 | RST_GPS | 3V3 | (hold high) | Active low reset |
-| 3 | PPS | GPIO4 | J4 -> U4 | 1Hz pulse |
+| 3 | PPS | GPIO4 | J4 -> U3 | 1Hz pulse |
 | 4 | WAKE_UP | 3V3 | (hold high) | Keep awake |
-| 5 | RX_GPS | GPIO17 (TX2) | U4 -> J4 | ESP32 transmits to GPS |
-| 6 | TX_GPS | GPIO16 (RX2) | J4 -> U4 | GPS transmits to ESP32 |
+| 5 | RX_GPS | GPIO17 (TX2) | U3 -> J4 | ESP32 transmits to GPS |
+| 6 | TX_GPS | GPIO16 (RX2) | J4 -> U3 | GPS transmits to ESP32 |
 | 7 | VCC | 3V3 | Power | + 100nF decoupling (C6) |
 | 8 | GND | GND | Ground | |
 
@@ -179,14 +179,14 @@
 
 ---
 
-### SD Card SPI (U4 ESP32 to J1 MicroSD)
+### SD Card SPI (U3 ESP32 to J1 MicroSD)
 
-| Signal | U4 (ESP32 DevKitC) | J1 (TF-015, C113206) | Direction |
+| Signal | U3 (ESP32 DevKitC) | J1 (TF-015, C113206) | Direction |
 |--------|---------------------|----------------------|-----------|
-| SD_CS | GPIO5 | Pin 2 (DAT3/CS) | U4 -> J1 |
-| SD_MOSI | GPIO23 | Pin 3 (CMD/DI) | U4 -> J1 |
-| SD_CLK | GPIO18 | Pin 5 (CLK) | U4 -> J1 |
-| SD_MISO | GPIO19 | Pin 7 (DAT0/DO) | J1 -> U4 |
+| SD_CS | GPIO5 | Pin 2 (DAT3/CS) | U3 -> J1 |
+| SD_MOSI | GPIO23 | Pin 3 (CMD/DI) | U3 -> J1 |
+| SD_CLK | GPIO18 | Pin 5 (CLK) | U3 -> J1 |
+| SD_MISO | GPIO19 | Pin 7 (DAT0/DO) | J1 -> U3 |
 
 **J1 (TF-015, C113206) Power:** Pin 4 (VDD) -> 3V3, Pin 6 (VSS) -> GND
 **J1 Shield:** Pins 10, 11, 12, 13 -> GND
@@ -265,7 +265,7 @@ U2 Pin 4 (NC) --- No connection
 ### Battery Voltage Monitor
 
 ```
-VBAT (J2+) ---[R2 1M]---+--- U4 GPIO35 (ADC1_CH7)
+VBAT (J2+) ---[R2 1M]---+--- U3 GPIO35 (ADC1_CH7)
                         |
                        [C13 1uF]
                         |
@@ -279,7 +279,7 @@ VBAT (J2+) ---[R2 1M]---+--- U4 GPIO35 (ADC1_CH7)
 | VBAT | - | - | R2 pin 1 | Battery positive |
 | R2 pin 2 | 1M 0603 | C22935 | R3 pin 1 | Divider midpoint |
 | R2 pin 2 | 1M 0603 | C22935 | C13 pin 1 | ADC buffer cap |
-| R2 pin 2 | 1M 0603 | C22935 | U4 GPIO35 | ADC input |
+| R2 pin 2 | 1M 0603 | C22935 | U3 GPIO35 | ADC input |
 | C13 pin 2 | 1uF 0805 | C28323 | GND | Buffer cap ground |
 | R3 pin 2 | 1M 0603 | C22935 | GND | Divider ground |
 
@@ -301,8 +301,8 @@ J5 (4-pin header to external SHT30 module):
 
   Pin 1 (GND) --- GND
   Pin 2 (VCC) --- 3V3
-  Pin 3 (SDA) --- U4 GPIO21 (I2C SDA)
-  Pin 4 (SCL) --- U4 GPIO22 (I2C SCL)
+  Pin 3 (SDA) --- U3 GPIO21 (I2C SDA)
+  Pin 4 (SCL) --- U3 GPIO22 (I2C SCL)
 ```
 
 **J5 SHT30 Module Connector Pinout:**
@@ -323,9 +323,9 @@ J5 (4-pin header to external SHT30 module):
 
 ---
 
-## U4 (ESP32 DevKitC) Pin Summary
+## U3 (ESP32 DevKitC) Pin Summary
 
-| U4 Pin | Function | Connected To |
+| U3 Pin | Function | Connected To |
 |--------|----------|--------------|
 | GPIO0 | I2S MCLK | U1 (ES7243E, C2929446) pin 20 |
 | GPIO4 | PPS Input | J4 (GPS Conn, C3029401) pin 3 |
