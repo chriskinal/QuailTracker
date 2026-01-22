@@ -2,7 +2,7 @@
 
 **Design Documentation**
 
-*Version 1.2 — January 12, 2026*
+*Version 1.3 — January 22, 2026*
 
 Low-Cost GPS-Synchronized Bioacoustic Recording Platform
 
@@ -83,15 +83,21 @@ flowchart TB
         SD["MicroSD Card<br/>32 GB Class 10"]
     end
 
+    subgraph Environment["Environment Sensor"]
+        SHT30["SHT30-DIS<br/>Temp/Humidity<br/>I2C Address 0x44"]
+    end
+
     LDO -->|3.3V| ESP
     LDO -->|3.3V| ADC
     LDO -->|3.3V| L76K
     LDO -->|3.3V| SD
+    LDO -->|3.3V| SHT30
 
     PPS -->|Time Sync| ESP
     ADC -->|I2S Data| I2S
     MCLK -->|System Clock| ADC
     SPI <-->|Data| SD
+    SHT30 -->|I2C| ESP
 ```
 
 ### 2.2 Audio Signal Chain
@@ -192,6 +198,14 @@ The PUI AOM-5024L-HD-R electret condenser microphone was selected for its except
 - QFN-20 package, SMT assembly compatible
 - Unit cost: ~$0.24 (LCSC)
 
+⚠️ **Critical ES7243E Analog Input Requirements:**
+The ES7243E differential inputs (AINLN, AINRN, AINRP) must be AC-coupled to analog ground via 1µF capacitors. Direct grounding is incorrect and causes severe signal degradation by fighting the internal bias circuitry (~1.45V from REFQ). Additionally:
+- REFQ (Pin 11): 10µF capacitor to AGND
+- REFP (Pin 14): 10µF capacitor to AGND
+- VDDA (Pin 12): 10µF capacitor to AGND
+- VDDD (Pin 5): 100nF capacitor to DGND
+- I2C requires external 4.7kΩ pull-up resistors on SDA and SCL
+
 **Detection Range Comparison:**
 
 | Microphone | SNR | Est. Detection Range | TDOA Coverage (10 stations) |
@@ -204,7 +218,29 @@ The 19 dB SNR improvement translates to approximately 3x greater detection range
 
 **Bias Circuit:**
 
-The electret microphone requires a simple bias circuit: 3.3V through a 2.2kΩ load resistor, with a 10µF DC-blocking capacitor to the ADC input.
+The electret microphone requires a simple bias circuit: 3.3V through a 2.2kΩ load resistor, with a 10µF DC-blocking capacitor to the ADC AINLP input. The ES7243E provides internal bias via REFQ (~1.45V), so no external bias resistor is needed on AINLP when the differential inputs are properly AC-coupled.
+
+### 3.4 Environment Sensor: SHT30-DIS
+
+The SHT30-DIS temperature and humidity sensor enables environmental monitoring for data quality assessment and habitat characterization:
+
+**Specifications:**
+- Temperature accuracy: ±0.2°C (typical)
+- Humidity accuracy: ±2% RH (typical)
+- Operating range: -40°C to +125°C
+- Supply voltage: 2.4V to 5.5V
+- Supply current: ~1.5µA average (single shot mode)
+- I2C interface (address 0x44 with ADDR pin to GND)
+- DFN-8 package, SMT assembly compatible
+- Unit cost: ~$1.50 (LCSC C78592)
+
+**Use Cases:**
+- Correlate detection rates with temperature/humidity conditions
+- Monitor enclosure internal conditions for equipment health
+- Provide environmental context for acoustic recordings
+- Support habitat analysis and seasonal studies
+
+The SHT30 shares the I2C bus with the ES7243E ADC, using address 0x44 (ES7243E uses 0x10).
 
 ---
 
@@ -220,37 +256,43 @@ The electret microphone requires a simple bias circuit: 3.3V through a 2.2kΩ lo
 | 4 | Mic Connector | JST XH 2-pin B2B-XH-A (for remote mic) | 1 | $0.02 | $0.02 |
 | 4a | Electret Microphone | PUI AOM-5024L-HD-R (sourced separately) | 1 | $1.83 | $1.83 |
 | 5 | I2S ADC | ES7243E 24-bit (3.3V native) | 1 | $0.24 | $0.24 |
-| 6 | MicroSD Socket | TF-015 push-push | 1 | $0.08 | $0.08 |
-| 7 | MicroSD Card | 32GB Class 10 | 1 | $4.00 | $4.00 |
-| 8 | Voltage Regulator | HT7333 LDO, 3.3V 250mA | 1 | $0.04 | $0.04 |
-| 9 | Battery Connector | JST PH 2-pin SMT | 1 | $0.10 | $0.10 |
-| 10 | P-FET Power Switch | SI2301 SOT-23 | 1 | $0.02 | $0.02 |
-| 11 | 18650 Cells | 3400mAh Li-ion | 4 | $3.00 | $12.00 |
-| 12 | Capacitors | Assorted (see LCSC BOM) | 1 | $0.10 | $0.10 |
-| 13 | Resistors | 2.2kΩ (mic bias) | 1 | $0.01 | $0.01 |
-| | | | | **Total:** | **$32.81** |
+| 6 | Temp/Humidity Sensor | SHT30-DIS | 1 | $1.50 | $1.50 |
+| 7 | MicroSD Socket | TF-015 push-push | 1 | $0.08 | $0.08 |
+| 8 | MicroSD Card | 32GB Class 10 | 1 | $4.00 | $4.00 |
+| 9 | Voltage Regulator | HT7333 LDO, 3.3V 250mA | 1 | $0.04 | $0.04 |
+| 10 | Battery Connector | JST PH 2-pin SMT | 1 | $0.10 | $0.10 |
+| 11 | P-FET Power Switch | SI2301 SOT-23 | 1 | $0.02 | $0.02 |
+| 12 | 18650 Cells | 3400mAh Li-ion | 4 | $3.00 | $12.00 |
+| 13 | Capacitors | Assorted (see LCSC BOM) | 1 | $0.15 | $0.15 |
+| 14 | Resistors | 2.2kΩ (mic bias), 4.7kΩ (I2C pull-ups) | 3 | $0.01 | $0.03 |
+| | | | | **Total:** | **$34.40** |
 
 ### 4.2 LCSC Parts BOM (for JLCPCB Assembly)
 
 | LCSC # | Component | Description | Package | Qty | Price |
 |--------|-----------|-------------|---------|-----|-------|
 | C2929446 | ES7243E | 24-bit I2S ADC, 3.3V | QFN-20 | 1 | $0.24 |
+| C78592 | SHT30-DIS-B2.5kS | Temp/humidity sensor | DFN-8 | 1 | $1.50 |
 | C21583 | HT7333-A | 3.3V 250mA LDO | SOT-89 | 1 | $0.04 |
 | C2838031 | Quectel L76K | GPS module with PPS | LCC-18 | 1 | $8.89 |
 | C2938372 | SI2301 | P-channel MOSFET | SOT-23 | 1 | $0.02 |
 | C113206 | TF-015 | MicroSD card socket | SMD | 1 | $0.08 |
 | C158012 | B2B-XH-A(LF)(SN) | Mic connector JST XH 2-pin | Through-hole | 1 | $0.02 |
 | C295747 | S2B-PH-SM4-TB | JST PH 2-pin battery conn | SMT | 1 | $0.10 |
-| C4190 | 0603WAF2201T5E | 2.2kΩ 0603 1% resistor | 0603 | 2 | $0.001 |
+| C4190 | 0603WAF2201T5E | 2.2kΩ 0603 1% resistor | 0603 | 1 | $0.001 |
+| C23162 | 0603WAF4701T5E | 4.7kΩ 0603 1% resistor (I2C pull-ups) | 0603 | 2 | $0.001 |
 | C14663 | CC0603KRX7R9BB104 | 100nF 0603 X7R capacitor | 0603 | 6 | $0.001 |
-| C89827 | CC0805KKX5R7BB106 | 10µF 0805 X5R capacitor | 0805 | 4 | $0.02 |
-| C123624 | 0805B475K160CT | 4.7µF 0805 X7R capacitor | 0805 | 2 | $0.03 |
+| C28323 | CL21B105KAFNNNE | 1µF 0805 X5R capacitor (AC-coupling) - Basic | 0805 | 3 | $0.01 |
+| C15850 | CL21A106KAYNNNE | 10µF 0805 X5R capacitor | 0805 | 6 | $0.02 |
+| C1779 | CL21A475KAQNNNE | 4.7µF 0805 X5R capacitor | 0805 | 1 | $0.03 |
 
 **Notes:**
 - All parts verified in-stock at LCSC as of January 2026
 - ESP32 DevKit module sourced separately (through-hole, hand-soldered)
 - Microphone (PUI AOM-5024L-HD-R) connected via JST XH 2-pin connector for remote mounting
 - Remote mic placement reduces RF noise pickup from ESP32 WiFi/BLE
+- ES7243E requires AC-coupling caps on AINLN, AINRN, AINRP (see critical requirements)
+- I2C bus shared between ES7243E (0x10) and SHT30 (0x44)
 
 ### 4.3 Mechanical BOM
 
@@ -262,7 +304,7 @@ The electret microphone requires a simple bias circuit: 3.3V through a 2.2kΩ lo
 | 4 | Acoustic Vent | GORE or equivalent | 1 | $2.00 | $2.00 |
 | | | | | **Total:** | **$9.50** |
 
-**Grand Total: ~$43/unit** (slightly over $40 target, can be reduced with volume purchasing)
+**Grand Total: ~$44/unit** (slightly over $40 target, can be reduced with volume purchasing)
 
 ---
 
@@ -276,8 +318,8 @@ The electret microphone requires a simple bias circuit: 3.3V through a 2.2kΩ lo
 | GPIO15 | I2S Word Select | ES7243E LRCK |
 | GPIO14 | I2S Bit Clock | ES7243E SCLK |
 | GPIO0 | I2S Master Clock | ES7243E MCLK |
-| GPIO21 | I2C SDA | ES7243E SDA |
-| GPIO22 | I2C SCL | ES7243E SCL |
+| GPIO21 | I2C SDA | ES7243E SDA, SHT30 SDA (+ 4.7kΩ pull-up) |
+| GPIO22 | I2C SCL | ES7243E SCL, SHT30 SCL (+ 4.7kΩ pull-up) |
 | GPIO16 | UART RX | GPS TX |
 | GPIO17 | UART TX | GPS RX |
 | GPIO4 | PPS Input | GPS PPS |
@@ -286,6 +328,11 @@ The electret microphone requires a simple bias circuit: 3.3V through a 2.2kΩ lo
 | GPIO19 | SPI MISO | SD Card MISO |
 | GPIO23 | SPI MOSI | SD Card MOSI |
 | GPIO2 | GPS Power | SI2301 Gate (GPS VCC switch) |
+| GPIO35 | ADC Input | Battery voltage divider |
+
+**I2C Bus Devices:**
+- ES7243E Audio ADC: Address 0x10
+- SHT30 Temp/Humidity: Address 0x44
 
 ### 5.2 I2S Timing
 
@@ -434,3 +481,4 @@ graph TD
 | 1.0 | January 2026 | Initial release |
 | 1.1 | January 10, 2026 | Audio subsystem redesign: Changed MCU from ESP32-C3 to ESP32 (dual-core). Replaced INMP441 (61dB SNR) with PUI AOM-5024L-HD-R (80dB SNR) + PCM1808 ADC for ~3x detection range increase. Updated BOM, wiring, and block diagrams. |
 | 1.2 | January 12, 2026 | ADC change: Replaced PCM1808 (requires 5V analog) with ES7243E (true 3.3V operation). Added LCSC parts BOM for JLCPCB manufacturing. Updated pin assignments for ES7243E I2C control interface. |
+| 1.3 | January 22, 2026 | ES7243E circuit corrections: Differential inputs (AINLN, AINRN, AINRP) must be AC-coupled to AGND via 1µF caps, not directly grounded. Updated REFQ/REFP bypass caps from 100nF to 10µF. Added required 4.7kΩ I2C pull-up resistors. Added critical warnings and detailed circuit requirements based on datasheet reference design. |

@@ -18,6 +18,9 @@
 | R2 | 1M 0603 | C22935 | VBAT Divider High |
 | R3 | 1M 0603 | C22935 | VBAT Divider Low |
 | C13 | 1uF 0805 | C28323 | VBAT ADC Buffer (Basic) |
+| C15 | 1uF 0805 | C28323 | ES7243E AINLN AC-coupling (Basic) |
+| C16 | 1uF 0805 | C28323 | ES7243E AINRN AC-coupling (Basic) |
+| C17 | 1uF 0805 | C28323 | ES7243E AINRP AC-coupling (Basic) |
 | C1 | 10uF 0805 | C15850 | LDO Input Cap (Basic) |
 | C2 | 10uF 0805 | C15850 | LDO Output Cap (Basic) |
 | C3 | 100nF 0603 | C14663 | LDO Decoupling |
@@ -25,12 +28,14 @@
 | C5 | 100nF 0603 | C14663 | ES7243E VDDA Decoupling |
 | C6 | 100nF 0603 | C14663 | J4 GPS VCC Decoupling |
 | C7 | 100nF 0603 | C14663 | SD Card Decoupling |
-| C8 | 100nF 0603 | C14663 | ES7243E REFQ Bypass |
-| C12 | 100nF 0603 | C14663 | ES7243E REFP Bypass |
-| C9 | 4.7uF 0805 | C1779 | ES7243E VDDA Bulk (Basic) |
+| C8 | 10uF 0805 | C15850 | ES7243E REFQ Bypass (Basic) |
+| C12 | 10uF 0805 | C15850 | ES7243E REFP Bypass (Basic) |
+| C9 | 10uF 0805 | C15850 | ES7243E VDDA Bulk (Basic) |
 | C10 | 4.7uF 0805 | C1779 | Bulk (Basic) |
 | C11 | 10uF 0805 | C15850 | Mic DC Block (Basic) |
 | C14 | 100nF 0603 | C14663 | SHT30 Decoupling |
+| R4 | 4.7k 0603 | C23162 | I2C SDA Pull-up |
+| R5 | 4.7k 0603 | C23162 | I2C SCL Pull-up |
 
 
 ---
@@ -63,6 +68,8 @@
 | C14 | 1 | + |
 | U3 | 5 | VDD |
 | U4 | 3V3 | 3.3V |
+| R4 | 1 | I2C SDA pull-up |
+| R5 | 1 | I2C SCL pull-up |
 
 **GND (Ground)**
 | Component | Pin | Pin Name |
@@ -71,9 +78,6 @@
 | U1 | 13 | GNDA |
 | U1 | 21 | EP (thermal pad) |
 | U1 | 8 | AD1 (address) |
-| U1 | 10 | AINLN |
-| U1 | 15 | AINRN |
-| U1 | 16 | AINRP |
 | U1 | 17 | AD0 (address) |
 | U2 | 2 | GND |
 | J4 | 1 | GND (Brown) |
@@ -96,6 +100,9 @@
 | C9 | 2 | - |
 | C10 | 2 | - |
 | C14 | 2 | - |
+| C15 | 2 | - (AINLN AC-couple) |
+| C16 | 2 | - (AINRN AC-couple) |
+| C17 | 2 | - (AINRP AC-couple) |
 | U3 | 2 | ADDR (sets 0x44) |
 | U3 | 4 | VSS |
 | R3 | 2 | VBAT divider low |
@@ -131,13 +138,22 @@
 | SDA | GPIO21 | 18 (CDATA) | 1 (SDA) | Bidirectional |
 | SCL | GPIO22 | 19 (CCLK) | 6 (SCL) | U4 -> devices |
 
+**I2C Pull-up Resistors (required):**
+- R4 (4.7kΩ): 3V3 → SDA line (GPIO21)
+- R5 (4.7kΩ): 3V3 → SCL line (GPIO22)
+
 **I2C Addresses:**
 - ES7243E (U1): Pin 17 (AD0), Pin 8 (AD1) -> GND = Address **0x10**
 - SHT30 (U3): Pin 2 (ADDR) -> GND = Address **0x44**
 
 **ES7243E Reference Pins:**
-- Pin 11 (REFQ) -> C8 -> GND
-- Pin 14 (REFP) -> C12 -> GND
+- Pin 11 (REFQ) -> C8 (10µF) -> AGND
+- Pin 14 (REFP) -> C12 (10µF) -> AGND
+
+**ES7243E Analog Input AC-Coupling (CRITICAL):**
+- Pin 10 (AINLN) -> C15 (1µF) -> AGND
+- Pin 15 (AINRN) -> C16 (1µF) -> AGND
+- Pin 16 (AINRP) -> C17 (1µF) -> AGND
 
 ---
 
@@ -178,6 +194,11 @@
 
 ### Microphone Circuit
 
+**⚠️ CRITICAL: ES7243E Analog Input Requirements (from datasheet reference design)**
+
+The ES7243E differential inputs MUST be AC-coupled to ground, NOT directly grounded.
+Direct grounding disrupts the internal bias circuitry and causes signal degradation.
+
 ```
 3V3 ---[R1 2.2k]---+--- J3 Pin 1 (Mic+)
                    |
@@ -186,9 +207,10 @@
                    +--- U1 Pin 9 (AINLP)
 
 J3 Pin 2 (Mic-) --- GND
-U1 Pin 10 (AINLN) --- GND
-U1 Pin 15 (AINRN) --- GND (unused, mono input)
-U1 Pin 16 (AINRP) --- GND (unused, mono input)
+
+U1 Pin 10 (AINLN) ---[C_AINLN 1uF]--- AGND   ← AC-coupled, NOT direct!
+U1 Pin 15 (AINRN) ---[C_AINRN 1uF]--- AGND   ← AC-coupled, NOT direct!
+U1 Pin 16 (AINRP) ---[C_AINRP 1uF]--- AGND   ← AC-coupled, NOT direct!
 ```
 
 | From | To | Notes |
@@ -198,9 +220,15 @@ U1 Pin 16 (AINRP) --- GND (unused, mono input)
 | R1 pin 2 | C11 pin 1 | DC block input |
 | C11 pin 2 | U1 pin 9 (AINLP) | Audio to ADC |
 | J3 pin 2 | GND | Mic ground |
-| U1 pin 10 (AINLN) | GND | Left input - |
-| U1 pin 15 (AINRN) | GND | Unused right - |
-| U1 pin 16 (AINRP) | GND | Unused right + |
+| U1 pin 10 (AINLN) | 1µF cap | **AC-couple to AGND** |
+| U1 pin 15 (AINRN) | 1µF cap | **AC-couple to AGND** |
+| U1 pin 16 (AINRP) | 1µF cap | **AC-couple to AGND** |
+
+**Why AC-coupling is required:**
+- The ES7243E provides internal bias (~1.45V from REFQ) for the differential inputs
+- Direct grounding fights the internal bias, pulling AINLP down to ~0.7V instead of mid-rail
+- This causes signal attenuation, requiring maximum PGA gain and causing noise
+- With proper AC-coupling, no external bias resistors are needed on AINLP
 
 ---
 
