@@ -47,7 +47,7 @@ static const uint8_t es7243e_init_table[][2] = {
     {0x06, 0x03},  // SCLK = MCLK/4
     {0x07, 0x00},  // LRCK = MCLK/256
     {0x08, 0xFF},  // LRCK = MCLK/256
-    {0x09, 0xCA},
+    {0x09, 0x00},  // Standard I2S, 16-bit (was 0xCA for DSP mode)
     {0x0A, 0x85},
     {0x0B, 0x00},
     {0x0E, 0xBF},
@@ -123,6 +123,7 @@ static bool es7243eInit()
     Serial.println("  ES7243E register check:");
     Serial.printf("    [0x00] = 0x%02X (expect 0x1E)\n", es7243eReadReg(0x00));
     Serial.printf("    [0x06] = 0x%02X (expect 0x03)\n", es7243eReadReg(0x06));
+    Serial.printf("    [0x09] = 0x%02X (expect 0x00 I2S)\n", es7243eReadReg(0x09));
     Serial.printf("    [0x20] = 0x%02X (expect 0x1A)\n", es7243eReadReg(0x20));
 
     Serial.println("  ES7243E configured");
