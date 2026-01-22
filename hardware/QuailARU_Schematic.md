@@ -144,38 +144,23 @@
 │                                                                                             │
 │  ┌───────────────────────────────────────────────────────────────────────────────────────┐  │
 │  │                                                                                       │  │
-│  │     3.3V ────────┐                                                                    │  │
-│  │                  │                                                                    │  │
-│  │            ┌─────┴─────┐                                                              │  │
-│  │            │    S      │                                                              │  │
-│  │            │  ┌───┐    │  ◄───────────────────────────────── GPIO2 (GPS_PWR_EN)       │  │
-│  │            │  │FET│    │           (SI2301 P-Ch MOSFET)       ESP32                   │  │
-│  │            │  └─┬─┘ D  │           Active LOW to enable                               │  │
-│  │            │    G      │                                                              │  │
-│  │            └────┼──────┘                                                              │  │
-│  │                 │                                                                     │  │
-│  │                 │    ┌─────────────────────────────────────────────────────────────┐  │  │
-│  │                 │    │                   QUECTEL L76K GPS                          │  │  │
-│  │                 │    │                                                             │  │  │
-│  │                 └───►│ VCC ◄─── 3.3V (switched)                                    │  │  │
-│  │                      │                                                             │  │  │
-│  │                      │ GND ◄─── GND                                                │  │  │
-│  │                      │                                                             │  │  │
-│  │                      │ TX  ───────────────────────────────►  GPIO16 (UART2 RX)     │  │  │
-│  │                      │                                        ESP32                │  │  │
-│  │                      │                                                             │  │  │
-│  │                      │ RX  ◄───────────────────────────────  GPIO17 (UART2 TX)     │  │  │
-│  │                      │                                        ESP32                │  │  │
-│  │                      │                                                             │  │  │
-│  │                      │ PPS ───────────────────────────────►  GPIO4                 │  │  │
-│  │                      │       (1Hz pulse, ±10ns accuracy)      ESP32                │  │  │
-│  │                      │                                                             │  │  │
-│  │                      │ ANT ◄─── [25×25mm Ceramic Patch Antenna]                    │  │  │
-│  │                      │                                                             │  │  │
-│  │                      └─────────────────────────────────────────────────────────────┘  │  │
+│  │                         ┌─────────────────────────────────────────────────────────┐   │  │
+│  │                         │   J4 - L76K GPS Module Connector (8-pin)                │   │  │
+│  │                         │                                                         │   │  │
+│  │     GND ───────────────►│ Pin 1  GND                                              │   │  │
+│  │     3.3V ──────────────►│ Pin 2  RST_GPS (hold high, active low reset)            │   │  │
+│  │     GPIO4 ◄─────────────│ Pin 3  PPS     (1Hz pulse, ±10ns accuracy)              │   │  │
+│  │     3.3V ──────────────►│ Pin 4  WAKE_UP (hold high)                              │   │  │
+│  │     GPIO17 (TX2) ──────►│ Pin 5  RX_GPS  (ESP32 transmits to GPS)                 │   │  │
+│  │     GPIO16 (RX2) ◄──────│ Pin 6  TX_GPS  (GPS transmits to ESP32)                 │   │  │
+│  │     3.3V ──[100nF C6]──►│ Pin 7  VCC     (power with decoupling)                  │   │  │
+│  │     GND ───────────────►│ Pin 8  GND                                              │   │  │
+│  │                         │                                                         │   │  │
+│  │                         └─────────────────────────────────────────────────────────┘   │  │
 │  │                                                                                       │  │
-│  │    Note: 10kΩ pull-up on GPIO2 to keep GPS OFF by default during boot                 │  │
-│  │          Add 100nF decoupling capacitor near GPS VCC pin                              │  │
+│  │    Power management via PMTK firmware commands (no hardware power gating):            │  │
+│  │    - Standby: $PMTK161,0*28 (wake with any UART byte)                                 │  │
+│  │    - Full power: $PMTK225,0*2B                                                        │  │
 │  │                                                                                       │  │
 │  └───────────────────────────────────────────────────────────────────────────────────────┘  │
 │                                                                                             │
@@ -300,16 +285,20 @@
 | Pin 17 AD0 | I2C Address Select | GND (Address 0x10) |
 | Pin 8 AD1 | I2C Address Select | GND |
 
-### 3.3 Quectel L76K GPS Connections
+### 3.3 Quectel L76K GPS Connections (via J4 Connector)
 
-| L76K Pin | Function | Connected To |
-|----------|----------|--------------|
-| VCC | Power Supply | 3.3V via SI2301 MOSFET |
-| GND | Ground | Common GND |
-| TX | UART Transmit | ESP32 GPIO16 (RX2) |
-| RX | UART Receive | ESP32 GPIO17 (TX2) |
-| PPS | Pulse Per Second | ESP32 GPIO4 |
-| ANT | Antenna | 25×25mm Ceramic Patch |
+**J4 8-pin connector matches L76K module header pinout:**
+
+| J4 Pin | L76K Signal | Function | Connected To |
+|--------|-------------|----------|--------------|
+| 1 | GND | Ground | Common GND |
+| 2 | RST_GPS | Reset (active low) | 3.3V (hold high) |
+| 3 | PPS | Pulse Per Second | ESP32 GPIO4 |
+| 4 | WAKE_UP | Wake input | 3.3V (hold high) |
+| 5 | RX_GPS | UART Receive | ESP32 GPIO17 (TX2) |
+| 6 | TX_GPS | UART Transmit | ESP32 GPIO16 (RX2) |
+| 7 | VCC | Power Supply | 3.3V + 100nF decoupling |
+| 8 | GND | Ground | Common GND |
 
 ### 3.4 MicroSD Module Connections
 
@@ -443,36 +432,29 @@ bias circuitry (~1.45V from REFQ) and causes severe signal degradation.
 
 ---
 
-## 6. GPS Power Switching Circuit
+## 6. GPS Power Management (Firmware-Based)
+
+The L76K GPS module is always powered from 3.3V (no hardware power gating).
+Power management uses PMTK firmware commands via UART:
 
 ```
-                    3.3V Rail
-                        │
-                        │
-                   ┌────┴────┐
-                   │    S    │
-                   │  ┌───┐  │
-                   │  │   │  │ SI2301 P-Channel MOSFET
-                   │  │ G ├──┼────────────────────────┐
-                   │  │   │  │                        │
-                   │  └─┬─┘  │                        │
-                   │    D    │                       ┌┴┐
-                   └────┬────┘                       │ │ R2 = 10kΩ
-                        │                            │ │ (Pull-up)
-                        │                            └┬┘
-                        │                             │
-                        ▼                             │
-                  ┌──────────┐                        │
-                  │  L76K    │                        │
-                  │   VCC    │                        └───── GPIO2 (ESP32)
-                  └──────────┘                              (LOW = GPS ON)
-                                                            (HIGH = GPS OFF)
+    GPS Power States:
 
-    Operation:
-    - GPIO2 HIGH (default via pull-up): MOSFET OFF, GPS powered down
-    - GPIO2 LOW: MOSFET ON, GPS receives 3.3V power
-    - This enables GPS power gating for battery savings during deep sleep
+    FULL POWER (default):
+    - Active tracking, ~25-29mA
+    - Command: $PMTK225,0*2B
+
+    STANDBY MODE:
+    - Ultra-low power ~1mA
+    - Command: $PMTK161,0*28
+    - Wake: Send any byte over UART
+
+    PERIODIC MODE (example - 3s on, 12s sleep):
+    - Automatic wake/sleep cycling
+    - Command: $PMTK225,2,3000,12000,18000,72000*XX
 ```
+
+**Note:** GPIO2 is now available for other uses (was previously GPS power control).
 
 ---
 

@@ -50,10 +50,9 @@
 | U1 | ES7243E ADC | C2929446 | 1 | VDDP |
 | U1 | ES7243E ADC | C2929446 | 5 | VDDD |
 | U1 | ES7243E ADC | C2929446 | 12 | VDDA |
-| J4 | GPS Connector | C3029401 | 2 | VCC (Orange) |
-| J4 | GPS Connector | C3029401 | 3 | V_BCKP (White) |
-| J4 | GPS Connector | C3029401 | 6 | WAKE_UP (Yellow) |
-| J4 | GPS Connector | C3029401 | 8 | RESET_N (Red) |
+| J4 | GPS Connector | C3029401 | 2 | RST_GPS (hold high) |
+| J4 | GPS Connector | C3029401 | 4 | WAKE_UP (hold high) |
+| J4 | GPS Connector | C3029401 | 7 | VCC (power) |
 | J1 | MicroSD Socket | C113206 | 4 | VDD |
 | R1 | 2.2k Mic Bias | C4190 | 1 | (bias to 3V3) |
 | C2 | 10uF LDO Out | C15850 | 1 | + |
@@ -78,7 +77,8 @@
 | U1 | ES7243E ADC | C2929446 | 8 | AD1 (address) |
 | U1 | ES7243E ADC | C2929446 | 17 | AD0 (address) |
 | U2 | NCP170 LDO | C603670 | 2 | GND |
-| J4 | GPS Connector | C3029401 | 1 | GND (Brown) |
+| J4 | GPS Connector | C3029401 | 1 | GND |
+| J4 | GPS Connector | C3029401 | 8 | GND |
 | J1 | MicroSD Socket | C113206 | 6 | VSS (GND) |
 | J1 | MicroSD Socket | C113206 | 10 | Shield |
 | J1 | MicroSD Socket | C113206 | 11 | Shield |
@@ -161,17 +161,17 @@
 
 ### GPS Connector J4 (U4 ESP32 to L76K Module)
 
-**J4 (WAFER-MX1.25-8PZZ, C3029401) Pinout - Pin 1 = Brown:**
-| J4 Pin | Wire | Signal | U4 (ESP32 DevKitC) | Direction |
-|--------|------|--------|---------------------|-----------|
-| 1 | Brown | GND | GND | Ground |
-| 2 | Orange | VCC | 3V3 | Power |
-| 3 | White | V_BCKP | 3V3 | Power |
-| 4 | Blue | TX_GPS | GPIO16 (RX2) | J4 -> U4 |
-| 5 | Green | RX_GPS | GPIO17 (TX2) | U4 -> J4 |
-| 6 | Yellow | WAKE_UP | 3V3 | (hold high) |
-| 7 | Black | PPS | GPIO4 | J4 -> U4 |
-| 8 | Red | RESET_N | 3V3 | (hold high) |
+**J4 (WAFER-MX1.25-8PZZ, C3029401) Pinout - matches L76K module header:**
+| J4 Pin | Signal | U4 (ESP32 DevKitC) | Direction | Notes |
+|--------|--------|---------------------|-----------|-------|
+| 1 | GND | GND | Ground | |
+| 2 | RST_GPS | 3V3 | (hold high) | Active low reset |
+| 3 | PPS | GPIO4 | J4 -> U4 | 1Hz pulse |
+| 4 | WAKE_UP | 3V3 | (hold high) | Keep awake |
+| 5 | RX_GPS | GPIO17 (TX2) | U4 -> J4 | ESP32 transmits to GPS |
+| 6 | TX_GPS | GPIO16 (RX2) | J4 -> U4 | GPS transmits to ESP32 |
+| 7 | VCC | 3V3 | Power | + 100nF decoupling (C6) |
+| 8 | GND | GND | Ground | |
 
 **L76K Power Management:** Use PMTK commands via UART (no GPIO needed)
 - Standby: `$PMTK161,0*28` (wake with any byte)
@@ -328,12 +328,12 @@ J5 (4-pin header to external SHT30 module):
 | U4 Pin | Function | Connected To |
 |--------|----------|--------------|
 | GPIO0 | I2S MCLK | U1 (ES7243E, C2929446) pin 20 |
-| GPIO4 | PPS Input | J4 (GPS Conn, C3029401) pin 7 |
+| GPIO4 | PPS Input | J4 (GPS Conn, C3029401) pin 3 |
 | GPIO5 | SD CS | J1 (MicroSD, C113206) pin 2 |
 | GPIO14 | I2S SCLK | U1 (ES7243E, C2929446) pin 6 |
 | GPIO15 | I2S LRCK | U1 (ES7243E, C2929446) pin 7 |
-| GPIO16 | UART RX (GPS) | J4 (GPS Conn, C3029401) pin 4 |
-| GPIO17 | UART TX (GPS) | J4 (GPS Conn, C3029401) pin 5 |
+| GPIO16 | UART RX (GPS) | J4 (GPS Conn, C3029401) pin 6 (TX_GPS) |
+| GPIO17 | UART TX (GPS) | J4 (GPS Conn, C3029401) pin 5 (RX_GPS) |
 | GPIO18 | SPI CLK | J1 (MicroSD, C113206) pin 5 |
 | GPIO19 | SPI MISO | J1 (MicroSD, C113206) pin 7 |
 | GPIO21 | I2C SDA | U1 (ES7243E) pin 18, J5 (SHT30 Module) pin 3 |
