@@ -28,24 +28,45 @@ static TaskHandle_t s_audioTask = nullptr;
 static volatile bool s_running = false;
 static AudioStats s_stats = {0};
 
-// ES7243E register addresses
-#define ES7243E_REG_CHIP_POWER  0x00
-#define ES7243E_REG_MODULATOR   0x01
-#define ES7243E_REG_ADC_CTRL    0x02
-#define ES7243E_REG_ANALOG      0x03
-#define ES7243E_REG_CLOCK       0x04
-#define ES7243E_REG_SDP         0x05  // Serial Data Port
-#define ES7243E_REG_BCLK_DIV    0x06
-#define ES7243E_REG_MCLK_DIV    0x07
-#define ES7243E_REG_ADC_VOL     0x08
-#define ES7243E_REG_PGA_GAIN    0x09
+// ES7243E register addresses (from datasheet)
+#define ES7243E_REG_RESET       0x00  // Reset control
+#define ES7243E_REG_CLK_MGR1    0x01  // Clock manager 1
+#define ES7243E_REG_CLK_MGR2    0x02  // Clock manager 2
+#define ES7243E_REG_CLK_MGR3    0x03  // Clock manager 3
+#define ES7243E_REG_CLK_MGR4    0x04  // Clock manager 4
+#define ES7243E_REG_CLK_MGR5    0x05  // Clock manager 5
+#define ES7243E_REG_CLK_MGR6    0x06  // ADC OSR / clock divider
+#define ES7243E_REG_CLK_MGR7    0x07  // BCLK divider
+#define ES7243E_REG_CLK_MGR8    0x08  // LRCK divider high
+#define ES7243E_REG_SDP         0x09  // Serial data port format
+#define ES7243E_REG_ADC_CTRL    0x0A  // ADC control
+#define ES7243E_REG_ADC_VOL     0x0B  // ADC volume
+#define ES7243E_REG_ADC_RAMPRATE 0x0C // Volume ramp rate
+#define ES7243E_REG_ANALOG1     0x0D  // Analog control 1
+#define ES7243E_REG_ANALOG2     0x0E  // Analog control 2 (PGA gain)
+#define ES7243E_REG_ANALOG3     0x0F  // Analog control 3
+#define ES7243E_REG_ANALOG4     0x10  // Analog control 4
 
 static bool es7243eWriteReg(uint8_t reg, uint8_t value)
 {
     Wire.beginTransmission(ES7243E_ADDR);
     Wire.write(reg);
     Wire.write(value);
-    return Wire.endTransmission() == 0;
+    uint8_t err = Wire.endTransmission();
+    if (err != 0) {
+        Serial.printf("  I2C write failed reg=0x%02X err=%d\n", reg, err);
+        return false;
+    }
+    return true;
+}
+
+static uint8_t es7243eReadReg(uint8_t reg)
+{
+    Wire.beginTransmission(ES7243E_ADDR);
+    Wire.write(reg);
+    Wire.endTransmission(false);
+    Wire.requestFrom(ES7243E_ADDR, (uint8_t)1);
+    return Wire.available() ? Wire.read() : 0xFF;
 }
 
 static bool es7243eInit()
@@ -61,18 +82,50 @@ static bool es7243eInit()
         Serial.println("  ES7243E not found!");
         return false;
     }
-    Serial.println("  ES7243E found at 0x10");
+    Serial.printf("  ES7243E found at 0x%02X\n", ES7243E_ADDR);
 
-    // Reset and configure ES7243E
-    // These register values may need adjustment based on testing
-    es7243eWriteReg(ES7243E_REG_CHIP_POWER, 0x01);  // Power up
+    // ES7243E initialization sequence for:
+    // - MCLK = 12.288 MHz (256 * 48kHz)
+    // - Sample rate = 48 kHz
+    // - I2S slave mode, 16-bit
+
+    // Step 1: Software reset
+    es7243eWriteReg(ES7243E_REG_RESET, 0x80);
     delay(10);
-    es7243eWriteReg(ES7243E_REG_CLOCK, 0x00);       // MCLK from external
-    es7243eWriteReg(ES7243E_REG_SDP, 0x00);         // I2S, 16-bit, slave mode
-    es7243eWriteReg(ES7243E_REG_MODULATOR, 0x00);   // Normal operation
-    es7243eWriteReg(ES7243E_REG_ADC_CTRL, 0x00);    // Normal ADC operation
-    es7243eWriteReg(ES7243E_REG_PGA_GAIN, 0x1F);    // PGA gain (adjust as needed)
-    es7243eWriteReg(ES7243E_REG_ADC_VOL, 0x00);     // 0dB digital volume
+    es7243eWriteReg(ES7243E_REG_RESET, 0x00);
+    delay(10);
+
+    // Step 2: Clock configuration
+    // Clock manager - select MCLK as clock source, slave mode
+    es7243eWriteReg(ES7243E_REG_CLK_MGR1, 0x3A);  // Power up analog, slave mode
+    es7243eWriteReg(ES7243E_REG_CLK_MGR2, 0x00);  // Single speed mode
+    es7243eWriteReg(ES7243E_REG_CLK_MGR3, 0x00);  // MCLK input
+    es7243eWriteReg(ES7243E_REG_CLK_MGR4, 0x02);  // ADC clock select
+    es7243eWriteReg(ES7243E_REG_CLK_MGR5, 0x00);  // Clock divider
+    es7243eWriteReg(ES7243E_REG_CLK_MGR6, 0x00);  // OSR = 256
+    es7243eWriteReg(ES7243E_REG_CLK_MGR7, 0x00);  // BCLK from MCLK
+    es7243eWriteReg(ES7243E_REG_CLK_MGR8, 0x00);  // LRCK divider
+
+    // Step 3: I2S format configuration
+    // SDP: I2S standard, 16-bit word length
+    es7243eWriteReg(ES7243E_REG_SDP, 0x0C);  // I2S format, 16-bit
+
+    // Step 4: ADC configuration
+    es7243eWriteReg(ES7243E_REG_ADC_CTRL, 0x00);  // ADC normal operation
+    es7243eWriteReg(ES7243E_REG_ADC_VOL, 0x00);   // 0dB digital volume
+
+    // Step 5: Analog configuration
+    es7243eWriteReg(ES7243E_REG_ANALOG1, 0x00);   // Analog power on
+    es7243eWriteReg(ES7243E_REG_ANALOG2, 0x1F);   // PGA gain = +31.5dB (max)
+    es7243eWriteReg(ES7243E_REG_ANALOG3, 0x00);   // Normal operation
+    es7243eWriteReg(ES7243E_REG_ANALOG4, 0x00);   // Normal operation
+
+    // Step 6: Start ADC
+    es7243eWriteReg(ES7243E_REG_RESET, 0x01);     // Start ADC
+
+    // Read back a register to verify communication
+    uint8_t sdp = es7243eReadReg(ES7243E_REG_SDP);
+    Serial.printf("  ES7243E SDP register readback: 0x%02X\n", sdp);
 
     Serial.println("  ES7243E configured");
     return true;
@@ -132,6 +185,12 @@ static void audioTaskFunc(void* param)
     for (int i = 0; i < 3; i++) {
         i2s_read(I2S_PORT, dmaBuffer, sizeof(dmaBuffer), &bytesRead, portMAX_DELAY);
     }
+
+    // Debug: print first few samples to verify I2S is working
+    i2s_read(I2S_PORT, dmaBuffer, sizeof(dmaBuffer), &bytesRead, portMAX_DELAY);
+    Serial.printf("I2S debug - bytes: %d, samples: %d %d %d %d %d %d %d %d\n",
+        bytesRead, dmaBuffer[0], dmaBuffer[1], dmaBuffer[2], dmaBuffer[3],
+        dmaBuffer[4], dmaBuffer[5], dmaBuffer[6], dmaBuffer[7]);
 
     while (s_running) {
         esp_err_t err = i2s_read(I2S_PORT, dmaBuffer, sizeof(dmaBuffer),
