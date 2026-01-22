@@ -6,19 +6,6 @@
 
 | Ref | Part | LCSC # | Description |
 |-----|------|--------|-------------|
-| U1 | ES7243E | C2929446 | 24-bit I2S ADC, QFN-20 |
-| U2 | NCP170ASN300T2G | C603670 | 3.0V LDO Regulator, TSOP-5, 500nA Iq |
-| J5 | 4-pin header | - | SHT30 Module Connector (1=GND, 2=VCC, 3=SDA, 4=SCL) |
-| J4 | WAFER-MX1.25-8PZZ | C3029401 | GPS Connector, 1.25mm 8-pin Vertical |
-| U3 | NODEMCU-32SLUA | - | 38-pin module, footprint: NODEMCU-32SLUA (hand soldered) |
-| J1 | TF-015 | C113206 | MicroSD Card Socket |
-| J2 | S2B-PH-SM4-TB | C295747 | Battery Connector, JST PH 2-pin |
-| J3 | B2B-XH-A | C158012 | Mic Connector, JST XH 2-pin |
-| R1 | 2.2k 0603 | C4190 | Mic Bias Resistor |
-| R2 | 1M 0603 | C22935 | VBAT Divider High |
-| R3 | 1M 0603 | C22935 | VBAT Divider Low |
-| R4 | 4.7k 0603 | C23162 | I2C SDA Pull-up |
-| R5 | 4.7k 0603 | C23162 | I2C SCL Pull-up |
 | C1 | 10uF 0805 | C15850 | LDO Input Cap (Basic) |
 | C2 | 10uF 0805 | C15850 | LDO Output Cap (Basic) |
 | C3 | 100nF 0603 | C14663 | LDO Decoupling |
@@ -35,6 +22,19 @@
 | C15 | 1uF 0805 | C28323 | ES7243E AINLN AC-coupling (Basic) |
 | C16 | 1uF 0805 | C28323 | ES7243E AINRN AC-coupling (Basic) |
 | C17 | 1uF 0805 | C28323 | ES7243E AINRP AC-coupling (Basic) |
+| J1 | TF-015 | C113206 | MicroSD Card Socket |
+| J2 | S2B-PH-SM4-TB | C295747 | Battery Connector, JST PH 2-pin |
+| J3 | B2B-XH-A | C158012 | Mic Connector, JST XH 2-pin |
+| J4 | WAFER-MX1.25-8PZZ | C3029401 | GPS Connector, 1.25mm 8-pin Vertical |
+| J5 | 4-pin header | - | SHT30 Module Connector (1=GND, 2=VCC, 3=SDA, 4=SCL) |
+| R1 | 2.2k 0603 | C4190 | Mic Bias Resistor |
+| R2 | 1M 0603 | C22935 | VBAT Divider High |
+| R3 | 1M 0603 | C22935 | VBAT Divider Low |
+| R4 | 4.7k 0603 | C23162 | I2C SDA Pull-up |
+| R5 | 4.7k 0603 | C23162 | I2C SCL Pull-up |
+| U1 | ES7243E | C2929446 | 24-bit I2S ADC, QFN-20 |
+| U2 | NCP170ASN300T2G | C603670 | 3.0V LDO Regulator, TSOP-5, 500nA Iq |
+| U3 | NODEMCU-32SLUA | - | ESP32 38-pin module (hand soldered) |
 
 
 ---
