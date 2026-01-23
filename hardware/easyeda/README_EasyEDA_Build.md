@@ -24,8 +24,8 @@ Search for these parts in EasyEDA's component library (use LCSC part numbers):
 | R1 | C22975 | 0603WAF2001T5E | 2.0kΩ 0603 Resistor (Mic Bias) |
 | R4, R5, R6 | C23162 | 0603WAF4701T5E | 4.7kΩ 0603 Pull-ups (I2C, SD Card Detect) |
 | R7 | C25804 | 0603WAF1002T5E | 10kΩ 0603 (GPS P-FET Gate Pull-up) |
-| Q3 | C10487 | SI2301CDS | P-FET SOT-23 (GPS VCC Switch) |
-| Q4, Q5 | C111874 | DTC143ZETL | Digital NPN SOT-23 (GPS Control) |
+| Q1 | C10487 | SI2301CDS | P-FET SOT-23 (GPS VCC Switch) |
+| Q2, Q3 | C111874 | DTC143ZETL | Digital NPN SOT-23 (GPS Control) |
 | C1, C2, C8, C9, C12 | C15850 | CL21A106KAYNNNE | 10µF 0805 Capacitor |
 | C3-C7 | C14663 | CC0603KRX7R9BB104 | 100nF 0603 Capacitor |
 | C10 | C1779 | CL21A475KAQNNNE | 4.7µF 0805 Capacitor |
@@ -113,11 +113,11 @@ The L76K GPS module connects via J4 (8-pin 1.25mm connector, C3029401).
 | J4 Pin | L76K Signal | Connection | Wire Color |
 |--------|-------------|------------|------------|
 | 1 | GND | GND | Brown |
-| 2 | VCC | Q3 drain (switched) + C6 | Orange |
+| 2 | VCC | Q1 drain (switched) + C6 | Orange |
 | 3 | V_BCKP | 3V0 (always on) | White |
 | 4 | TX_GPS | GPIO16 (RX2) | Blue |
 | 5 | RX_GPS | GPIO17 (TX2) | Green |
-| 6 | WAKEUP | Q5 collector | Yellow |
+| 6 | WAKEUP | Q3 collector | Yellow |
 | 7 | PPS | GPIO4 | Black |
 | 8 | RESET_N | NC | Red |
 
@@ -125,9 +125,9 @@ The L76K GPS module connects via J4 (8-pin 1.25mm connector, C3029401).
 
 | Ref | Part | LCSC | Function |
 |-----|------|------|----------|
-| Q3 | SI2301CDS | C10487 | P-FET VCC switch |
-| Q4 | DTC143ZETL | C111874 | PWR_EN control |
-| Q5 | DTC143ZETL | C111874 | WAKEUP control |
+| Q1 | SI2301CDS | C10487 | P-FET VCC switch |
+| Q2 | DTC143ZETL | C111874 | PWR_EN control |
+| Q3 | DTC143ZETL | C111874 | WAKEUP control |
 | R7 | 10k 0603 | C25804 | P-FET gate pull-up |
 
 **Power Modes (software selectable):**

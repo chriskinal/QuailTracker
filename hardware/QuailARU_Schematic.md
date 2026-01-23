@@ -148,11 +148,11 @@
 │  │                         │   J4 - L76K GPS Module Connector (8-pin)                │   │  │
 │  │                         │                                                         │   │  │
 │  │     GND ───────────────►│ Pin 1  GND                                              │   │  │
-│  │     Q3 drain ──[C6]────►│ Pin 2  VCC     (switched power + decoupling)            │   │  │
+│  │     Q1 drain ──[C6]────►│ Pin 2  VCC     (switched power + decoupling)            │   │  │
 │  │     3.0V ──────────────►│ Pin 3  V_BCKP  (always on for RTC backup)               │   │  │
 │  │     GPIO16 (RX2) ◄──────│ Pin 4  TX_GPS  (GPS transmits to ESP32)                 │   │  │
 │  │     GPIO17 (TX2) ──────►│ Pin 5  RX_GPS  (ESP32 transmits to GPS)                 │   │  │
-│  │     Q5 collector ──────►│ Pin 6  WAKEUP  (standby control, internal pull-up)      │   │  │
+│  │     Q3 collector ──────►│ Pin 6  WAKEUP  (standby control, internal pull-up)      │   │  │
 │  │     GPIO4 ◄─────────────│ Pin 7  PPS     (1Hz pulse, ±10ns accuracy)              │   │  │
 │  │              NC ────────│ Pin 8  RESET_N (not connected)                          │   │  │
 │  │                         │                                                         │   │  │
@@ -162,17 +162,17 @@
 │  │                                                                                       │  │
 │  │    3V0 ──┬────────────────────────────────────────► J4 Pin 3 (V_BCKP always on)       │  │
 │  │          │                                                                            │  │
-│  │          ├──[R7 10k]──┬──┤ Q3 (SI2301 P-FET) ├──┬──► J4 Pin 2 (VCC switched)          │  │
+│  │          ├──[R7 10k]──┬──┤ Q1 (SI2301 P-FET) ├──┬──► J4 Pin 2 (VCC switched)          │  │
 │  │          │            │         S   D         │                                       │  │
 │  │          │            │         │   │        [C6]                                     │  │
-│  │          │       Q4 collector───┘   │         │                                       │  │
+│  │          │       Q2 collector───┘   │         │                                       │  │
 │  │          │            │             GND      GND                                      │  │
 │  │          │      ┌─────┴─────┐                                                         │  │
-│  │          │      │ Q4 DTC143 │◄── GPIO25 (GPS_PWR_EN)                                  │  │
+│  │          │      │ Q2 DTC143 │◄── GPIO25 (GPS_PWR_EN)                                  │  │
 │  │          │      └───────────┘                                                         │  │
 │  │          │                                                                            │  │
 │  │          │      ┌───────────┐                                                         │  │
-│  │          └──────┤ Q5 DTC143 ├──► J4 Pin 6 (WAKEUP)                                    │  │
+│  │          └──────┤ Q3 DTC143 ├──► J4 Pin 6 (WAKEUP)                                    │  │
 │  │                 └─────┬─────┘                                                         │  │
 │  │                       │                                                               │  │
 │  │              GPIO26 ──┘ (GPS_WAKEUP)                                                  │  │
@@ -312,11 +312,11 @@
 | J4 Pin | L76K Signal | Function | Connected To |
 |--------|-------------|----------|--------------|
 | 1 | GND | Ground | Common GND |
-| 2 | VCC | Power Supply | Q3 drain (switched) + 100nF C6 |
+| 2 | VCC | Power Supply | Q1 drain (switched) + 100nF C6 |
 | 3 | V_BCKP | Backup Power | 3.0V (always on for RTC) |
 | 4 | TX_GPS | UART Transmit | ESP32 GPIO16 (RX2) |
 | 5 | RX_GPS | UART Receive | ESP32 GPIO17 (TX2) |
-| 6 | WAKEUP | Standby Control | Q5 collector (active low) |
+| 6 | WAKEUP | Standby Control | Q3 collector (active low) |
 | 7 | PPS | Pulse Per Second | ESP32 GPIO4 |
 | 8 | RESET_N | Reset (active low) | NC |
 
@@ -324,9 +324,9 @@
 
 | Ref | Part | Function |
 |-----|------|----------|
-| Q3 | SI2301CDS P-FET | VCC power switch (GPIO25 via Q4) |
-| Q4 | DTC143ZETL | PWR_EN level shift/invert |
-| Q5 | DTC143ZETL | WAKEUP control (GPIO26) |
+| Q1 | SI2301CDS P-FET | VCC power switch (GPIO25 via Q2) |
+| Q2 | DTC143ZETL | PWR_EN level shift/invert |
+| Q3 | DTC143ZETL | WAKEUP control (GPIO26) |
 | R7 | 10k | P-FET gate pull-up |
 
 ### 3.4 MicroSD Module Connections
@@ -482,27 +482,27 @@ requires hardware control via GPIO pins.
 
     3V0 ──┬─────────────────────────────────► V_BCKP (always on, maintains RTC)
           │
-          ├──[R7 10k]──┬── Q3 Gate (SI2301 P-FET)
+          ├──[R7 10k]──┬── Q1 Gate (SI2301 P-FET)
           │            │        │
-          │       Q4 collector  Source ── 3V0
+          │       Q2 collector  Source ── 3V0
           │            │        Drain ──┬──► VCC (switched power)
           │      ┌─────┴─────┐          │
-          │      │ Q4 DTC143 │         [C6 100nF]
+          │      │ Q2 DTC143 │         [C6 100nF]
           │      └─────┬─────┘          │
           │            │               GND
           │       GPIO25 (GPS_PWR_EN)
           │
           │      ┌───────────┐
-          └──────┤ Q5 DTC143 ├───────────► WAKEUP (has internal pull-up)
+          └──────┤ Q3 DTC143 ├───────────► WAKEUP (has internal pull-up)
                  └─────┬─────┘
                        │
                   GPIO26 (GPS_WAKEUP)
 
     Logic:
-    - GPIO25 HIGH → Q4 on → Q3 gate LOW → P-FET off → VCC cut (Backup mode)
-    - GPIO25 LOW  → Q4 off → Q3 gate HIGH (R7) → P-FET on → VCC powered
-    - GPIO26 HIGH → Q5 on → WAKEUP pulled LOW → Standby mode
-    - GPIO26 LOW  → Q5 off → WAKEUP floats HIGH (internal pull-up) → Continuous
+    - GPIO25 HIGH → Q2 on → Q1 gate LOW → P-FET off → VCC cut (Backup mode)
+    - GPIO25 LOW  → Q2 off → Q1 gate HIGH (R7) → P-FET on → VCC powered
+    - GPIO26 HIGH → Q3 on → WAKEUP pulled LOW → Standby mode
+    - GPIO26 LOW  → Q3 off → WAKEUP floats HIGH (internal pull-up) → Continuous
 ```
 
 ### Recommended Usage

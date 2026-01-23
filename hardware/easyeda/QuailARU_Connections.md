@@ -34,9 +34,9 @@
 | R5 | 4.7k 0603 | C23162 | I2C SCL Pull-up |
 | R6 | 4.7k 0603 | C23162 | SD Card Detect Pull-up |
 | R7 | 10k 0603 | C25804 | GPS P-FET Gate Pull-up |
-| Q3 | SI2301CDS | C10487 | GPS VCC Power Switch (P-FET, SOT-23) |
-| Q4 | DTC143ZETL | C111874 | GPS PWR_EN Control (Digital NPN, SOT-23) |
-| Q5 | DTC143ZETL | C111874 | GPS WAKEUP Control (Digital NPN, SOT-23) |
+| Q1 | SI2301CDS | C10487 | GPS VCC Power Switch (P-FET, SOT-23) |
+| Q2 | DTC143ZETL | C111874 | GPS PWR_EN Control (Digital NPN, SOT-23) |
+| Q3 | DTC143ZETL | C111874 | GPS WAKEUP Control (Digital NPN, SOT-23) |
 | U1 | ES7243E | C2929446 | 24-bit I2S ADC, QFN-20 |
 | U2 | NCP170ASN300T2G | C603670 | 3.0V LDO Regulator, TSOP-5, 500nA Iq |
 | U3 | NODEMCU-32SLUA | - | ESP32 38-pin module (hand soldered) |
@@ -169,11 +169,11 @@
 | J4 Pin | Signal | Connection | Direction | Wire Color |
 |--------|--------|------------|-----------|------------|
 | 1 | GND | GND | Ground | Brown |
-| 2 | VCC | Q3 drain (switched 3V0) | Power | Orange |
+| 2 | VCC | Q1 drain (switched 3V0) | Power | Orange |
 | 3 | V_BCKP | 3V0 (always on) | Backup power | White |
 | 4 | TX_GPS | GPIO16 (RX2) | J4 -> U3 | Blue |
 | 5 | RX_GPS | GPIO17 (TX2) | U3 -> J4 | Green |
-| 6 | WAKEUP | Q4 collector (active low) | Standby ctrl | Yellow |
+| 6 | WAKEUP | Q3 collector (active low) | Standby ctrl | Yellow |
 | 7 | PPS | GPIO4 | J4 -> U3 | Black |
 | 8 | RESET_N | NC | - | Red |
 
@@ -189,30 +189,41 @@ The L76K requires hardware control for power modes. Two GPIO pins provide softwa
 
 **GPS Power Circuit:**
 ```
-3V0 ────┬──────────────────────────────── J4 Pin 3 (V_BCKP) - always powered
-        │
-        └───┤ Q3 (SI2301 P-FET) ├───┬──── J4 Pin 2 (VCC) - switched
-                    │               │
-             ┌──────┘          [C6 100nF]
-             │                      │
-        ┌────┴────┐                GND
-   R7   │         │
-  10k   │    Q4 collector ────────── J4 Pin 6 (WAKEUP)
-   │    │         │
-   └────┤    Q4 (DTC143ZE)
-        │         │
-GPIO25 ─┴─────────┘ (GPS_PWR_EN)
+                                    VCC Power Switch
+                                    ════════════════
+3V0 ───┬────────────────────────────────────────────────► J4 Pin 3 (V_BCKP)
+       │
+       ├──[R7 10k]──┬── Q1 Gate
+       │            │      │
+       │      Q2 collector │  Q1 (SI2301 P-FET)
+       │            │      │
+       │   ┌────────┴──┐   Source ── 3V0
+       │   │ Q2 DTC143 │   Drain ──┬──[C6]──► J4 Pin 2 (VCC)
+       │   └─────┬─────┘           │
+       │         │                GND
+       │    GPIO25 (GPS_PWR_EN)
 
-GPIO26 ──────┤ Q5 (DTC143ZE) ├──────── (pulls WAKEUP low when active)
-             (GPS_WAKEUP)
+                                    WAKEUP Control
+                                    ══════════════
+       │   ┌───────────┐
+       └───┤ Q3 DTC143 ├── collector ──────────► J4 Pin 6 (WAKEUP)
+           └─────┬─────┘                         (has internal pull-up)
+                 │
+            GPIO26 (GPS_WAKEUP)
+
+Logic:
+- GPIO25=HIGH → Q2 on → Q1 gate LOW → P-FET off → VCC cut (Backup)
+- GPIO25=LOW  → Q2 off → Q1 gate HIGH (R7 pull-up) → P-FET on → VCC powered
+- GPIO26=HIGH → Q3 on → WAKEUP pulled LOW → Standby mode
+- GPIO26=LOW  → Q3 off → WAKEUP floats HIGH → Continuous mode
 ```
 
 **Components:**
 | Ref | Part | LCSC # | Function |
 |-----|------|--------|----------|
-| Q3 | SI2301CDS P-FET | C10487 | GPS VCC power switch |
-| Q4 | DTC143ZETL | C111874 | GPS_PWR_EN level shift/invert |
-| Q5 | DTC143ZETL | C111874 | GPS WAKEUP control |
+| Q1 | SI2301CDS P-FET | C10487 | GPS VCC power switch |
+| Q2 | DTC143ZETL | C111874 | GPS_PWR_EN level shift/invert |
+| Q3 | DTC143ZETL | C111874 | GPS WAKEUP control |
 | R7 | 10k 0603 | C25804 | P-FET gate pull-up |
 
 ---
@@ -378,8 +389,8 @@ J5 (4-pin header to external SHT30 module):
 | GPIO21 | I2C SDA | U1 (ES7243E) pin 18, J5 (SHT30 Module) pin 3 |
 | GPIO22 | I2C SCL | U1 (ES7243E) pin 19, J5 (SHT30 Module) pin 4 |
 | GPIO23 | SPI MOSI | J1 (MicroSD, C113206) pin 3 |
-| GPIO25 | GPS_PWR_EN | Q4 base (controls Q3 P-FET for GPS VCC) |
-| GPIO26 | GPS_WAKEUP | Q5 base (controls J4 pin 6 WAKEUP) |
+| GPIO25 | GPS_PWR_EN | Q2 base (controls Q1 P-FET for GPS VCC) |
+| GPIO26 | GPS_WAKEUP | Q3 base (controls J4 pin 6 WAKEUP) |
 | GPIO32 | I2S SDOUT | U1 (ES7243E, C2929446) pin 3 |
 | GPIO34 | SD Card Detect | J1 (MicroSD, C113206) pin 9 via R6 |
 | GPIO35 | VBAT ADC | R2/R3 (1M, C22935) divider midpoint |
