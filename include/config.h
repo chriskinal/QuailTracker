@@ -83,7 +83,14 @@
 #define PIN_GPS_TX      17  // ESP32 TX -> GPS RX
 #define PIN_GPS_RX      16  // ESP32 RX <- GPS TX
 #define PIN_GPS_PPS     4   // PPS pulse input
+#define PIN_GPS_PWR_EN  25  // GPS VCC power control (HIGH = off, LOW = on via Q3 P-FET)
+#define PIN_GPS_WAKEUP  26  // GPS WAKEUP control (HIGH = standby, LOW = continuous via Q5)
 #define GPS_BAUD        9600
+
+// GPS Power Modes (L76K does NOT support PMTK commands)
+// - Continuous: PWR_EN=LOW, WAKEUP=LOW  (~25mA, immediate position)
+// - Standby:    PWR_EN=LOW, WAKEUP=HIGH (~1mA, hot start 1-5s)
+// - Backup:     PWR_EN=HIGH             (~7µA, warm start 5-30s, RTC maintained via V_BCKP)
 
 // -----------------------------------------------------------------------------
 // Battery Monitor

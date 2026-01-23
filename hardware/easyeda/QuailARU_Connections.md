@@ -1,6 +1,6 @@
 # QuailARU Pin-to-Pin Connections
 
-**Updated design using L76K firmware power management (no P-FET)**
+**Updated design with L76K hardware power management (P-FET + WAKEUP control)**
 
 ## Components
 
@@ -33,6 +33,10 @@
 | R4 | 4.7k 0603 | C23162 | I2C SDA Pull-up |
 | R5 | 4.7k 0603 | C23162 | I2C SCL Pull-up |
 | R6 | 4.7k 0603 | C23162 | SD Card Detect Pull-up |
+| R7 | 10k 0603 | C25804 | GPS P-FET Gate Pull-up |
+| Q3 | SI2301CDS | C10487 | GPS VCC Power Switch (P-FET, SOT-23) |
+| Q4 | DTC143ZETL | C111874 | GPS PWR_EN Control (Digital NPN, SOT-23) |
+| Q5 | DTC143ZETL | C111874 | GPS WAKEUP Control (Digital NPN, SOT-23) |
 | U1 | ES7243E | C2929446 | 24-bit I2S ADC, QFN-20 |
 | U2 | NCP170ASN300T2G | C603670 | 3.0V LDO Regulator, TSOP-5, 500nA Iq |
 | U3 | NODEMCU-32SLUA | - | ESP32 38-pin module (hand soldered) |
@@ -162,20 +166,54 @@
 ### GPS Connector J4 (U3 ESP32 to L76K Module)
 
 **J4 (WAFER-MX1.25-8PZZ, C3029401) Pinout - verified with ohmmeter:**
-| J4 Pin | Signal | U3 (NODEMCU-32SLUA) | Direction | Wire Color |
-|--------|--------|---------------------|-----------|------------|
+| J4 Pin | Signal | Connection | Direction | Wire Color |
+|--------|--------|------------|-----------|------------|
 | 1 | GND | GND | Ground | Brown |
-| 2 | VCC | 3V0 | Power | Orange |
-| 3 | V_BCKP | 3V0 | Backup power | White |
+| 2 | VCC | Q3 drain (switched 3V0) | Power | Orange |
+| 3 | V_BCKP | 3V0 (always on) | Backup power | White |
 | 4 | TX_GPS | GPIO16 (RX2) | J4 -> U3 | Blue |
 | 5 | RX_GPS | GPIO17 (TX2) | U3 -> J4 | Green |
-| 6 | WAKEUP | NC | - | Yellow |
+| 6 | WAKEUP | Q4 collector (active low) | Standby ctrl | Yellow |
 | 7 | PPS | GPIO4 | J4 -> U3 | Black |
 | 8 | RESET_N | NC | - | Red |
 
-**L76K Power Management:** Use PMTK commands via UART (no GPIO needed)
-- Standby: `$PMTK161,0*28` (wake with any byte)
-- Periodic: `$PMTK225,2,3000,12000,18000,72000*15` (example)
+**L76K Hardware Power Management (PMTK commands NOT supported):**
+
+The L76K requires hardware control for power modes. Two GPIO pins provide software-selectable modes:
+
+| Mode | GPS_PWR_EN | GPS_WAKEUP | Current | Reacquisition |
+|------|------------|------------|---------|---------------|
+| Continuous | LOW (VCC on) | LOW (WAKEUP high) | ~25mA | - |
+| Standby | LOW (VCC on) | HIGH (WAKEUP low) | ~1mA | Hot start 1-5s |
+| Backup | HIGH (VCC off) | X | ~7µA | Warm start 5-30s |
+
+**GPS Power Circuit:**
+```
+3V0 ────┬──────────────────────────────── J4 Pin 3 (V_BCKP) - always powered
+        │
+        └───┤ Q3 (SI2301 P-FET) ├───┬──── J4 Pin 2 (VCC) - switched
+                    │               │
+             ┌──────┘          [C6 100nF]
+             │                      │
+        ┌────┴────┐                GND
+   R7   │         │
+  10k   │    Q4 collector ────────── J4 Pin 6 (WAKEUP)
+   │    │         │
+   └────┤    Q4 (DTC143ZE)
+        │         │
+GPIO25 ─┴─────────┘ (GPS_PWR_EN)
+
+GPIO26 ──────┤ Q5 (DTC143ZE) ├──────── (pulls WAKEUP low when active)
+             (GPS_WAKEUP)
+```
+
+**Components:**
+| Ref | Part | LCSC # | Function |
+|-----|------|--------|----------|
+| Q3 | SI2301CDS P-FET | C10487 | GPS VCC power switch |
+| Q4 | DTC143ZETL | C111874 | GPS_PWR_EN level shift/invert |
+| Q5 | DTC143ZETL | C111874 | GPS WAKEUP control |
+| R7 | 10k 0603 | C25804 | P-FET gate pull-up |
 
 ---
 
@@ -340,44 +378,11 @@ J5 (4-pin header to external SHT30 module):
 | GPIO21 | I2C SDA | U1 (ES7243E) pin 18, J5 (SHT30 Module) pin 3 |
 | GPIO22 | I2C SCL | U1 (ES7243E) pin 19, J5 (SHT30 Module) pin 4 |
 | GPIO23 | SPI MOSI | J1 (MicroSD, C113206) pin 3 |
+| GPIO25 | GPS_PWR_EN | Q4 base (controls Q3 P-FET for GPS VCC) |
+| GPIO26 | GPS_WAKEUP | Q5 base (controls J4 pin 6 WAKEUP) |
 | GPIO32 | I2S SDOUT | U1 (ES7243E, C2929446) pin 3 |
 | GPIO34 | SD Card Detect | J1 (MicroSD, C113206) pin 9 via R6 |
 | GPIO35 | VBAT ADC | R2/R3 (1M, C22935) divider midpoint |
 | 3V0 | Power | 3V0 rail |
 | GND | Ground | GND rail |
 
----
-
-## Removed Components (vs original design)
-
-| Ref | Part | Reason |
-|-----|------|--------|
-| ~~Q1~~ | ~~SI2301 P-FET~~ | Using L76K firmware standby instead |
-| ~~R2~~ | ~~10k pull-up~~ | No longer needed (was gate pull-up) |
-
----
-
-## L76K Firmware Power Commands
-
-Instead of hardware power gating, use these PMTK commands:
-
-**Enter Standby Mode:**
-```
-$PMTK161,0*28<CR><LF>
-```
-Wake by sending any byte over UART.
-
-**Periodic Mode (example - 3s on, 12s sleep):**
-```
-$PMTK225,2,3000,12000,18000,72000*XX
-```
-- Type 2 = Periodic standby
-- Run time: 3000ms
-- Sleep time: 12000ms
-- Second run: 18000ms
-- Second sleep: 72000ms
-
-**Return to Full Power:**
-```
-$PMTK225,0*2B<CR><LF>
-```

@@ -148,19 +148,39 @@
 │  │                         │   J4 - L76K GPS Module Connector (8-pin)                │   │  │
 │  │                         │                                                         │   │  │
 │  │     GND ───────────────►│ Pin 1  GND                                              │   │  │
-│  │     3.0V ──[100nF C6]──►│ Pin 2  VCC     (power with decoupling)                  │   │  │
-│  │     3.0V ──────────────►│ Pin 3  V_BCKP  (backup power)                           │   │  │
+│  │     Q3 drain ──[C6]────►│ Pin 2  VCC     (switched power + decoupling)            │   │  │
+│  │     3.0V ──────────────►│ Pin 3  V_BCKP  (always on for RTC backup)               │   │  │
 │  │     GPIO16 (RX2) ◄──────│ Pin 4  TX_GPS  (GPS transmits to ESP32)                 │   │  │
 │  │     GPIO17 (TX2) ──────►│ Pin 5  RX_GPS  (ESP32 transmits to GPS)                 │   │  │
-│  │              NC ────────│ Pin 6  WAKEUP  (not connected)                          │   │  │
+│  │     Q5 collector ──────►│ Pin 6  WAKEUP  (standby control, internal pull-up)      │   │  │
 │  │     GPIO4 ◄─────────────│ Pin 7  PPS     (1Hz pulse, ±10ns accuracy)              │   │  │
 │  │              NC ────────│ Pin 8  RESET_N (not connected)                          │   │  │
 │  │                         │                                                         │   │  │
 │  │                         └─────────────────────────────────────────────────────────┘   │  │
 │  │                                                                                       │  │
-│  │    Power management via PMTK firmware commands (no hardware power gating):            │  │
-│  │    - Standby: $PMTK161,0*28 (wake with any UART byte)                                 │  │
-│  │    - Full power: $PMTK225,0*2B                                                        │  │
+│  │    GPS Power Management Circuit (L76K does NOT support PMTK commands):                │  │
+│  │                                                                                       │  │
+│  │    3V0 ──┬────────────────────────────────────────► J4 Pin 3 (V_BCKP always on)       │  │
+│  │          │                                                                            │  │
+│  │          ├──[R7 10k]──┬──┤ Q3 (SI2301 P-FET) ├──┬──► J4 Pin 2 (VCC switched)          │  │
+│  │          │            │         S   D         │                                       │  │
+│  │          │            │         │   │        [C6]                                     │  │
+│  │          │       Q4 collector───┘   │         │                                       │  │
+│  │          │            │             GND      GND                                      │  │
+│  │          │      ┌─────┴─────┐                                                         │  │
+│  │          │      │ Q4 DTC143 │◄── GPIO25 (GPS_PWR_EN)                                  │  │
+│  │          │      └───────────┘                                                         │  │
+│  │          │                                                                            │  │
+│  │          │      ┌───────────┐                                                         │  │
+│  │          └──────┤ Q5 DTC143 ├──► J4 Pin 6 (WAKEUP)                                    │  │
+│  │                 └─────┬─────┘                                                         │  │
+│  │                       │                                                               │  │
+│  │              GPIO26 ──┘ (GPS_WAKEUP)                                                  │  │
+│  │                                                                                       │  │
+│  │    Power Modes:                                                                       │  │
+│  │    - Continuous: GPIO25=LOW, GPIO26=LOW  (~25mA, immediate)                           │  │
+│  │    - Standby:    GPIO25=LOW, GPIO26=HIGH (~1mA, hot start 1-5s)                       │  │
+│  │    - Backup:     GPIO25=HIGH             (~7µA, warm start 5-30s)                     │  │
 │  │                                                                                       │  │
 │  └───────────────────────────────────────────────────────────────────────────────────────┘  │
 │                                                                                             │
@@ -292,13 +312,22 @@
 | J4 Pin | L76K Signal | Function | Connected To |
 |--------|-------------|----------|--------------|
 | 1 | GND | Ground | Common GND |
-| 2 | VCC | Power Supply | 3.0V + 100nF decoupling (C6) |
-| 3 | V_BCKP | Backup Power | 3.0V |
+| 2 | VCC | Power Supply | Q3 drain (switched) + 100nF C6 |
+| 3 | V_BCKP | Backup Power | 3.0V (always on for RTC) |
 | 4 | TX_GPS | UART Transmit | ESP32 GPIO16 (RX2) |
 | 5 | RX_GPS | UART Receive | ESP32 GPIO17 (TX2) |
-| 6 | WAKEUP | Wake input | NC |
+| 6 | WAKEUP | Standby Control | Q5 collector (active low) |
 | 7 | PPS | Pulse Per Second | ESP32 GPIO4 |
 | 8 | RESET_N | Reset (active low) | NC |
+
+**GPS Power Management Components:**
+
+| Ref | Part | Function |
+|-----|------|----------|
+| Q3 | SI2301CDS P-FET | VCC power switch (GPIO25 via Q4) |
+| Q4 | DTC143ZETL | PWR_EN level shift/invert |
+| Q5 | DTC143ZETL | WAKEUP control (GPIO26) |
+| R7 | 10k | P-FET gate pull-up |
 
 ### 3.4 MicroSD Module Connections
 
@@ -433,29 +462,54 @@ bias circuitry (~1.45V from REFQ) and causes severe signal degradation.
 
 ---
 
-## 6. GPS Power Management (Firmware-Based)
+## 6. GPS Power Management (Hardware-Based)
 
-The L76K GPS module is always powered from 3.0V (no hardware power gating).
-Power management uses PMTK firmware commands via UART:
+**IMPORTANT: The L76K does NOT support PMTK power commands.** Power management
+requires hardware control via GPIO pins.
+
+### Power Modes
+
+| Mode | GPIO25 (PWR_EN) | GPIO26 (WAKEUP) | Current | Reacquisition |
+|------|-----------------|-----------------|---------|---------------|
+| Continuous | LOW (VCC on) | LOW (WAKEUP high) | ~25mA | Immediate |
+| Standby | LOW (VCC on) | HIGH (WAKEUP low) | ~1mA | Hot start 1-5s |
+| Backup | HIGH (VCC off) | Don't care | ~7µA | Warm start 5-30s |
+
+### Circuit Description
 
 ```
-    GPS Power States:
+    GPS Power Control Circuit:
 
-    FULL POWER (default):
-    - Active tracking, ~25-29mA
-    - Command: $PMTK225,0*2B
+    3V0 ──┬─────────────────────────────────► V_BCKP (always on, maintains RTC)
+          │
+          ├──[R7 10k]──┬── Q3 Gate (SI2301 P-FET)
+          │            │        │
+          │       Q4 collector  Source ── 3V0
+          │            │        Drain ──┬──► VCC (switched power)
+          │      ┌─────┴─────┐          │
+          │      │ Q4 DTC143 │         [C6 100nF]
+          │      └─────┬─────┘          │
+          │            │               GND
+          │       GPIO25 (GPS_PWR_EN)
+          │
+          │      ┌───────────┐
+          └──────┤ Q5 DTC143 ├───────────► WAKEUP (has internal pull-up)
+                 └─────┬─────┘
+                       │
+                  GPIO26 (GPS_WAKEUP)
 
-    STANDBY MODE:
-    - Ultra-low power ~1mA
-    - Command: $PMTK161,0*28
-    - Wake: Send any byte over UART
-
-    PERIODIC MODE (example - 3s on, 12s sleep):
-    - Automatic wake/sleep cycling
-    - Command: $PMTK225,2,3000,12000,18000,72000*XX
+    Logic:
+    - GPIO25 HIGH → Q4 on → Q3 gate LOW → P-FET off → VCC cut (Backup mode)
+    - GPIO25 LOW  → Q4 off → Q3 gate HIGH (R7) → P-FET on → VCC powered
+    - GPIO26 HIGH → Q5 on → WAKEUP pulled LOW → Standby mode
+    - GPIO26 LOW  → Q5 off → WAKEUP floats HIGH (internal pull-up) → Continuous
 ```
 
-**Note:** GPIO2 is now available for other uses (was previously GPS power control).
+### Recommended Usage
+
+- **Dawn/dusk recording**: Use Backup mode between sessions (7µA, warm start OK)
+- **Short naps (<30min)**: Use Standby mode (1mA, hot start preserves ephemeris)
+- **Active recording**: Continuous mode for immediate timestamps
 
 ---
 

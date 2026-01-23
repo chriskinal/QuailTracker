@@ -62,7 +62,7 @@ Sound → PUI Mic (80dB SNR) → Bias Circuit (3.0V/2.0kΩ) → 1µF cap → ES7
 ### Power Management
 - Deep sleep between recording windows (~10µA)
 - NCP170 LDO with 500nA quiescent current
-- GPS firmware standby via PMTK commands (no GPIO power gating needed)
+- GPS hardware power control: Backup mode (~7µA) or Standby mode (~1mA) via GPIO
 - Battery voltage monitoring via 1M/1M divider (~2µA continuous)
 - Target: 90+ days on 2× 18650 cells (dawn/dusk recording only)
 

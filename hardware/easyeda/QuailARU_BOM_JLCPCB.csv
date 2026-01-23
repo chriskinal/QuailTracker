@@ -26,6 +26,10 @@ SHT30 Module Connector,J5,4-pin header,-,1,-,Generic 4-pin header,4-Pin Header f
 4.7k Resistor,R4,0603,C23162,1,UNI-ROYAL,0603WAF4701T5E,4.7kOhm 1% 0603 - I2C SDA Pull-up
 4.7k Resistor,R5,0603,C23162,1,UNI-ROYAL,0603WAF4701T5E,4.7kOhm 1% 0603 - I2C SCL Pull-up
 4.7k Resistor,R6,0603,C23162,1,UNI-ROYAL,0603WAF4701T5E,4.7kOhm 1% 0603 - SD Card Detect Pull-up
+10k Resistor,R7,0603,C25804,1,UNI-ROYAL,0603WAF1002T5E,10kOhm 1% 0603 - GPS P-FET Gate Pull-up
+P-Channel MOSFET,Q3,SOT-23,C10487,1,Vishay,SI2301CDS-T1-GE3,P-FET -20V -2.3A - GPS VCC Power Switch
+Digital Transistor NPN,Q4,SOT-23,C111874,1,ROHM,DTC143ZETL,NPN w/10k bias resistors - GPS PWR_EN Control
+Digital Transistor NPN,Q5,SOT-23,C111874,1,ROHM,DTC143ZETL,NPN w/10k bias resistors - GPS WAKEUP Control
 24-bit I2S ADC,U1,QFN-20,C2929446,1,Everest Semiconductor,ES7243E,24-bit Stereo ADC I2S/I2C
 3.0V LDO Regulator,U2,TSOP-5,C603670,1,onsemi,NCP170ASN300T2G,3.0V 150mA Ultra-Low Iq (500nA) LDO
 ESP32 Module,U3,NODEMCU-32SLUA,-,1,-,ESP32-DevKitC-32E,38-pin module (hand soldered)

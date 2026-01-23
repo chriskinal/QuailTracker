@@ -23,6 +23,9 @@ Search for these parts in EasyEDA's component library (use LCSC part numbers):
 | J4 | C3029401 | WAFER-MX1.25-8PZZ | 8-pin 1.25mm GPS Connector |
 | R1 | C22975 | 0603WAF2001T5E | 2.0kΩ 0603 Resistor (Mic Bias) |
 | R4, R5, R6 | C23162 | 0603WAF4701T5E | 4.7kΩ 0603 Pull-ups (I2C, SD Card Detect) |
+| R7 | C25804 | 0603WAF1002T5E | 10kΩ 0603 (GPS P-FET Gate Pull-up) |
+| Q3 | C10487 | SI2301CDS | P-FET SOT-23 (GPS VCC Switch) |
+| Q4, Q5 | C111874 | DTC143ZETL | Digital NPN SOT-23 (GPS Control) |
 | C1, C2, C8, C9, C12 | C15850 | CL21A106KAYNNNE | 10µF 0805 Capacitor |
 | C3-C7 | C14663 | CC0603KRX7R9BB104 | 100nF 0603 Capacitor |
 | C10 | C1779 | CL21A475KAQNNNE | 4.7µF 0805 Capacitor |
@@ -104,40 +107,36 @@ Battery (J2: C295747) → 10µF ceramic → NCP170 (U2: C603670) → 3.0V rail
 
 The L76K GPS module connects via J4 (8-pin 1.25mm connector, C3029401).
 
+**IMPORTANT: L76K does NOT support PMTK commands. Use hardware power control.**
+
 **J4 GPS Connector Pinout (verified with ohmmeter):**
-| J4 Pin | L76K Signal | ESP32 Connection | Wire Color |
-|--------|-------------|------------------|------------|
+| J4 Pin | L76K Signal | Connection | Wire Color |
+|--------|-------------|------------|------------|
 | 1 | GND | GND | Brown |
-| 2 | VCC | 3V0 + C6 | Orange |
-| 3 | V_BCKP | 3V0 | White |
+| 2 | VCC | Q3 drain (switched) + C6 | Orange |
+| 3 | V_BCKP | 3V0 (always on) | White |
 | 4 | TX_GPS | GPIO16 (RX2) | Blue |
 | 5 | RX_GPS | GPIO17 (TX2) | Green |
-| 6 | WAKEUP | NC | Yellow |
+| 6 | WAKEUP | Q5 collector | Yellow |
 | 7 | PPS | GPIO4 | Black |
 | 8 | RESET_N | NC | Red |
 
-**Power Management via PMTK Commands:**
+**GPS Power Management Circuit:**
 
-Instead of hardware power gating, the L76K supports firmware-controlled low power modes:
+| Ref | Part | LCSC | Function |
+|-----|------|------|----------|
+| Q3 | SI2301CDS | C10487 | P-FET VCC switch |
+| Q4 | DTC143ZETL | C111874 | PWR_EN control |
+| Q5 | DTC143ZETL | C111874 | WAKEUP control |
+| R7 | 10k 0603 | C25804 | P-FET gate pull-up |
 
-| Mode | Command | Wake Method | Current |
-|------|---------|-------------|---------|
-| Standby | `$PMTK161,0*28` | Send any byte | ~1mA |
-| Periodic | `$PMTK225,2,...` | Automatic | Varies |
-| Full Power | `$PMTK225,0*2B` | N/A | ~25mA |
+**Power Modes (software selectable):**
 
-**Standby Mode:**
-```
-$PMTK161,0*28<CR><LF>
-```
-Module enters standby until any byte is received on UART.
-
-**Periodic Mode (example: 3s on, 12s sleep):**
-```
-$PMTK225,2,3000,12000,18000,72000*XX
-```
-- Type 2 = Periodic standby
-- Automatically wakes to update position, then sleeps
+| Mode | GPIO25 | GPIO26 | Current | Reacquisition |
+|------|--------|--------|---------|---------------|
+| Continuous | LOW | LOW | ~25mA | Immediate |
+| Standby | LOW | HIGH | ~1mA | Hot start 1-5s |
+| Backup | HIGH | X | ~7µA | Warm start 5-30s |
 
 ### 6. SD Card Subsystem
 
