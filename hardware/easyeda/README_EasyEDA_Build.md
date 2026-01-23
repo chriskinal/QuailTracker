@@ -107,14 +107,14 @@ The L76K GPS module connects via J4 (8-pin 1.25mm connector, C3029401).
 **J4 GPS Connector Pinout (verified with ohmmeter):**
 | J4 Pin | L76K Signal | ESP32 Connection | Wire Color |
 |--------|-------------|------------------|------------|
-| 1 | RESET_N | 3V0 (hold high) | Brown |
+| 1 | GND | GND | Brown |
 | 2 | VCC | 3V0 + C6 | Orange |
 | 3 | V_BCKP | 3V0 | White |
 | 4 | TX_GPS | GPIO16 (RX2) | Blue |
 | 5 | RX_GPS | GPIO17 (TX2) | Green |
-| 6 | WAKEUP | 3V0 (hold high) | Yellow |
+| 6 | WAKEUP | NC | Yellow |
 | 7 | PPS | GPIO4 | Black |
-| 8 | GND | GND | Red |
+| 8 | RESET_N | NC | Red |
 
 **Power Management via PMTK Commands:**
 

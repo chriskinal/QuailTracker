@@ -147,14 +147,14 @@
 │  │                         ┌─────────────────────────────────────────────────────────┐   │  │
 │  │                         │   J4 - L76K GPS Module Connector (8-pin)                │   │  │
 │  │                         │                                                         │   │  │
-│  │     3.0V ──────────────►│ Pin 1  RESET_N (hold high, active low reset)            │   │  │
+│  │     GND ───────────────►│ Pin 1  GND                                              │   │  │
 │  │     3.0V ──[100nF C6]──►│ Pin 2  VCC     (power with decoupling)                  │   │  │
 │  │     3.0V ──────────────►│ Pin 3  V_BCKP  (backup power)                           │   │  │
 │  │     GPIO16 (RX2) ◄──────│ Pin 4  TX_GPS  (GPS transmits to ESP32)                 │   │  │
 │  │     GPIO17 (TX2) ──────►│ Pin 5  RX_GPS  (ESP32 transmits to GPS)                 │   │  │
-│  │     3.0V ──────────────►│ Pin 6  WAKEUP  (hold high)                              │   │  │
+│  │              NC ────────│ Pin 6  WAKEUP  (not connected)                          │   │  │
 │  │     GPIO4 ◄─────────────│ Pin 7  PPS     (1Hz pulse, ±10ns accuracy)              │   │  │
-│  │     GND ───────────────►│ Pin 8  GND                                              │   │  │
+│  │              NC ────────│ Pin 8  RESET_N (not connected)                          │   │  │
 │  │                         │                                                         │   │  │
 │  │                         └─────────────────────────────────────────────────────────┘   │  │
 │  │                                                                                       │  │
@@ -291,14 +291,14 @@
 
 | J4 Pin | L76K Signal | Function | Connected To |
 |--------|-------------|----------|--------------|
-| 1 | RESET_N | Reset (active low) | 3.0V (hold high) |
+| 1 | GND | Ground | Common GND |
 | 2 | VCC | Power Supply | 3.0V + 100nF decoupling (C6) |
 | 3 | V_BCKP | Backup Power | 3.0V |
 | 4 | TX_GPS | UART Transmit | ESP32 GPIO16 (RX2) |
 | 5 | RX_GPS | UART Receive | ESP32 GPIO17 (TX2) |
-| 6 | WAKEUP | Wake input | 3.0V (hold high) |
+| 6 | WAKEUP | Wake input | NC |
 | 7 | PPS | Pulse Per Second | ESP32 GPIO4 |
-| 8 | GND | Ground | Common GND |
+| 8 | RESET_N | Reset (active low) | NC |
 
 ### 3.4 MicroSD Module Connections
 

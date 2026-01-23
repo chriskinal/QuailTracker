@@ -51,10 +51,8 @@
 | U1 | ES7243E ADC | C2929446 | 1 | VDDP |
 | U1 | ES7243E ADC | C2929446 | 5 | VDDD |
 | U1 | ES7243E ADC | C2929446 | 12 | VDDA |
-| J4 | GPS Connector | C3029401 | 1 | RESET_N (hold high) |
 | J4 | GPS Connector | C3029401 | 2 | VCC (power) |
 | J4 | GPS Connector | C3029401 | 3 | V_BCKP (backup power) |
-| J4 | GPS Connector | C3029401 | 6 | WAKEUP (hold high) |
 | J1 | MicroSD Socket | C113206 | 4 | VDD |
 | R1 | 2.0k Mic Bias | C22975 | 1 | (bias to 3V0) |
 | C2 | 10uF LDO Out | C15850 | 1 | + |
@@ -74,13 +72,13 @@
 **GND (Ground)**
 | Ref | Part | LCSC # | Pin | Pin Name |
 |-----|------|--------|-----|----------|
+| J4 | GPS Connector | C3029401 | 1 | GND |
 | U1 | ES7243E ADC | C2929446 | 4 | GNDD |
 | U1 | ES7243E ADC | C2929446 | 13 | GNDA |
 | U1 | ES7243E ADC | C2929446 | 21 | EP (thermal pad) |
 | U1 | ES7243E ADC | C2929446 | 8 | AD1 (address) |
 | U1 | ES7243E ADC | C2929446 | 17 | AD0 (address) |
 | U2 | NCP170 LDO | C603670 | 2 | GND |
-| J4 | GPS Connector | C3029401 | 8 | GND |
 | J1 | MicroSD Socket | C113206 | 6 | VSS (GND) |
 | J1 | MicroSD Socket | C113206 | 10 | Shield |
 | J1 | MicroSD Socket | C113206 | 11 | Shield |
@@ -166,14 +164,14 @@
 **J4 (WAFER-MX1.25-8PZZ, C3029401) Pinout - verified with ohmmeter:**
 | J4 Pin | Signal | U3 (NODEMCU-32SLUA) | Direction | Wire Color |
 |--------|--------|---------------------|-----------|------------|
-| 1 | RESET_N | 3V0 | (hold high) | Brown |
+| 1 | GND | GND | Ground | Brown |
 | 2 | VCC | 3V0 | Power | Orange |
 | 3 | V_BCKP | 3V0 | Backup power | White |
 | 4 | TX_GPS | GPIO16 (RX2) | J4 -> U3 | Blue |
 | 5 | RX_GPS | GPIO17 (TX2) | U3 -> J4 | Green |
-| 6 | WAKEUP | 3V0 | (hold high) | Yellow |
+| 6 | WAKEUP | NC | - | Yellow |
 | 7 | PPS | GPIO4 | J4 -> U3 | Black |
-| 8 | GND | GND | Ground | Red |
+| 8 | RESET_N | NC | - | Red |
 
 **L76K Power Management:** Use PMTK commands via UART (no GPIO needed)
 - Standby: `$PMTK161,0*28` (wake with any byte)
