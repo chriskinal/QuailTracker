@@ -232,6 +232,34 @@ Logic:
 | R8 | 10k 0603 | C25804 | Q2 base resistor |
 | R9 | 10k 0603 | C25804 | Q3 base resistor |
 
+**GPS Power Circuit Connections:**
+| From | Pin | To | Pin | Notes |
+|------|-----|----|-----|-------|
+| 3V0 | - | R7 | 1 | Gate pull-up supply |
+| R7 | 2 | Q1 | 1 (Gate) | P-FET gate |
+| Q2 | 3 (Collector) | Q1 | 1 (Gate) | PWR_EN pulls gate low |
+| 3V0 | - | Q1 | 2 (Source) | P-FET source |
+| Q1 | 3 (Drain) | C6 | 1 | Switched VCC |
+| Q1 | 3 (Drain) | J4 | 2 (VCC) | GPS VCC |
+| U3 | GPIO25 | R8 | 1 | PWR_EN control |
+| R8 | 2 | Q2 | 1 (Base) | Q2 base |
+| Q2 | 2 (Emitter) | GND | - | Q2 emitter |
+| U3 | GPIO26 | R9 | 1 | WAKEUP control |
+| R9 | 2 | Q3 | 1 (Base) | Q3 base |
+| Q3 | 2 (Emitter) | GND | - | Q3 emitter |
+| Q3 | 3 (Collector) | J4 | 6 (WAKEUP) | Pulls WAKEUP low |
+
+**Transistor Pin Reference (matches EasyEDA symbols):**
+```
+Q1 SI2301CDS P-FET:          Q2/Q3 MMBT3904 NPN:
+
+        3 Drain                     3 Collector
+          │                           │
+    1 ──┤Gate                   1 ──┤Base
+          │                           │
+        2 Source                    2 Emitter
+```
+
 ---
 
 ### SD Card SPI (U3 ESP32 to J1 MicroSD)
