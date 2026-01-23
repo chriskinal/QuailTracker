@@ -33,10 +33,12 @@
 | R4 | 4.7k 0603 | C23162 | I2C SDA Pull-up |
 | R5 | 4.7k 0603 | C23162 | I2C SCL Pull-up |
 | R6 | 4.7k 0603 | C23162 | SD Card Detect Pull-up |
-| R7 | 10k 0603 | C25804 | GPS P-FET Gate Pull-up |
-| Q1 | SI2301CDS | C10487 | GPS VCC Power Switch (P-FET, SOT-23) |
-| Q2 | DTC143ZETL | C111874 | GPS PWR_EN Control (Digital NPN, SOT-23) |
-| Q3 | DTC143ZETL | C111874 | GPS WAKEUP Control (Digital NPN, SOT-23) |
+| R7 | 10k 0603 | C25804 | GPS P-FET Gate Pull-up (Basic) |
+| R8 | 10k 0603 | C25804 | Q2 Base Resistor (Basic) |
+| R9 | 10k 0603 | C25804 | Q3 Base Resistor (Basic) |
+| Q1 | SI2301CDS | C10487 | GPS VCC Power Switch (P-FET, SOT-23) (Basic) |
+| Q2 | MMBT3904 | C20526 | GPS PWR_EN Control (NPN, SOT-23) (Basic) |
+| Q3 | MMBT3904 | C20526 | GPS WAKEUP Control (NPN, SOT-23) (Basic) |
 | U1 | ES7243E | C2929446 | 24-bit I2S ADC, QFN-20 |
 | U2 | NCP170ASN300T2G | C603670 | 3.0V LDO Regulator, TSOP-5, 500nA Iq |
 | U3 | NODEMCU-32SLUA | - | ESP32 38-pin module (hand soldered) |
@@ -195,21 +197,23 @@ The L76K requires hardware control for power modes. Two GPIO pins provide softwa
        │
        ├──[R7 10k]──┬── Q1 Gate
        │            │      │
-       │      Q2 collector │  Q1 (SI2301 P-FET)
+       │      Q2 collector │  Q1 (SI2301CDS P-FET)
        │            │      │
-       │   ┌────────┴──┐   Source ── 3V0
-       │   │ Q2 DTC143 │   Drain ──┬──[C6]──► J4 Pin 2 (VCC)
-       │   └─────┬─────┘           │
-       │         │                GND
-       │    GPIO25 (GPS_PWR_EN)
+       │         [Q2]      Source ── 3V0
+       │      MMBT3904     Drain ──┬──[C6]──► J4 Pin 2 (VCC)
+       │          │                │
+       │       [R8 10k]           GND
+       │          │
+       │     GPIO25 (GPS_PWR_EN)
 
                                     WAKEUP Control
                                     ══════════════
-       │   ┌───────────┐
-       └───┤ Q3 DTC143 ├── collector ──────────► J4 Pin 6 (WAKEUP)
-           └─────┬─────┘                         (has internal pull-up)
-                 │
-            GPIO26 (GPS_WAKEUP)
+       │         [Q3]
+       │      MMBT3904 ── collector ───────────► J4 Pin 6 (WAKEUP)
+       │          │                              (has internal pull-up)
+       │       [R9 10k]
+       │          │
+       └──── GPIO26 (GPS_WAKEUP)
 
 Logic:
 - GPIO25=HIGH → Q2 on → Q1 gate LOW → P-FET off → VCC cut (Backup)
@@ -218,13 +222,15 @@ Logic:
 - GPIO26=LOW  → Q3 off → WAKEUP floats HIGH → Continuous mode
 ```
 
-**Components:**
+**Components (all Basic parts):**
 | Ref | Part | LCSC # | Function |
 |-----|------|--------|----------|
 | Q1 | SI2301CDS P-FET | C10487 | GPS VCC power switch |
-| Q2 | DTC143ZETL | C111874 | GPS_PWR_EN level shift/invert |
-| Q3 | DTC143ZETL | C111874 | GPS WAKEUP control |
+| Q2 | MMBT3904 NPN | C20526 | GPS_PWR_EN switch |
+| Q3 | MMBT3904 NPN | C20526 | GPS WAKEUP control |
 | R7 | 10k 0603 | C25804 | P-FET gate pull-up |
+| R8 | 10k 0603 | C25804 | Q2 base resistor |
+| R9 | 10k 0603 | C25804 | Q3 base resistor |
 
 ---
 

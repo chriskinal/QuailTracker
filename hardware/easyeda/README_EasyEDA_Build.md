@@ -23,9 +23,9 @@ Search for these parts in EasyEDA's component library (use LCSC part numbers):
 | J4 | C3029401 | WAFER-MX1.25-8PZZ | 8-pin 1.25mm GPS Connector |
 | R1 | C22975 | 0603WAF2001T5E | 2.0kΩ 0603 Resistor (Mic Bias) |
 | R4, R5, R6 | C23162 | 0603WAF4701T5E | 4.7kΩ 0603 Pull-ups (I2C, SD Card Detect) |
-| R7 | C25804 | 0603WAF1002T5E | 10kΩ 0603 (GPS P-FET Gate Pull-up) |
-| Q1 | C10487 | SI2301CDS | P-FET SOT-23 (GPS VCC Switch) |
-| Q2, Q3 | C111874 | DTC143ZETL | Digital NPN SOT-23 (GPS Control) |
+| R7, R8, R9 | C25804 | 0603WAF1002T5E | 10kΩ 0603 (GPS circuit, all Basic) |
+| Q1 | C10487 | SI2301CDS | P-FET SOT-23 (GPS VCC Switch, Basic) |
+| Q2, Q3 | C20526 | MMBT3904 | NPN SOT-23 (GPS Control, Basic) |
 | C1, C2, C8, C9, C12 | C15850 | CL21A106KAYNNNE | 10µF 0805 Capacitor |
 | C3-C7 | C14663 | CC0603KRX7R9BB104 | 100nF 0603 Capacitor |
 | C10 | C1779 | CL21A475KAQNNNE | 4.7µF 0805 Capacitor |
@@ -125,10 +125,12 @@ The L76K GPS module connects via J4 (8-pin 1.25mm connector, C3029401).
 
 | Ref | Part | LCSC | Function |
 |-----|------|------|----------|
-| Q1 | SI2301CDS | C10487 | P-FET VCC switch |
-| Q2 | DTC143ZETL | C111874 | PWR_EN control |
-| Q3 | DTC143ZETL | C111874 | WAKEUP control |
-| R7 | 10k 0603 | C25804 | P-FET gate pull-up |
+| Q1 | SI2301CDS | C10487 | P-FET VCC switch (Basic) |
+| Q2 | MMBT3904 | C20526 | PWR_EN control (Basic) |
+| Q3 | MMBT3904 | C20526 | WAKEUP control (Basic) |
+| R7 | 10k 0603 | C25804 | P-FET gate pull-up (Basic) |
+| R8 | 10k 0603 | C25804 | Q2 base resistor (Basic) |
+| R9 | 10k 0603 | C25804 | Q3 base resistor (Basic) |
 
 **Power Modes (software selectable):**
 

@@ -167,15 +167,15 @@
 │  │          │            │         │   │        [C6]                                     │  │
 │  │          │       Q2 collector───┘   │         │                                       │  │
 │  │          │            │             GND      GND                                      │  │
-│  │          │      ┌─────┴─────┐                                                         │  │
-│  │          │      │ Q2 DTC143 │◄── GPIO25 (GPS_PWR_EN)                                  │  │
-│  │          │      └───────────┘                                                         │  │
+│  │          │      ┌──────────────┐                                                      │  │
+│  │          │      │ Q2 MMBT3904 │◄──[R8 10k]◄── GPIO25 (GPS_PWR_EN)                     │  │
+│  │          │      └──────────────┘                                                      │  │
 │  │          │                                                                            │  │
-│  │          │      ┌───────────┐                                                         │  │
-│  │          └──────┤ Q3 DTC143 ├──► J4 Pin 6 (WAKEUP)                                    │  │
-│  │                 └─────┬─────┘                                                         │  │
-│  │                       │                                                               │  │
-│  │              GPIO26 ──┘ (GPS_WAKEUP)                                                  │  │
+│  │          │      ┌──────────────┐                                                      │  │
+│  │          └──────┤ Q3 MMBT3904 ├──► J4 Pin 6 (WAKEUP)                                  │  │
+│  │                 └───────┬──────┘                                                      │  │
+│  │                         │                                                             │  │
+│  │              GPIO26 ──[R9 10k]──┘ (GPS_WAKEUP)                                        │  │
 │  │                                                                                       │  │
 │  │    Power Modes:                                                                       │  │
 │  │    - Continuous: GPIO25=LOW, GPIO26=LOW  (~25mA, immediate)                           │  │
@@ -320,14 +320,16 @@
 | 7 | PPS | Pulse Per Second | ESP32 GPIO4 |
 | 8 | RESET_N | Reset (active low) | NC |
 
-**GPS Power Management Components:**
+**GPS Power Management Components (all Basic parts):**
 
-| Ref | Part | Function |
-|-----|------|----------|
-| Q1 | SI2301CDS P-FET | VCC power switch (GPIO25 via Q2) |
-| Q2 | DTC143ZETL | PWR_EN level shift/invert |
-| Q3 | DTC143ZETL | WAKEUP control (GPIO26) |
-| R7 | 10k | P-FET gate pull-up |
+| Ref | Part | LCSC | Function |
+|-----|------|------|----------|
+| Q1 | SI2301CDS P-FET | C10487 | VCC power switch |
+| Q2 | MMBT3904 NPN | C20526 | PWR_EN switch |
+| Q3 | MMBT3904 NPN | C20526 | WAKEUP control |
+| R7 | 10k 0603 | C25804 | P-FET gate pull-up |
+| R8 | 10k 0603 | C25804 | Q2 base resistor |
+| R9 | 10k 0603 | C25804 | Q3 base resistor |
 
 ### 3.4 MicroSD Module Connections
 
@@ -482,21 +484,25 @@ requires hardware control via GPIO pins.
 
     3V0 ──┬─────────────────────────────────► V_BCKP (always on, maintains RTC)
           │
-          ├──[R7 10k]──┬── Q1 Gate (SI2301 P-FET)
+          ├──[R7 10k]──┬── Q1 Gate (SI2301CDS P-FET)
           │            │        │
           │       Q2 collector  Source ── 3V0
           │            │        Drain ──┬──► VCC (switched power)
-          │      ┌─────┴─────┐          │
-          │      │ Q2 DTC143 │         [C6 100nF]
-          │      └─────┬─────┘          │
-          │            │               GND
-          │       GPIO25 (GPS_PWR_EN)
+          │      ┌─────┴───────┐        │
+          │      │ Q2 MMBT3904 │       [C6 100nF]
+          │      └──────┬──────┘        │
+          │             │              GND
+          │          [R8 10k]
+          │             │
+          │        GPIO25 (GPS_PWR_EN)
           │
-          │      ┌───────────┐
-          └──────┤ Q3 DTC143 ├───────────► WAKEUP (has internal pull-up)
-                 └─────┬─────┘
-                       │
-                  GPIO26 (GPS_WAKEUP)
+          │      ┌─────────────┐
+          └──────┤ Q3 MMBT3904 ├─────────► WAKEUP (has internal pull-up)
+                 └──────┬──────┘
+                        │
+                     [R9 10k]
+                        │
+                   GPIO26 (GPS_WAKEUP)
 
     Logic:
     - GPIO25 HIGH → Q2 on → Q1 gate LOW → P-FET off → VCC cut (Backup mode)
