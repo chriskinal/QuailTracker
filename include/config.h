@@ -75,6 +75,7 @@
 #define PIN_SD_MOSI     23
 #define PIN_SD_MISO     19
 #define PIN_SD_SCK      18
+#define PIN_SD_DET      34  // Card detect (LOW = card inserted, external 4.7k pull-up R6)
 
 // -----------------------------------------------------------------------------
 // GPS Pins (L76K via UART2)

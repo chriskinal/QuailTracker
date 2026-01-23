@@ -20,11 +20,12 @@ Battery Connector,J2,SMT,C295747,1,JST,S2B-PH-SM4-TB(LF)(SN),2-Pin JST PH 2.0mm 
 Microphone Connector,J3,Through-Hole,C158012,1,JST,B2B-XH-A(LF)(SN),2-Pin JST XH 2.5mm Header for Remote Mic
 GPS Connector,J4,SMD 1.25mm 8P,C3029401,1,XUNPU,WAFER-MX1.25-8PZZ,8-Pin 1.25mm Vertical GPS Connector
 SHT30 Module Connector,J5,4-pin header,-,1,-,Generic 4-pin header,4-Pin Header for External SHT30 Module (1=GND 2=VCC 3=SDA 4=SCL)
-2.2k Resistor,R1,0603,C4190,1,UNI-ROYAL,0603WAF2201T5E,2.2kOhm 1% 0603 - Mic Bias
+2.0k Resistor,R1,0603,C22975,1,UNI-ROYAL,0603WAF2001T5E,2.0kOhm 1% 0603 - Mic Bias
 1M Resistor,R2,0603,C22935,1,UNI-ROYAL,0603WAF1004T5E,1MOhm 1% 0603 - VBAT Divider High
 1M Resistor,R3,0603,C22935,1,UNI-ROYAL,0603WAF1004T5E,1MOhm 1% 0603 - VBAT Divider Low
 4.7k Resistor,R4,0603,C23162,1,UNI-ROYAL,0603WAF4701T5E,4.7kOhm 1% 0603 - I2C SDA Pull-up
 4.7k Resistor,R5,0603,C23162,1,UNI-ROYAL,0603WAF4701T5E,4.7kOhm 1% 0603 - I2C SCL Pull-up
-24-bit I2S ADC,U1,QFN-20,C2929446,1,Everest Semiconductor,ES7243E,24-bit Stereo ADC 3.3V I2S/I2C
+4.7k Resistor,R6,0603,C23162,1,UNI-ROYAL,0603WAF4701T5E,4.7kOhm 1% 0603 - SD Card Detect Pull-up
+24-bit I2S ADC,U1,QFN-20,C2929446,1,Everest Semiconductor,ES7243E,24-bit Stereo ADC I2S/I2C
 3.0V LDO Regulator,U2,TSOP-5,C603670,1,onsemi,NCP170ASN300T2G,3.0V 150mA Ultra-Low Iq (500nA) LDO
 ESP32 Module,U3,NODEMCU-32SLUA,-,1,-,ESP32-DevKitC-32E,38-pin module (hand soldered)

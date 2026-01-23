@@ -27,11 +27,12 @@
 | J3 | B2B-XH-A | C158012 | Mic Connector, JST XH 2-pin |
 | J4 | WAFER-MX1.25-8PZZ | C3029401 | GPS Connector, 1.25mm 8-pin Vertical |
 | J5 | 4-pin header | - | SHT30 Module Connector (1=GND, 2=VCC, 3=SDA, 4=SCL) |
-| R1 | 2.2k 0603 | C4190 | Mic Bias Resistor |
+| R1 | 2.0k 0603 | C22975 | Mic Bias Resistor |
 | R2 | 1M 0603 | C22935 | VBAT Divider High |
 | R3 | 1M 0603 | C22935 | VBAT Divider Low |
 | R4 | 4.7k 0603 | C23162 | I2C SDA Pull-up |
 | R5 | 4.7k 0603 | C23162 | I2C SCL Pull-up |
+| R6 | 4.7k 0603 | C23162 | SD Card Detect Pull-up |
 | U1 | ES7243E | C2929446 | 24-bit I2S ADC, QFN-20 |
 | U2 | NCP170ASN300T2G | C603670 | 3.0V LDO Regulator, TSOP-5, 500nA Iq |
 | U3 | NODEMCU-32SLUA | - | ESP32 38-pin module (hand soldered) |
@@ -43,18 +44,19 @@
 
 ### Power Rails
 
-**3V3 (3.3V Rail)**
+**3V0 (3.0V Rail)**
 | Ref | Part | LCSC # | Pin | Pin Name |
 |-----|------|--------|-----|----------|
 | U2 | NCP170 LDO | C603670 | 5 | VOUT |
 | U1 | ES7243E ADC | C2929446 | 1 | VDDP |
 | U1 | ES7243E ADC | C2929446 | 5 | VDDD |
 | U1 | ES7243E ADC | C2929446 | 12 | VDDA |
-| J4 | GPS Connector | C3029401 | 2 | RST_GPS (hold high) |
-| J4 | GPS Connector | C3029401 | 4 | WAKE_UP (hold high) |
-| J4 | GPS Connector | C3029401 | 7 | VCC (power) |
+| J4 | GPS Connector | C3029401 | 1 | RESET_N (hold high) |
+| J4 | GPS Connector | C3029401 | 2 | VCC (power) |
+| J4 | GPS Connector | C3029401 | 3 | V_BCKP (backup power) |
+| J4 | GPS Connector | C3029401 | 6 | WAKEUP (hold high) |
 | J1 | MicroSD Socket | C113206 | 4 | VDD |
-| R1 | 2.2k Mic Bias | C4190 | 1 | (bias to 3V3) |
+| R1 | 2.0k Mic Bias | C22975 | 1 | (bias to 3V0) |
 | C2 | 10uF LDO Out | C15850 | 1 | + |
 | C3 | 100nF LDO Decoup | C14663 | 1 | + |
 | C4 | 100nF VDDD | C14663 | 1 | + |
@@ -64,9 +66,10 @@
 | C9 | 10uF VDDA Bulk | C15850 | 1 | + |
 | C10 | 4.7uF Bulk | C1779 | 1 | + |
 | J5 | SHT30 Module Conn | - | 2 | VCC |
-| U3 | NODEMCU-32SLUA | - | 3V3 | 3.3V |
+| U3 | NODEMCU-32SLUA | - | 3V0 | 3.0V |
 | R4 | 4.7k I2C Pull-up | C23162 | 1 | SDA pull-up |
 | R5 | 4.7k I2C Pull-up | C23162 | 1 | SCL pull-up |
+| R6 | 4.7k SD Detect Pull-up | C23162 | 1 | SD card detect pull-up |
 
 **GND (Ground)**
 | Ref | Part | LCSC # | Pin | Pin Name |
@@ -77,7 +80,6 @@
 | U1 | ES7243E ADC | C2929446 | 8 | AD1 (address) |
 | U1 | ES7243E ADC | C2929446 | 17 | AD0 (address) |
 | U2 | NCP170 LDO | C603670 | 2 | GND |
-| J4 | GPS Connector | C3029401 | 1 | GND |
 | J4 | GPS Connector | C3029401 | 8 | GND |
 | J1 | MicroSD Socket | C113206 | 6 | VSS (GND) |
 | J1 | MicroSD Socket | C113206 | 10 | Shield |
@@ -137,8 +139,8 @@
 **I2C Pull-up Resistors (required):**
 | Ref | Part | LCSC # | Connection |
 |-----|------|--------|------------|
-| R4 | 4.7k 0603 | C23162 | 3V3 → SDA line (GPIO21) |
-| R5 | 4.7k 0603 | C23162 | 3V3 → SCL line (GPIO22) |
+| R4 | 4.7k 0603 | C23162 | 3V0 → SDA line (GPIO21) |
+| R5 | 4.7k 0603 | C23162 | 3V0 → SCL line (GPIO22) |
 
 **I2C Addresses:**
 - U1 ES7243E (C2929446): Pin 17 (AD0), Pin 8 (AD1) -> GND = Address **0x10**
@@ -161,17 +163,17 @@
 
 ### GPS Connector J4 (U3 ESP32 to L76K Module)
 
-**J4 (WAFER-MX1.25-8PZZ, C3029401) Pinout - matches L76K module header:**
-| J4 Pin | Signal | U3 (NODEMCU-32SLUA) | Direction | Notes |
-|--------|--------|---------------------|-----------|-------|
-| 1 | GND | GND | Ground | |
-| 2 | RST_GPS | 3V3 | (hold high) | Active low reset |
-| 3 | PPS | GPIO4 | J4 -> U3 | 1Hz pulse |
-| 4 | WAKE_UP | 3V3 | (hold high) | Keep awake |
-| 5 | RX_GPS | GPIO17 (TX2) | U3 -> J4 | ESP32 transmits to GPS |
-| 6 | TX_GPS | GPIO16 (RX2) | J4 -> U3 | GPS transmits to ESP32 |
-| 7 | VCC | 3V3 | Power | + 100nF decoupling (C6) |
-| 8 | GND | GND | Ground | |
+**J4 (WAFER-MX1.25-8PZZ, C3029401) Pinout - verified with ohmmeter:**
+| J4 Pin | Signal | U3 (NODEMCU-32SLUA) | Direction | Wire Color |
+|--------|--------|---------------------|-----------|------------|
+| 1 | RESET_N | 3V0 | (hold high) | Brown |
+| 2 | VCC | 3V0 | Power | Orange |
+| 3 | V_BCKP | 3V0 | Backup power | White |
+| 4 | TX_GPS | GPIO16 (RX2) | J4 -> U3 | Blue |
+| 5 | RX_GPS | GPIO17 (TX2) | U3 -> J4 | Green |
+| 6 | WAKEUP | 3V0 | (hold high) | Yellow |
+| 7 | PPS | GPIO4 | J4 -> U3 | Black |
+| 8 | GND | GND | Ground | Red |
 
 **L76K Power Management:** Use PMTK commands via UART (no GPIO needed)
 - Standby: `$PMTK161,0*28` (wake with any byte)
@@ -187,10 +189,11 @@
 | SD_MOSI | GPIO23 | Pin 3 (CMD/DI) | U3 -> J1 |
 | SD_CLK | GPIO18 | Pin 5 (CLK) | U3 -> J1 |
 | SD_MISO | GPIO19 | Pin 7 (DAT0/DO) | J1 -> U3 |
+| SD_DET | GPIO34 | Pin 9 (CD) | J1 -> U3 |
 
-**J1 (TF-015, C113206) Power:** Pin 4 (VDD) -> 3V3, Pin 6 (VSS) -> GND
+**J1 (TF-015, C113206) Power:** Pin 4 (VDD) -> 3V0, Pin 6 (VSS) -> GND
 **J1 Shield:** Pins 10, 11, 12, 13 -> GND
-**J1 Card Detect:** Pin 9 (optional - not used in this design)
+**J1 Card Detect:** Pin 9 -> R6 (4.7k pull-up to 3V0) -> GPIO34 (LOW = card inserted)
 
 ---
 
@@ -202,7 +205,7 @@ The ES7243E differential inputs MUST be AC-coupled to ground, NOT directly groun
 Direct grounding disrupts the internal bias circuitry and causes signal degradation.
 
 ```
-3V3 ---[R1 2.2k]---+--- J3 Pin 1 (Mic+)
+3V0 ---[R1 2.0k]---+--- J3 Pin 1 (Mic+)
                    |
                   [C11 1uF]
                    |
@@ -217,9 +220,9 @@ U1 Pin 16 (AINRP) ---[C17 1uF]--- AGND   ← AC-coupled, NOT direct!
 
 | From | Part | LCSC # | To | Notes |
 |------|------|--------|----|-------|
-| 3V3 | - | - | R1 pin 1 | Bias supply |
-| R1 pin 2 | 2.2k 0603 | C4190 | J3 pin 1 | Mic bias point |
-| R1 pin 2 | 2.2k 0603 | C4190 | C11 pin 1 | DC block input |
+| 3V0 | - | - | R1 pin 1 | Bias supply |
+| R1 pin 2 | 2.0k 0603 | C22975 | J3 pin 1 | Mic bias point |
+| R1 pin 2 | 2.0k 0603 | C22975 | C11 pin 1 | DC block input |
 | C11 pin 2 | 1uF 0805 | C28323 | U1 pin 9 (AINLP) | Audio to ADC |
 | J3 pin 2 | Mic Conn | C158012 | GND | Mic ground |
 | U1 pin 10 | ES7243E | C2929446 | C15 (1µF) -> AGND | **AC-couple** |
@@ -300,7 +303,7 @@ VBAT (J2+) ---[R2 1M]---+--- U3 GPIO35 (ADC1_CH7)
 J5 (4-pin header to external SHT30 module):
 
   Pin 1 (GND) --- GND
-  Pin 2 (VCC) --- 3V3
+  Pin 2 (VCC) --- 3V0
   Pin 3 (SDA) --- U3 GPIO21 (I2C SDA)
   Pin 4 (SCL) --- U3 GPIO22 (I2C SCL)
 ```
@@ -309,7 +312,7 @@ J5 (4-pin header to external SHT30 module):
 | Pin | Function | Connection |
 |-----|----------|------------|
 | 1 | GND | Ground |
-| 2 | VCC | 3V3 |
+| 2 | VCC | 3V0 |
 | 3 | SDA | GPIO21 (I2C bus) |
 | 4 | SCL | GPIO22 (I2C bus) |
 
@@ -328,11 +331,11 @@ J5 (4-pin header to external SHT30 module):
 | U3 Pin | Function | Connected To |
 |--------|----------|--------------|
 | GPIO0 | I2S MCLK | U1 (ES7243E, C2929446) pin 20 |
-| GPIO4 | PPS Input | J4 (GPS Conn, C3029401) pin 3 |
+| GPIO4 | PPS Input | J4 (GPS Conn, C3029401) pin 7 |
 | GPIO5 | SD CS | J1 (MicroSD, C113206) pin 2 |
 | GPIO14 | I2S SCLK | U1 (ES7243E, C2929446) pin 6 |
 | GPIO15 | I2S LRCK | U1 (ES7243E, C2929446) pin 7 |
-| GPIO16 | UART RX (GPS) | J4 (GPS Conn, C3029401) pin 6 (TX_GPS) |
+| GPIO16 | UART RX (GPS) | J4 (GPS Conn, C3029401) pin 4 (TX_GPS) |
 | GPIO17 | UART TX (GPS) | J4 (GPS Conn, C3029401) pin 5 (RX_GPS) |
 | GPIO18 | SPI CLK | J1 (MicroSD, C113206) pin 5 |
 | GPIO19 | SPI MISO | J1 (MicroSD, C113206) pin 7 |
@@ -340,11 +343,10 @@ J5 (4-pin header to external SHT30 module):
 | GPIO22 | I2C SCL | U1 (ES7243E) pin 19, J5 (SHT30 Module) pin 4 |
 | GPIO23 | SPI MOSI | J1 (MicroSD, C113206) pin 3 |
 | GPIO32 | I2S SDOUT | U1 (ES7243E, C2929446) pin 3 |
+| GPIO34 | SD Card Detect | J1 (MicroSD, C113206) pin 9 via R6 |
 | GPIO35 | VBAT ADC | R2/R3 (1M, C22935) divider midpoint |
-| 3V3 | Power | 3V3 rail |
+| 3V0 | Power | 3V0 rail |
 | GND | Ground | GND rail |
-
-**GPIO2 is now FREE** (was used for GPS power control with P-FET)
 
 ---
 

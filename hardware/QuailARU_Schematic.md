@@ -14,7 +14,7 @@
                     │          [USB]           │
                     └──────────────────────────┘
                     ┌──────────────────────────┐
-              3V3 ──┤ 1                    38 ├── GND
+              3V0 ──┤ 1                    38 ├── GND
                EN ──┤ 2                    37 ├── GPIO23 ──► SD_MOSI
         SVP/GPIO36 ─┤ 3                    36 ├── GPIO22
         SVN/GPIO39 ─┤ 4                    35 ├── GPIO1 (TX0)
@@ -49,12 +49,12 @@
 │    │  ┌─────┐ ┌─────┐ ┌─────┐ ┌─────┐       │                                              │
 │    │  │18650│ │18650│ │18650│ │18650│       │                                              │
 │    │  │3.7V │ │3.7V │ │3.7V │ │3.7V │       │         ┌─────────────────────┐              │
-│    │  │3400 │ │3400 │ │3400 │ │3400 │       │         │      HT7333         │              │
-│    │  │ mAh │ │ mAh │ │ mAh │ │ mAh │       │         │    LDO 3.3V         │              │
+│    │  │3400 │ │3400 │ │3400 │ │3400 │       │         │      NCP170         │              │
+│    │  │ mAh │ │ mAh │ │ mAh │ │ mAh │       │         │    LDO 3.0V         │              │
 │    │  └──┬──┘ └──┬──┘ └──┬──┘ └──┬──┘       │         │                     │              │
 │    │     └───────┴───────┴───────┘          │         │  ┌───┐     ┌───┐   │              │
 │    │              │  3.7V, 13.6Ah           │         │  │ 1 ├─────┤ 3 │   │              │
-│    └──────────────┼─────────────────────────┘         │  │VIN│     │VOUT│──┼──► 3.3V Rail │
+│    └──────────────┼─────────────────────────┘         │  │VIN│     │VOUT│──┼──► 3.0V Rail │
 │                   │                                    │  └─┬─┘     └───┘   │              │
 │                   │    ┌────────────┐                 │    │    ┌───┐      │              │
 │                   └────┤ 100µF ─┴─  ├─────────────────┼────┘    │ 2 ├──────┼──► GND       │
@@ -82,10 +82,10 @@
 │                                                                                             │
 │  ┌───────────────────────────────────────────────────────────────────────────────────────┐  │
 │  │                                                                                       │  │
-│  │    3.3V                                                                               │  │
+│  │    3.0V                                                                               │  │
 │  │     │                                                                                 │  │
 │  │    ┌┴┐                                                                                │  │
-│  │    │ │ 2.2kΩ                                                                          │  │
+│  │    │ │ 2.0kΩ                                                                          │  │
 │  │    │ │ Bias Resistor                                                                  │  │
 │  │    └┬┘                                                                                │  │
 │  │     │                                                                                 │  │
@@ -117,7 +117,7 @@
 │  │                            │                                                     │    │  │
 │  │                            │ Pin 12 VDDA  ─────[10µF C9]──── AGND  + [100nF C5]  │    │  │
 │  │                            │ Pin 5  VDDD  ─────[100nF C4]─── DGND                │    │  │
-│  │                            │ Pin 1  VDDP  ◄──────────────── 3.3V                 │    │  │
+│  │                            │ Pin 1  VDDP  ◄──────────────── 3.0V                 │    │  │
 │  │                            │                                                     │    │  │
 │  │                            │ Pin 20 MCLK ◄───────────────── GPIO0 (12.288 MHz)   │    │  │
 │  │                            │ Pin 6  SCLK ◄───────────────── GPIO14 (3.072 MHz)   │    │  │
@@ -132,7 +132,7 @@
 │  │                            │ Pin 4  GNDD, Pin 13 GNDA, Pin 21 EP ─► GND          │    │  │
 │  │                            └─────────────────────────────────────────────────────┘    │  │
 │  │                                                                                       │  │
-│  │    NOTE: I2C requires external 4.7kΩ pull-ups on SDA and SCL to 3.3V                  │  │
+│  │    NOTE: I2C requires external 4.7kΩ pull-ups on SDA and SCL to 3.0V                  │  │
 │  │                                                                                       │  │
 │  └───────────────────────────────────────────────────────────────────────────────────────┘  │
 │                                                                                             │
@@ -147,13 +147,13 @@
 │  │                         ┌─────────────────────────────────────────────────────────┐   │  │
 │  │                         │   J4 - L76K GPS Module Connector (8-pin)                │   │  │
 │  │                         │                                                         │   │  │
-│  │     GND ───────────────►│ Pin 1  GND                                              │   │  │
-│  │     3.3V ──────────────►│ Pin 2  RST_GPS (hold high, active low reset)            │   │  │
-│  │     GPIO4 ◄─────────────│ Pin 3  PPS     (1Hz pulse, ±10ns accuracy)              │   │  │
-│  │     3.3V ──────────────►│ Pin 4  WAKE_UP (hold high)                              │   │  │
+│  │     3.0V ──────────────►│ Pin 1  RESET_N (hold high, active low reset)            │   │  │
+│  │     3.0V ──[100nF C6]──►│ Pin 2  VCC     (power with decoupling)                  │   │  │
+│  │     3.0V ──────────────►│ Pin 3  V_BCKP  (backup power)                           │   │  │
+│  │     GPIO16 (RX2) ◄──────│ Pin 4  TX_GPS  (GPS transmits to ESP32)                 │   │  │
 │  │     GPIO17 (TX2) ──────►│ Pin 5  RX_GPS  (ESP32 transmits to GPS)                 │   │  │
-│  │     GPIO16 (RX2) ◄──────│ Pin 6  TX_GPS  (GPS transmits to ESP32)                 │   │  │
-│  │     3.3V ──[100nF C6]──►│ Pin 7  VCC     (power with decoupling)                  │   │  │
+│  │     3.0V ──────────────►│ Pin 6  WAKEUP  (hold high)                              │   │  │
+│  │     GPIO4 ◄─────────────│ Pin 7  PPS     (1Hz pulse, ±10ns accuracy)              │   │  │
 │  │     GND ───────────────►│ Pin 8  GND                                              │   │  │
 │  │                         │                                                         │   │  │
 │  │                         └─────────────────────────────────────────────────────────┘   │  │
@@ -175,7 +175,7 @@
 │  │                         ┌───────────────────────────────────────┐                     │  │
 │  │                         │         MICROSD MODULE (SPI)          │                     │  │
 │  │                         │                                       │                     │  │
-│  │     3.3V ──────────────►│ VCC (3.3V)                            │                     │  │
+│  │     3.0V ──────────────►│ VCC (3.0V)                            │                     │  │
 │  │                         │                                       │                     │  │
 │  │     GND ───────────────►│ GND                                   │                     │  │
 │  │                         │                                       │                     │  │
@@ -211,7 +211,7 @@
 │  │                         │                                       │                     │  │
 │  │     GND ───────────────►│ Pin 1 GND                             │                     │  │
 │  │                         │                                       │                     │  │
-│  │     3.3V ──────────────►│ Pin 2 VCC                             │                     │  │
+│  │     3.0V ──────────────►│ Pin 2 VCC                             │                     │  │
 │  │                         │                                       │                     │  │
 │  │     GPIO21 ◄───────────►│ Pin 3 SDA   (shared I2C bus)          │                     │  │
 │  │     ESP32               │                                       │                     │  │
@@ -242,7 +242,7 @@
 | ESP32 GPIO | Module Pin | Function | Direction | Connected To |
 |------------|------------|----------|-----------|--------------|
 | GPIO0 | 25 | I2S MCLK | Output | ES7243E MCLK |
-| GPIO2 | 24 | GPS Power Enable | Output | SI2301 Gate (Active LOW) |
+| GPIO34 | 6 | SD Card Detect | Input | SD Card pin 9 via R6 4.7k pull-up |
 | GPIO4 | 26 | PPS Input | Input | L76K PPS |
 | GPIO5 | 29 | SPI CS | Output | SD Card CS |
 | GPIO14 | 12 | I2S SCLK | Output | ES7243E SCLK |
@@ -255,7 +255,7 @@
 | GPIO22 | 36 | I2C SCL | Output | ES7243E SCL, J5 SHT30 Module pin 4 |
 | GPIO23 | 37 | SPI MOSI | Output | SD Card MOSI |
 | GPIO32 | 7 | I2S Data In | Input | ES7243E SDOUT |
-| 3V3 | 1 | Power | - | From HT7333 VOUT |
+| 3V0 | 1 | Power | - | From NCP170 VOUT (3.0V) |
 | GND | 14, 32, 38 | Ground | - | Common Ground |
 
 ### 3.2 ES7243E ADC Connections (QFN-20)
@@ -264,9 +264,9 @@
 
 | ES7243E Pin | Function | Connected To |
 |-------------|----------|--------------|
-| Pin 1 VDDP | Digital Power Supply | 3.3V Rail |
-| Pin 5 VDDD | Digital Power Supply | 3.3V + 100nF to DGND |
-| Pin 12 VDDA | Analog Power Supply | 3.3V + 10µF to AGND |
+| Pin 1 VDDP | Digital Power Supply | 3.0V Rail |
+| Pin 5 VDDD | Digital Power Supply | 3.0V + 100nF to DGND |
+| Pin 12 VDDA | Analog Power Supply | 3.0V + 10µF to AGND |
 | Pin 4 GNDD | Digital Ground | Common GND |
 | Pin 13 GNDA | Analog Ground | AGND (common GND) |
 | Pin 21 EP | Thermal Pad | GND |
@@ -280,8 +280,8 @@
 | Pin 15 AINRN | Right - Analog Input | **1µF cap to AGND (AC-coupled!)** |
 | Pin 11 REFQ | Internal Reference | 10µF cap to AGND |
 | Pin 14 REFP | Internal Reference | 10µF cap to AGND |
-| Pin 18 CDATA | I2C Data (SDA) | ESP32 GPIO21 + 4.7kΩ pull-up to 3V3 |
-| Pin 19 CCLK | I2C Clock (SCL) | ESP32 GPIO22 + 4.7kΩ pull-up to 3V3 |
+| Pin 18 CDATA | I2C Data (SDA) | ESP32 GPIO21 + 4.7kΩ pull-up to 3V0 |
+| Pin 19 CCLK | I2C Clock (SCL) | ESP32 GPIO22 + 4.7kΩ pull-up to 3V0 |
 | Pin 17 AD0 | I2C Address Select | GND (Address 0x10) |
 | Pin 8 AD1 | I2C Address Select | GND |
 
@@ -291,25 +291,26 @@
 
 | J4 Pin | L76K Signal | Function | Connected To |
 |--------|-------------|----------|--------------|
-| 1 | GND | Ground | Common GND |
-| 2 | RST_GPS | Reset (active low) | 3.3V (hold high) |
-| 3 | PPS | Pulse Per Second | ESP32 GPIO4 |
-| 4 | WAKE_UP | Wake input | 3.3V (hold high) |
+| 1 | RESET_N | Reset (active low) | 3.0V (hold high) |
+| 2 | VCC | Power Supply | 3.0V + 100nF decoupling (C6) |
+| 3 | V_BCKP | Backup Power | 3.0V |
+| 4 | TX_GPS | UART Transmit | ESP32 GPIO16 (RX2) |
 | 5 | RX_GPS | UART Receive | ESP32 GPIO17 (TX2) |
-| 6 | TX_GPS | UART Transmit | ESP32 GPIO16 (RX2) |
-| 7 | VCC | Power Supply | 3.3V + 100nF decoupling |
+| 6 | WAKEUP | Wake input | 3.0V (hold high) |
+| 7 | PPS | Pulse Per Second | ESP32 GPIO4 |
 | 8 | GND | Ground | Common GND |
 
 ### 3.4 MicroSD Module Connections
 
 | SD Pin | Function | Connected To |
 |--------|----------|--------------|
-| VCC | Power Supply | 3.3V Rail |
+| VCC | Power Supply | 3.0V Rail |
 | GND | Ground | Common GND |
 | CS | Chip Select | ESP32 GPIO5 |
 | SCK | SPI Clock | ESP32 GPIO18 |
 | MOSI | SPI Data In | ESP32 GPIO23 |
 | MISO | SPI Data Out | ESP32 GPIO19 |
+| CD | Card Detect | ESP32 GPIO34 via R6 4.7k pull-up (LOW = inserted) |
 
 ### 3.5 SHT30 External Module Connector (J5)
 
@@ -318,7 +319,7 @@ The SHT30 is an external 4-wire module with onboard decoupling. No additional ca
 | J5 Pin | Function | Connected To |
 |--------|----------|--------------|
 | Pin 1 | GND | Common GND |
-| Pin 2 | VCC | 3.3V Rail |
+| Pin 2 | VCC | 3.0V Rail |
 | Pin 3 | SDA | ESP32 GPIO21 (shared I2C bus) |
 | Pin 4 | SCL | ESP32 GPIO22 (shared I2C bus) |
 
@@ -331,7 +332,7 @@ The SHT30 is an external 4-wire module with onboard decoupling. No additional ca
 **I2C Bus Summary:**
 - ES7243E: Address 0x10
 - SHT30 Module: Address 0x44
-- Pull-ups: 4.7kΩ to 3.3V on SDA and SCL (shared)
+- Pull-ups: 4.7kΩ to 3.0V on SDA and SCL (shared)
 
 ---
 
@@ -340,9 +341,9 @@ The SHT30 is an external 4-wire module with onboard decoupling. No additional ca
 ```
                                     ┌──────────────────────┐
                                     │                      │
-    Battery Pack ────► HT7333 ──────┼───► ESP32 NodeMCU    │
-    3.7V nominal       LDO         │      (via VIN or 3V3) │
-                       3.3V Out     │                      │
+    Battery Pack ────► NCP170 ──────┼───► ESP32 NodeMCU    │
+    3.7V nominal       LDO         │      (via 3V0 pin)    │
+                       3.0V Out     │                      │
                                     ├───► ES7243E ADC      │
                                     │      (VCC)           │
                                     │                      │
@@ -353,7 +354,7 @@ The SHT30 is an external 4-wire module with onboard decoupling. No additional ca
                                     │      (VCC)           │
                                     │                      │
                                     └───► GPS L76K         │
-                                           (via MOSFET)    │
+                                           (direct power)  │
                                                            │
                     ┌──────────────────────────────────────┘
                     │
@@ -371,11 +372,11 @@ AC-coupled to analog ground via 1µF capacitors. Direct grounding disrupts the i
 bias circuitry (~1.45V from REFQ) and causes severe signal degradation.
 
 ```
-                    3.3V
+                    3.0V
                      │
                      │
                     ┌┴┐
-                    │ │  R1 = 2.2kΩ
+                    │ │  R1 = 2.0kΩ
                     │ │  (Bias Resistor)
                     └┬┘
                      │
@@ -422,7 +423,7 @@ bias circuitry (~1.45V from REFQ) and causes severe signal degradation.
 
 
     Component Values:
-    - R1: 2.2kΩ (sets ~1.5mA bias current for electret mic)
+    - R1: 2.0kΩ (sets ~1.5mA bias current for electret mic)
     - C11: 1µF (DC blocking / AINLP decoupling per reference design)
     - C15, C16, C17: 1µF (AC-coupling for AINLN, AINRN, AINRP)
     - C8, C12: 10µF (REFQ, REFP bypass)
@@ -434,7 +435,7 @@ bias circuitry (~1.45V from REFQ) and causes severe signal degradation.
 
 ## 6. GPS Power Management (Firmware-Based)
 
-The L76K GPS module is always powered from 3.3V (no hardware power gating).
+The L76K GPS module is always powered from 3.0V (no hardware power gating).
 Power management uses PMTK firmware commands via UART:
 
 ```
@@ -466,7 +467,7 @@ Add these capacitors for stable operation:
 |----------|-----------|------|---------|
 | Battery input to HT7333 | 100µF | Electrolytic | Input smoothing |
 | HT7333 output | 10µF | Ceramic | Output stability |
-| ESP32 3V3 pin | 0.1µF | Ceramic | HF decoupling |
+| ESP32 3V0 pin | 0.1µF | Ceramic | HF decoupling |
 | ES7243E VDDD (Pin 5) | 100nF | Ceramic | Digital power filtering |
 | ES7243E VDDA (Pin 12) | 10µF | Ceramic | Analog power filtering |
 | ES7243E REFQ (Pin 11) | 10µF | Ceramic | Reference bypass |
@@ -480,8 +481,8 @@ Add these capacitors for stable operation:
 
 | Location | Resistor | Purpose |
 |----------|----------|---------|
-| SDA line (GPIO21) | 4.7kΩ to 3V3 | I2C pull-up |
-| SCL line (GPIO22) | 4.7kΩ to 3V3 | I2C pull-up |
+| SDA line (GPIO21) | 4.7kΩ to 3V0 | I2C pull-up |
+| SCL line (GPIO22) | 4.7kΩ to 3V0 | I2C pull-up |
 
 ---
 
@@ -534,8 +535,8 @@ Add these capacitors for stable operation:
    │         │ 3.7V                                                                      │
    │         ▼                                                                           │
    │   ┌──────────┐                                                                      │
-   │   │  HT7333  │────────────────────────────────────────────┐                         │
-   │   │   LDO    │                                            │ 3.3V                    │
+   │   │  NCP170  │────────────────────────────────────────────┐                         │
+   │   │   LDO    │                                            │ 3.0V                    │
    │   └──────────┘                                            │                         │
    │                                                           │                         │
    │   ┌───────────────────────────────────────────────────────┼─────────────────────┐   │
@@ -543,7 +544,7 @@ Add these capacitors for stable operation:
    │   │  ┌─────────────────────────────────────────────────┐  │                     │   │
    │   │  │              ESP32S NodeMCU 38-Pin              │  │                     │   │
    │   │  │                                                 │  │                     │   │
-   │   │  │  3V3 ◄──────────────────────────────────────────┼──┘                     │   │
+   │   │  │  3V0 ◄──────────────────────────────────────────┼──┘                     │   │
    │   │  │                                                 │                        │   │
    │   │  │  GPIO0  ─────────────────────────────────────────────► ES7243E SCKI      │   │
    │   │  │  GPIO14 ─────────────────────────────────────────────► ES7243E BCK       │   │
@@ -553,7 +554,6 @@ Add these capacitors for stable operation:
    │   │  │  GPIO16 ◄────────────────────────────────────────────  L76K TX           │   │
    │   │  │  GPIO17 ─────────────────────────────────────────────► L76K RX           │   │
    │   │  │  GPIO4  ◄────────────────────────────────────────────  L76K PPS          │   │
-   │   │  │  GPIO2  ─────────────────────────────────────────────► GPS Power FET     │   │
    │   │  │                                                 │                        │   │
    │   │  │  GPIO5  ─────────────────────────────────────────────► SD CS             │   │
    │   │  │  GPIO18 ─────────────────────────────────────────────► SD CLK            │   │
@@ -583,10 +583,10 @@ The ES7243E SCKI input has high impedance and won't interfere with boot. However
 
 ### 10.2 Power Sequencing
 
-1. Apply battery power → HT7333 provides 3.3V
-2. ESP32 boots (GPIO2 pulled HIGH by default → GPS OFF)
-3. Firmware initializes peripherals
-4. Pull GPIO2 LOW to enable GPS when needed
+1. Apply battery power → NCP170 provides 3.0V
+2. ESP32 boots, all peripherals powered
+3. Firmware initializes I2S, I2C, SPI, UART
+4. GPS power managed via PMTK standby commands (no GPIO control)
 
 ### 10.3 Current Budget Summary
 
@@ -594,10 +594,10 @@ The ES7243E SCKI input has high impedance and won't interfere with boot. However
 |-----------|----------------|---------------|
 | ESP32 | 80 mA | 10 µA |
 | ES7243E + Mic | 8 mA | 8 mA (always on) |
-| L76K GPS | 29 mA | 0 mA (power gated) |
+| L76K GPS | 29 mA | ~1 mA (PMTK standby) |
 | SD Card | 100 mA (write) | 100 µA |
 | **Total Recording** | **~217 mA** | - |
-| **Total Sleep** | - | **~0.1 mA** |
+| **Total Sleep** | - | **~1.1 mA** |
 
 ### 10.4 Component Placement Recommendations
 
@@ -616,13 +616,12 @@ All parts sourced from LCSC for JLCPCB assembly:
 | Component | LCSC Part # | Description |
 |-----------|-------------|-------------|
 | ES7243E | C2929446 | 24-bit I2S ADC, QFN-20 |
-| HT7333-A | C21583 | 3.3V 250mA LDO, SOT-89 |
+| NCP170ASN300T2G | C603670 | 3.0V 150mA LDO, TSOP-5, 500nA Iq |
 | L76K | C2838031 | GPS module with PPS |
-| SI2301 | C2938372 | P-channel MOSFET, SOT-23 |
 | TF-015 | C113206 | MicroSD card socket |
 | AOM-5024L-HD-R | C3273706 | Electret mic (80dB SNR) |
 | JST PH 2-pin | C295747 | Battery connector SMT |
-| 2.2kΩ 0603 | C4190 | Mic bias resistor |
+| 2.0kΩ 0603 | C22975 | Mic bias resistor |
 | 4.7kΩ 0603 | C23162 | I2C pull-up resistor |
 | 100nF 0603 | C14663 | Decoupling capacitor |
 | 1µF 0805 | C28323 | AC-coupling capacitor (AINLN, AINRN, AINRP) - Basic |

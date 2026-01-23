@@ -17,16 +17,19 @@ Search for these parts in EasyEDA's component library (use LCSC part numbers):
 |-----|--------|-----------|-------------|
 | U1 | C2929446 | ES7243E | 24-bit I2S ADC, QFN-20 |
 | U2 | C603670 | NCP170ASN300T2G | 3.0V 150mA Ultra-Low Iq LDO, TSOP-5 |
-| U3 | C2838031 | L76K | Quectel GPS Module, LCC-18 |
 | J1 | C113206 | TF-015 | MicroSD Card Socket |
-| J3 | C158012 | B2B-XH-A(LF)(SN) | Mic Connector JST XH 2-pin |
 | J2 | C295747 | S2B-PH-SM4-TB | JST PH 2-pin Battery Connector |
-| R1 | C4190 | 0603WAF2201T5E | 2.2kΩ 0603 Resistor (Mic Bias) |
-| C1-C6 | C14663 | CC0603KRX7R9BB104 | 100nF 0603 Capacitor |
-| C7-C10 | C89827 | CC0805KKX5R7BB106 | 10µF 0805 Capacitor |
-| C11-C12 | C123624 | 0805B475K160CT | 4.7µF 0805 Capacitor |
+| J3 | C158012 | B2B-XH-A(LF)(SN) | Mic Connector JST XH 2-pin |
+| J4 | C3029401 | WAFER-MX1.25-8PZZ | 8-pin 1.25mm GPS Connector |
+| R1 | C22975 | 0603WAF2001T5E | 2.0kΩ 0603 Resistor (Mic Bias) |
+| R4, R5, R6 | C23162 | 0603WAF4701T5E | 4.7kΩ 0603 Pull-ups (I2C, SD Card Detect) |
+| C1, C2, C8, C9, C12 | C15850 | CL21A106KAYNNNE | 10µF 0805 Capacitor |
+| C3-C7 | C14663 | CC0603KRX7R9BB104 | 100nF 0603 Capacitor |
+| C10 | C1779 | CL21A475KAQNNNE | 4.7µF 0805 Capacitor |
+| C11, C13, C15-C17 | C28323 | CL21B105KBFNNNE | 1µF 0805 Capacitor |
 
-**Note:** U4 (ESP32S NodeMCU 38-pin module) is hand-soldered (not SMT assembled)
+**Note:** U3 (ESP32S NodeMCU 38-pin, NODEMCU-32SLUA footprint) is hand-soldered (not SMT assembled)
+**Note:** L76K GPS module plugs into J4 connector (not assembled on PCB)
 
 ## Step-by-Step Build
 
@@ -69,7 +72,7 @@ Battery (J2: C295747) → 10µF ceramic → NCP170 (U2: C603670) → 3.0V rail
 ### 4. Audio Subsystem
 
 ```
-3.3V → R1 (2.2kΩ) → Mic+ (MK1: C3273706)
+3V0 → R1 (2.0kΩ) → J3 pin 1 (Mic+)
                      ↓
                    1µF DC block cap (C11)
                      ↓
@@ -86,29 +89,32 @@ Battery (J2: C295747) → 10µF ceramic → NCP170 (U2: C603670) → 3.0V rail
 | SDA | GPIO21 | I2C Data |
 | SCL | GPIO22 | I2C Clock |
 | AD0 | GND | I2C Address = 0x10 |
-| DVDD | 3.3V | Digital Power |
-| AVDD | 3.3V | Analog Power |
+| DVDD | 3V0 | Digital Power |
+| AVDD | 3V0 | Analog Power |
 | GND | GND | Ground |
-| AINL | Mic output | Audio Input |
-| AINR | GND | Unused (mono) |
+| AINLP | Mic via C11 | Left + Audio Input |
+| AINLN | 1µF to AGND | Left - (AC-coupled) |
+| AINRP | 1µF to AGND | Right + (AC-coupled) |
+| AINRN | 1µF to AGND | Right - (AC-coupled) |
 
-**Decoupling:** 100nF on DVDD, 10µF + 100nF on AVDD
+**Decoupling:** 100nF (C4) on VDDD, 10µF (C9) + 100nF (C5) on VDDA
+**Reference bypass:** 10µF (C8) on REFQ, 10µF (C12) on REFP
 
 ### 5. GPS Subsystem
 
-```
-3.3V → L76K VCC (U3: C2838031)
-       + 100nF decoupling cap
-```
+The L76K GPS module connects via J4 (8-pin 1.25mm connector, C3029401).
 
-**L76K Connections:**
-| Pin | ESP32 GPIO | Function |
-|-----|------------|----------|
-| VCC | 3.3V direct | Always powered |
-| GND | GND | Ground |
-| TX | GPIO16 | UART RX |
-| RX | GPIO17 | UART TX |
-| PPS | GPIO4 | Time sync pulse |
+**J4 GPS Connector Pinout (verified with ohmmeter):**
+| J4 Pin | L76K Signal | ESP32 Connection | Wire Color |
+|--------|-------------|------------------|------------|
+| 1 | RESET_N | 3V0 (hold high) | Brown |
+| 2 | VCC | 3V0 + C6 | Orange |
+| 3 | V_BCKP | 3V0 | White |
+| 4 | TX_GPS | GPIO16 (RX2) | Blue |
+| 5 | RX_GPS | GPIO17 (TX2) | Green |
+| 6 | WAKEUP | 3V0 (hold high) | Yellow |
+| 7 | PPS | GPIO4 | Black |
+| 8 | GND | GND | Red |
 
 **Power Management via PMTK Commands:**
 
@@ -138,12 +144,13 @@ $PMTK225,2,3000,12000,18000,72000*XX
 **TF-015 (J1: C113206) Connections:**
 | Pin | ESP32 GPIO | Function |
 |-----|------------|----------|
-| VCC | 3.3V | Power |
+| VCC | 3V0 | Power |
 | GND | GND | Ground |
 | CS | GPIO5 | Chip Select |
 | SCK | GPIO18 | SPI Clock |
 | MOSI | GPIO23 | Data In |
 | MISO | GPIO19 | Data Out |
+| CD | GPIO34 | Card Detect (LOW = inserted, R6 4.7k pull-up) |
 
 ### 7. U3 - ESP32 Module Symbol
 
@@ -160,7 +167,6 @@ Since U3 (ESP32S NodeMCU 38-pin) is a through-hole module:
 | GPIO | Function | Direction |
 |------|----------|-----------|
 | GPIO0 | I2S MCLK | Output |
-| GPIO2 | (Available) | - |
 | GPIO4 | PPS Input | Input |
 | GPIO5 | SD CS | Output |
 | GPIO14 | I2S SCLK | Output |
@@ -173,13 +179,13 @@ Since U3 (ESP32S NodeMCU 38-pin) is a through-hole module:
 | GPIO22 | I2C SCL | Output |
 | GPIO23 | SPI MOSI | Output |
 | GPIO32 | I2S Data | Input |
-| 3V3 | Power | - |
+| 3V0 | Power | - |
 | GND | Ground | - |
 
 ### 8. Add Net Labels
 
 Use netlabels for cleaner routing:
-- `3V3` - 3.3V power rail
+- `3V0` - 3.0V power rail (from NCP170)
 - `GND` - Ground
 - `VBAT` - Battery voltage
 - `MCLK`, `SCLK`, `LRCK`, `SDOUT` - I2S signals
@@ -227,11 +233,13 @@ After completing schematic:
 | SMT Assembly Setup | 1 | $8 |
 | ES7243E | 1 | $0.24 |
 | NCP170 LDO | 1 | $0.19 |
-| L76K GPS | 1 | $8.89 |
-| TF-015 | 1 | $0.08 |
-| Mic (C3273706) | 1 | $1.83 |
-| Connector (C295747) | 1 | $0.10 |
-| Passives | ~15 | $0.50 |
-| **Total per board** | | **~$22-25** |
+| TF-015 SD Socket | 1 | $0.08 |
+| Connectors (J2, J3, J4) | 3 | $0.30 |
+| Passives | ~20 | $0.60 |
+| **Total per board** | | **~$12-15** |
 
-*ESP32 module ($3-4) and batteries ($12) sourced separately*
+*Sourced separately:*
+- ESP32 module ($3-4)
+- L76K GPS module (~$9)
+- Microphone + cable (~$2)
+- Batteries ($12)

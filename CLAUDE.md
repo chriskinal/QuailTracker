@@ -11,7 +11,7 @@ This project builds a network of solar/battery-powered acoustic recording statio
 ### Core Components
 - **MCU:** ESP32 (dual-core) - chosen for dual I2S ports and proper MCLK output
 - **Microphone:** PUI AOM-5024L-HD-R electret condenser (80 dB SNR)
-- **ADC:** ES7243E 24-bit I2S ADC (I2C configurable, 3.3V operation)
+- **ADC:** ES7243E 24-bit I2S ADC (I2C configurable, 3.0V operation)
 - **GPS:** Quectel L76K with PPS output for time synchronization
 - **Storage:** MicroSD card (32GB Class 10)
 - **Power:** 1S4P 18650 Li-ion pack (13,600 mAh) → NCP170 LDO (500nA Iq) → 3.0V rail
@@ -19,7 +19,7 @@ This project builds a network of solar/battery-powered acoustic recording statio
 
 ### Audio Signal Chain
 ```
-Sound → PUI Mic (80dB SNR) → Bias Circuit (3.3V/2.2kΩ) → 10µF cap → ES7243E → I2S → ESP32 → SD Card
+Sound → PUI Mic (80dB SNR) → Bias Circuit (3.0V/2.0kΩ) → 1µF cap → ES7243E → I2S → ESP32 → SD Card
 ```
 
 ### Key Pin Assignments
