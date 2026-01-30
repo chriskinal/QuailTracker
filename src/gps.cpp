@@ -205,11 +205,11 @@ bool gpsInit()
     Serial.println("Initializing GPS...");
 
     // Set up power control pins BEFORE enabling GPS
-    // PWR_EN: HIGH = VCC off, LOW = VCC on (P-FET via Q2)
+    // PWR_EN: HIGH = VCC on (Q2 NPN pulls P-FET gate low), LOW = VCC off
     pinMode(PIN_GPS_PWR_EN, OUTPUT);
-    digitalWrite(PIN_GPS_PWR_EN, LOW);  // Start with power ON
+    digitalWrite(PIN_GPS_PWR_EN, HIGH);  // Start with power ON
 
-    // WAKEUP: HIGH = standby mode, LOW = continuous (via Q3)
+    // WAKEUP: HIGH = Q3 on = WAKEUP low = standby, LOW = Q3 off = WAKEUP high = continuous
     pinMode(PIN_GPS_WAKEUP, OUTPUT);
     digitalWrite(PIN_GPS_WAKEUP, LOW);  // Start in continuous mode
 
@@ -299,8 +299,8 @@ void gpsSetPowerMode(GPSPowerMode mode)
     switch (mode) {
         case GPS_CONTINUOUS:
             // VCC on, WAKEUP high (continuous operation)
-            digitalWrite(PIN_GPS_PWR_EN, LOW);   // P-FET on
-            digitalWrite(PIN_GPS_WAKEUP, LOW);   // Q3 off, WAKEUP floats high
+            digitalWrite(PIN_GPS_PWR_EN, HIGH);  // Q2 on → P-FET on → VCC on
+            digitalWrite(PIN_GPS_WAKEUP, LOW);   // Q3 off → WAKEUP floats high
             if (s_powerMode == GPS_BACKUP) {
                 // Coming out of backup, wait for GPS to boot
                 delay(100);
@@ -310,14 +310,14 @@ void gpsSetPowerMode(GPSPowerMode mode)
 
         case GPS_STANDBY:
             // VCC on, WAKEUP low (standby mode)
-            digitalWrite(PIN_GPS_PWR_EN, LOW);   // P-FET on
-            digitalWrite(PIN_GPS_WAKEUP, HIGH);  // Q3 on, pulls WAKEUP low
+            digitalWrite(PIN_GPS_PWR_EN, HIGH);  // Q2 on → P-FET on → VCC on
+            digitalWrite(PIN_GPS_WAKEUP, HIGH);  // Q3 on → pulls WAKEUP low
             Serial.println("GPS: Standby mode (~1mA)");
             break;
 
         case GPS_BACKUP:
             // VCC off (V_BCKP still powered for RTC)
-            digitalWrite(PIN_GPS_PWR_EN, HIGH);  // P-FET off
+            digitalWrite(PIN_GPS_PWR_EN, LOW);   // Q2 off → P-FET off → VCC off
             digitalWrite(PIN_GPS_WAKEUP, LOW);   // Don't care, but set low
             Serial.println("GPS: Backup mode (~7uA)");
             break;

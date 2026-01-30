@@ -26,7 +26,7 @@
 // -----------------------------------------------------------------------------
 // Version
 // -----------------------------------------------------------------------------
-#define FIRMWARE_VERSION "0.1.22"
+#define FIRMWARE_VERSION "0.1.23"
 
 // -----------------------------------------------------------------------------
 // Core Assignment
@@ -83,7 +83,7 @@
 #define PIN_GPS_TX      17  // ESP32 TX -> GPS RX
 #define PIN_GPS_RX      16  // ESP32 RX <- GPS TX
 #define PIN_GPS_PPS     4   // PPS pulse input
-#define PIN_GPS_PWR_EN  25  // GPS VCC power control (HIGH = off, LOW = on via Q1 P-FET)
+#define PIN_GPS_PWR_EN  25  // GPS VCC power control (HIGH = on via Q2 NPN + Q1 P-FET, LOW = off)
 #define PIN_GPS_WAKEUP  26  // GPS WAKEUP control (HIGH = standby, LOW = continuous via Q3)
 #define GPS_BAUD        9600
 
