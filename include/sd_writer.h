@@ -83,4 +83,11 @@ struct SDCardInfo {
 
 SDCardInfo sdGetCardInfo();
 
+/**
+ * Check if SD card is physically inserted.
+ * Uses card detect pin (GPIO34) with external pull-up.
+ * @return true if card is inserted (pin LOW)
+ */
+bool sdCardInserted();
+
 #endif // SD_WRITER_H

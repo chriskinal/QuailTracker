@@ -325,10 +325,7 @@ static void audioTaskFunc(void* param)
 
             // Debug: print samples every ~1 second during recording
             if (debugCounter++ % 100 == 0) {
-                Serial.printf("Recording: raw32[0]=0x%08lX, >>16=%d, samples=%d\n",
-                    (unsigned long)s_dmaBuffer[0],
-                    (int)(int16_t)(s_dmaBuffer[0] >> 16),
-                    numStereoSamples);
+                // Serial.printf("Recording: raw32[0]=0x%08lX, >>16=%d, samples=%d\n", (unsigned long)s_dmaBuffer[0], (int)(int16_t)(s_dmaBuffer[0] >> 16), numStereoSamples);
             }
 
             for (int i = 0; i < numStereoSamples; i++) {

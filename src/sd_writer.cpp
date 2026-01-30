@@ -93,11 +93,25 @@ static void writerTaskFunc(void* param)
     vTaskDelete(NULL);
 }
 
+bool sdCardInserted()
+{
+    return digitalRead(PIN_SD_DET) == LOW;
+}
+
 bool sdWriterInit(RingBuffer* buffer)
 {
     s_audioBuffer = buffer;
 
     Serial.println("Initializing SD card...");
+
+    // Set up card detect pin (external pull-up R6, LOW = card inserted)
+    pinMode(PIN_SD_DET, INPUT);
+
+    if (!sdCardInserted()) {
+        Serial.println("  No SD card inserted!");
+        return false;
+    }
+    Serial.println("  SD card detected");
 
     SPI.begin(PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI, PIN_SD_CS);
 

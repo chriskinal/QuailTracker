@@ -248,6 +248,21 @@ void loop()
             break;
         }
 
+        case '8':
+            gpsSetPowerMode(GPS_CONTINUOUS);
+            printMenu();
+            break;
+
+        case '9':
+            gpsSetPowerMode(GPS_STANDBY);
+            printMenu();
+            break;
+
+        case '0':
+            gpsSetPowerMode(GPS_BACKUP);
+            printMenu();
+            break;
+
         case 'r':
         case 'R':
             // Quick record toggle
@@ -302,9 +317,22 @@ void printStatus()
         Serial.printf("  Errors: %lu\n", sd.writeErrors);
     }
 
+    // SD Card
+    Serial.println("SD Card:");
+    Serial.printf("  Inserted: %s\n", sdCardInserted() ? "Yes" : "No");
+    SDCardInfo cardInfo = sdGetCardInfo();
+    Serial.printf("  Mounted: %s\n", cardInfo.mounted ? "Yes" : "No");
+
     // GPS
     GPSData gps = gpsGetData();
+    const char* gpsPowerStr = "Unknown";
+    switch (gpsGetPowerMode()) {
+        case GPS_CONTINUOUS: gpsPowerStr = "Continuous (~25mA)"; break;
+        case GPS_STANDBY:    gpsPowerStr = "Standby (~1mA)"; break;
+        case GPS_BACKUP:     gpsPowerStr = "Backup (~7uA)"; break;
+    }
     Serial.println("GPS:");
+    Serial.printf("  Power: %s\n", gpsPowerStr);
     Serial.printf("  Fix: %s (%d sats)\n",
                   gps.valid ? "Yes" : "No", gps.satellites);
     Serial.printf("  PPS: %s\n", gps.ppsValid ? "OK" : "No signal");
@@ -342,6 +370,9 @@ void printMenu()
     Serial.println("5. GPS Data");
     Serial.println("6. Battery");
     Serial.println("7. Temperature/Humidity");
+    Serial.println("8. GPS Continuous Mode");
+    Serial.println("9. GPS Standby Mode");
+    Serial.println("0. GPS Backup Mode");
     Serial.println("R. Toggle Recording");
     Serial.println("================");
     Serial.printf("[%s] > ", isRecording ? "REC" : "IDLE");

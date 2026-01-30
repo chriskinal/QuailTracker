@@ -28,6 +28,7 @@ static volatile bool s_running = false;
 
 static GPSData s_gpsData = {0};
 static volatile uint32_t s_lastPpsMillis = 0;
+static GPSPowerMode s_powerMode = GPS_CONTINUOUS;
 
 // NMEA parsing buffer
 #define NMEA_BUFFER_SIZE 128
@@ -203,6 +204,20 @@ bool gpsInit()
 {
     Serial.println("Initializing GPS...");
 
+    // Set up power control pins BEFORE enabling GPS
+    // PWR_EN: HIGH = VCC off, LOW = VCC on (P-FET via Q2)
+    pinMode(PIN_GPS_PWR_EN, OUTPUT);
+    digitalWrite(PIN_GPS_PWR_EN, LOW);  // Start with power ON
+
+    // WAKEUP: HIGH = standby mode, LOW = continuous (via Q3)
+    pinMode(PIN_GPS_WAKEUP, OUTPUT);
+    digitalWrite(PIN_GPS_WAKEUP, LOW);  // Start in continuous mode
+
+    s_powerMode = GPS_CONTINUOUS;
+
+    // Small delay for GPS to power up
+    delay(100);
+
     gpsSerial.begin(GPS_BAUD, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
 
     // Set up PPS interrupt
@@ -212,6 +227,8 @@ bool gpsInit()
     Serial.printf("  UART: RX=%d, TX=%d, Baud=%d\n",
                   PIN_GPS_RX, PIN_GPS_TX, GPS_BAUD);
     Serial.printf("  PPS: GPIO%d\n", PIN_GPS_PPS);
+    Serial.printf("  PWR_EN: GPIO%d, WAKEUP: GPIO%d\n",
+                  PIN_GPS_PWR_EN, PIN_GPS_WAKEUP);
 
     return true;
 }
@@ -277,16 +294,38 @@ void gpsSendCommand(const char* cmd)
     gpsSerial.printf("*%02X\r\n", checksum);
 }
 
-void gpsStandby()
+void gpsSetPowerMode(GPSPowerMode mode)
 {
-    gpsSendCommand("PMTK161,0");
+    switch (mode) {
+        case GPS_CONTINUOUS:
+            // VCC on, WAKEUP high (continuous operation)
+            digitalWrite(PIN_GPS_PWR_EN, LOW);   // P-FET on
+            digitalWrite(PIN_GPS_WAKEUP, LOW);   // Q3 off, WAKEUP floats high
+            if (s_powerMode == GPS_BACKUP) {
+                // Coming out of backup, wait for GPS to boot
+                delay(100);
+            }
+            Serial.println("GPS: Continuous mode (~25mA)");
+            break;
+
+        case GPS_STANDBY:
+            // VCC on, WAKEUP low (standby mode)
+            digitalWrite(PIN_GPS_PWR_EN, LOW);   // P-FET on
+            digitalWrite(PIN_GPS_WAKEUP, HIGH);  // Q3 on, pulls WAKEUP low
+            Serial.println("GPS: Standby mode (~1mA)");
+            break;
+
+        case GPS_BACKUP:
+            // VCC off (V_BCKP still powered for RTC)
+            digitalWrite(PIN_GPS_PWR_EN, HIGH);  // P-FET off
+            digitalWrite(PIN_GPS_WAKEUP, LOW);   // Don't care, but set low
+            Serial.println("GPS: Backup mode (~7uA)");
+            break;
+    }
+    s_powerMode = mode;
 }
 
-void gpsWake()
+GPSPowerMode gpsGetPowerMode()
 {
-    // Send any character to wake from standby
-    gpsSerial.write(0xFF);
-    delay(100);
-    // Return to full power mode
-    gpsSendCommand("PMTK225,0");
+    return s_powerMode;
 }

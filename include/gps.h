@@ -22,6 +22,15 @@
 #include <stdint.h>
 
 /**
+ * GPS power modes (L76K hardware control - PMTK not supported)
+ */
+enum GPSPowerMode {
+    GPS_CONTINUOUS,  // Full operation (~25mA)
+    GPS_STANDBY,     // WAKEUP pin low (~1mA, hot start 1-5s)
+    GPS_BACKUP       // VCC off, V_BCKP on (~7µA, warm start 5-30s)
+};
+
+/**
  * GPS data structure.
  */
 struct GPSData {
@@ -87,18 +96,19 @@ uint32_t gpsGetTimestamp();
 
 /**
  * Send command to GPS module.
- * @param cmd PMTK command string (without $ and checksum)
+ * @param cmd NMEA command string (without $ and checksum)
  */
 void gpsSendCommand(const char* cmd);
 
 /**
- * Put GPS into standby mode.
+ * Set GPS power mode (L76K hardware control).
+ * @param mode GPS_CONTINUOUS, GPS_STANDBY, or GPS_BACKUP
  */
-void gpsStandby();
+void gpsSetPowerMode(GPSPowerMode mode);
 
 /**
- * Wake GPS from standby.
+ * Get current GPS power mode.
  */
-void gpsWake();
+GPSPowerMode gpsGetPowerMode();
 
 #endif // GPS_H
