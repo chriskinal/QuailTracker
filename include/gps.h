@@ -111,4 +111,17 @@ void gpsSetPowerMode(GPSPowerMode mode);
  */
 GPSPowerMode gpsGetPowerMode();
 
+/**
+ * Debug: dump raw GPS UART data for specified duration.
+ * @param durationMs How long to dump data (milliseconds)
+ */
+void gpsDebugDump(uint32_t durationMs);
+
+/**
+ * Get NMEA parsing statistics.
+ * @param validSentences Output: number of valid sentences parsed
+ * @param checksumErrors Output: number of checksum failures
+ */
+void gpsGetStats(uint32_t* validSentences, uint32_t* checksumErrors);
+
 #endif // GPS_H

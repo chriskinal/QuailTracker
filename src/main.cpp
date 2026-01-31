@@ -191,6 +191,9 @@ void loop()
         case '5':
         {
             GPSData gps = gpsGetData();
+            uint32_t validSentences, checksumErrors;
+            gpsGetStats(&validSentences, &checksumErrors);
+
             Serial.println("\n=== GPS Data ===");
             Serial.printf("Valid: %s\n", gps.valid ? "Yes" : "No");
             Serial.printf("Satellites: %d\n", gps.satellites);
@@ -203,6 +206,8 @@ void loop()
             Serial.printf("PPS: %s (last: %lu ms ago)\n",
                           gps.ppsValid ? "OK" : "No signal",
                           millis() - gps.lastPpsTime);
+            Serial.printf("NMEA: %lu valid, %lu checksum errors\n",
+                          validSentences, checksumErrors);
             printMenu();
             break;
         }
@@ -274,6 +279,12 @@ void loop()
             {
                 startRecording();
             }
+            break;
+
+        case 'd':
+        case 'D':
+            gpsDebugDump(5000);
+            printMenu();
             break;
         }
     }
@@ -374,6 +385,7 @@ void printMenu()
     Serial.println("9. GPS Standby Mode");
     Serial.println("0. GPS Backup Mode");
     Serial.println("R. Toggle Recording");
+    Serial.println("D. GPS Debug (raw UART)");
     Serial.println("================");
     Serial.printf("[%s] > ", isRecording ? "REC" : "IDLE");
 }

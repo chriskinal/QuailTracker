@@ -25,10 +25,13 @@
 static HardwareSerial gpsSerial(2);  // UART2
 static TaskHandle_t s_gpsTask = nullptr;
 static volatile bool s_running = false;
+static volatile bool s_debugMode = false;  // Pause task during debug dump
 
 static GPSData s_gpsData = {0};
 static volatile uint32_t s_lastPpsMillis = 0;
 static GPSPowerMode s_powerMode = GPS_CONTINUOUS;
+static uint32_t s_checksumErrors = 0;
+static uint32_t s_validSentences = 0;
 
 // NMEA parsing buffer
 #define NMEA_BUFFER_SIZE 128
@@ -54,6 +57,24 @@ static uint8_t nmeaChecksum(const char* sentence)
         checksum ^= *sentence++;
     }
     return checksum;
+}
+
+// Validate NMEA checksum - returns true if valid
+static bool nmeaValidate(const char* sentence)
+{
+    // Find the asterisk
+    const char* asterisk = strchr(sentence, '*');
+    if (!asterisk || strlen(asterisk) < 3) {
+        return false;  // No checksum present
+    }
+
+    // Parse the received checksum (2 hex digits after *)
+    uint8_t received = (uint8_t)strtol(asterisk + 1, NULL, 16);
+
+    // Calculate expected checksum
+    uint8_t expected = nmeaChecksum(sentence);
+
+    return (received == expected);
 }
 
 // Parse degrees + minutes to decimal degrees
@@ -160,6 +181,13 @@ static void parseRMC(char* sentence)
 // Process a complete NMEA sentence
 static void processNMEA(char* sentence)
 {
+    // Validate checksum before parsing
+    if (!nmeaValidate(sentence)) {
+        s_checksumErrors++;
+        return;  // Reject corrupted sentence
+    }
+    s_validSentences++;
+
     if (strncmp(sentence, "$GPGGA", 6) == 0 ||
         strncmp(sentence, "$GNGGA", 6) == 0) {
         parseGGA(sentence);
@@ -174,6 +202,12 @@ static void gpsTaskFunc(void* param)
     Serial.printf("GPS task started on core %d\n", xPortGetCoreID());
 
     while (s_running) {
+        // Pause during debug dump to avoid race condition
+        if (s_debugMode) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+
         while (gpsSerial.available()) {
             char c = gpsSerial.read();
 
@@ -215,14 +249,19 @@ bool gpsInit()
 
     s_powerMode = GPS_CONTINUOUS;
 
-    // Small delay for GPS to power up
-    delay(100);
+    // Give GPS time to boot
+    delay(500);
 
     gpsSerial.begin(GPS_BAUD, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
 
     // Set up PPS interrupt
     pinMode(PIN_GPS_PPS, INPUT);
     attachInterrupt(digitalPinToInterrupt(PIN_GPS_PPS), ppsInterrupt, RISING);
+
+    // Enable GPS + GLONASS + BeiDou (PCAS04,7)
+    delay(100);
+    gpsSerial.print("$PCAS04,7*1E\r\n");
+    Serial.println("  Sent PCAS04,7 (GPS+GLONASS+BeiDou)");
 
     Serial.printf("  UART: RX=%d, TX=%d, Baud=%d\n",
                   PIN_GPS_RX, PIN_GPS_TX, GPS_BAUD);
@@ -328,4 +367,42 @@ void gpsSetPowerMode(GPSPowerMode mode)
 GPSPowerMode gpsGetPowerMode()
 {
     return s_powerMode;
+}
+
+void gpsDebugDump(uint32_t durationMs)
+{
+    Serial.printf("\n=== GPS Raw Data (GPIO%d RX, %d baud) ===\n", PIN_GPS_RX, GPS_BAUD);
+    Serial.println("Dumping for 5 seconds...\n");
+
+    // Pause the GPS task to avoid race condition
+    s_debugMode = true;
+    vTaskDelay(pdMS_TO_TICKS(50));  // Let task pause
+
+    // Flush any buffered data
+    while (gpsSerial.available()) {
+        gpsSerial.read();
+    }
+
+    uint32_t startTime = millis();
+    uint32_t byteCount = 0;
+
+    while (millis() - startTime < durationMs) {
+        while (gpsSerial.available()) {
+            char c = gpsSerial.read();
+            Serial.print(c);
+            byteCount++;
+        }
+        delay(1);
+    }
+
+    // Resume GPS task
+    s_debugMode = false;
+
+    Serial.printf("\n\n=== End dump: %lu bytes received ===\n", byteCount);
+}
+
+void gpsGetStats(uint32_t* validSentences, uint32_t* checksumErrors)
+{
+    if (validSentences) *validSentences = s_validSentences;
+    if (checksumErrors) *checksumErrors = s_checksumErrors;
 }
