@@ -40,7 +40,7 @@
 | Q2 | MMBT3904 | C20526 | GPS PWR_EN Control (NPN, SOT-23) (Basic) |
 | Q3 | MMBT3904 | C20526 | GPS WAKEUP Control (NPN, SOT-23) (Basic) |
 | U1 | ES7243E | C2929446 | 24-bit I2S ADC, QFN-20 |
-| U2 | NCP170ASN300T2G | C603670 | 3.0V LDO Regulator, TSOP-5, 500nA Iq |
+| U2 | NCP170ASN330T2G | C510641 | 3.3V LDO Regulator, TSOP-5, 500nA Iq |
 | U3 | NODEMCU-32SLUA | - | ESP32 38-pin module (hand soldered) |
 
 
@@ -50,17 +50,17 @@
 
 ### Power Rails
 
-**3V0 (3.0V Rail)**
+**3V3 (3.3V Rail)**
 | Ref | Part | LCSC # | Pin | Pin Name |
 |-----|------|--------|-----|----------|
-| U2 | NCP170 LDO | C603670 | 5 | VOUT |
+| U2 | NCP170 LDO | C510641 | 5 | VOUT |
 | U1 | ES7243E ADC | C2929446 | 1 | VDDP |
 | U1 | ES7243E ADC | C2929446 | 5 | VDDD |
 | U1 | ES7243E ADC | C2929446 | 12 | VDDA |
 | J4 | GPS Connector | C3029401 | 2 | VCC (power) |
 | J4 | GPS Connector | C3029401 | 3 | V_BCKP (backup power) |
 | J1 | MicroSD Socket | C113206 | 4 | VDD |
-| R1 | 2.0k Mic Bias | C22975 | 1 | (bias to 3V0) |
+| R1 | 2.0k Mic Bias | C22975 | 1 | (bias to 3V3) |
 | C2 | 10uF LDO Out | C15850 | 1 | + |
 | C3 | 100nF LDO Decoup | C14663 | 1 | + |
 | C4 | 100nF VDDD | C14663 | 1 | + |
@@ -70,7 +70,7 @@
 | C9 | 10uF VDDA Bulk | C15850 | 1 | + |
 | C10 | 4.7uF Bulk | C1779 | 1 | + |
 | J5 | SHT30 Module Conn | - | 2 | VCC |
-| U3 | NODEMCU-32SLUA | - | 3V0 | 3.0V |
+| U3 | NODEMCU-32SLUA | - | 3V3 | 3.3V |
 | R4 | 4.7k I2C Pull-up | C23162 | 1 | SDA pull-up |
 | R5 | 4.7k I2C Pull-up | C23162 | 1 | SCL pull-up |
 | R6 | 4.7k SD Detect Pull-up | C23162 | 1 | SD card detect pull-up |
@@ -84,7 +84,7 @@
 | U1 | ES7243E ADC | C2929446 | 21 | EP (thermal pad) |
 | U1 | ES7243E ADC | C2929446 | 8 | AD1 (address) |
 | U1 | ES7243E ADC | C2929446 | 17 | AD0 (address) |
-| U2 | NCP170 LDO | C603670 | 2 | GND |
+| U2 | NCP170 LDO | C510641 | 2 | GND |
 | J1 | MicroSD Socket | C113206 | 6 | VSS (GND) |
 | J1 | MicroSD Socket | C113206 | 10 | Shield |
 | J1 | MicroSD Socket | C113206 | 11 | Shield |
@@ -116,8 +116,8 @@
 |-----|------|--------|-----|----------|
 | J2 | Battery Conn | C295747 | 1 | + (battery positive) |
 | C1 | 10uF LDO In | C15850 | 1 | + |
-| U2 | NCP170 LDO | C603670 | 1 | VIN |
-| U2 | NCP170 LDO | C603670 | 3 | EN (tie to VIN) |
+| U2 | NCP170 LDO | C510641 | 1 | VIN |
+| U2 | NCP170 LDO | C510641 | 3 | EN (tie to VIN) |
 | R2 | 1M VBAT High | C22935 | 1 | VBAT divider high |
 
 ⚠️ **J2 Battery Polarity Warning:** JST PH connectors have no universal polarity standard. Verify your battery's connector polarity matches J2 before connecting. The LCSC footprint pin 1 position determines which pad is VBAT+.
@@ -143,8 +143,8 @@
 **I2C Pull-up Resistors (required):**
 | Ref | Part | LCSC # | Connection |
 |-----|------|--------|------------|
-| R4 | 4.7k 0603 | C23162 | 3V0 → SDA line (GPIO21) |
-| R5 | 4.7k 0603 | C23162 | 3V0 → SCL line (GPIO22) |
+| R4 | 4.7k 0603 | C23162 | 3V3 → SDA line (GPIO21) |
+| R5 | 4.7k 0603 | C23162 | 3V3 → SCL line (GPIO22) |
 
 **I2C Addresses:**
 - U1 ES7243E (C2929446): Pin 17 (AD0), Pin 8 (AD1) -> GND = Address **0x10**
@@ -171,8 +171,8 @@
 | J4 Pin | Signal | Connection | Direction | Wire Color |
 |--------|--------|------------|-----------|------------|
 | 1 | GND | GND | Ground | Brown |
-| 2 | VCC | Q1 drain (switched 3V0) | Power | Orange |
-| 3 | V_BCKP | 3V0 (always on) | Backup power | White |
+| 2 | VCC | Q1 drain (switched 3V3) | Power | Orange |
+| 3 | V_BCKP | 3V3 (always on) | Backup power | White |
 | 4 | TX_GPS | GPIO16 (RX2) | J4 -> U3 | Blue |
 | 5 | RX_GPS | GPIO17 (TX2) | U3 -> J4 | Green |
 | 6 | WAKEUP | Q3 collector (active low) | Standby ctrl | Yellow |
@@ -193,13 +193,13 @@ The L76K requires hardware control for power modes. Two GPIO pins provide softwa
 ```
                                     VCC Power Switch
                                     ════════════════
-3V0 ───┬────────────────────────────────────────────────► J4 Pin 3 (V_BCKP)
+3V3 ───┬────────────────────────────────────────────────► J4 Pin 3 (V_BCKP)
        │
        ├──[R7 10k]──┬── Q1 Gate
        │            │      │
        │      Q2 collector │  Q1 (SI2301CDS P-FET)
        │            │      │
-       │         [Q2]      Source ── 3V0
+       │         [Q2]      Source ── 3V3
        │      MMBT3904     Drain ──┬──[C6]──► J4 Pin 2 (VCC)
        │          │                │
        │       [R8 10k]           GND
@@ -235,10 +235,10 @@ Logic:
 **GPS Power Circuit Connections:**
 | From | Pin | To | Pin | Notes |
 |------|-----|----|-----|-------|
-| 3V0 | - | R7 | 1 | Gate pull-up supply |
+| 3V3 | - | R7 | 1 | Gate pull-up supply |
 | R7 | 2 | Q1 | 1 (Gate) | P-FET gate |
 | Q2 | 3 (Collector) | Q1 | 1 (Gate) | PWR_EN pulls gate low |
-| 3V0 | - | Q1 | 2 (Source) | P-FET source |
+| 3V3 | - | Q1 | 2 (Source) | P-FET source |
 | Q1 | 3 (Drain) | C6 | 1 | Switched VCC |
 | Q1 | 3 (Drain) | J4 | 2 (VCC) | GPS VCC |
 | U3 | GPIO25 | R8 | 1 | PWR_EN control |
@@ -272,9 +272,9 @@ Q1 SI2301CDS P-FET:          Q2/Q3 MMBT3904 NPN:
 | SD_MISO | GPIO19 | Pin 7 (DAT0/DO) | J1 -> U3 |
 | SD_DET | GPIO34 | Pin 9 (CD) | J1 -> U3 |
 
-**J1 (TF-015, C113206) Power:** Pin 4 (VDD) -> 3V0, Pin 6 (VSS) -> GND
+**J1 (TF-015, C113206) Power:** Pin 4 (VDD) -> 3V3, Pin 6 (VSS) -> GND
 **J1 Shield:** Pins 10, 11, 12, 13 -> GND
-**J1 Card Detect:** Pin 9 -> R6 (4.7k pull-up to 3V0) -> GPIO34 (LOW = card inserted)
+**J1 Card Detect:** Pin 9 -> R6 (4.7k pull-up to 3V3) -> GPIO34 (LOW = card inserted)
 
 ---
 
@@ -286,7 +286,7 @@ The ES7243E differential inputs MUST be AC-coupled to ground, NOT directly groun
 Direct grounding disrupts the internal bias circuitry and causes signal degradation.
 
 ```
-3V0 ---[R1 2.0k]---+--- J3 Pin 1 (Mic+)
+3V3 ---[R1 2.0k]---+--- J3 Pin 1 (Mic+)
                    |
                   [C11 1uF]
                    |
@@ -301,7 +301,7 @@ U1 Pin 16 (AINRP) ---[C17 1uF]--- AGND   ← AC-coupled, NOT direct!
 
 | From | Part | LCSC # | To | Notes |
 |------|------|--------|----|-------|
-| 3V0 | - | - | R1 pin 1 | Bias supply |
+| 3V3 | - | - | R1 pin 1 | Bias supply |
 | R1 pin 2 | 2.0k 0603 | C22975 | J3 pin 1 | Mic bias point |
 | R1 pin 2 | 2.0k 0603 | C22975 | C11 pin 1 | DC block input |
 | C11 pin 2 | 1uF 0805 | C28323 | U1 pin 9 (AINLP) | Audio to ADC |
@@ -318,7 +318,7 @@ U1 Pin 16 (AINRP) ---[C17 1uF]--- AGND   ← AC-coupled, NOT direct!
 
 ---
 
-### LDO Regulator Circuit (U2 NCP170, C603670, TSOP-5)
+### LDO Regulator Circuit (U2 NCP170, C510641, TSOP-5)
 
 ```
                     +--- U2 Pin 3 (EN)
@@ -327,7 +327,7 @@ VBAT (J2+) ---[C1 10uF]---+--- U2 Pin 1 (VIN)
                               |
                          [U2 NCP170]
                               |
-U2 Pin 5 (VOUT) ---+---[C2 10uF]---+---[C3 100nF]--- 3V0 Rail
+U2 Pin 5 (VOUT) ---+---[C2 10uF]---+---[C3 100nF]--- 3V3 Rail
                    |               |
                   GND             GND
 
@@ -335,14 +335,14 @@ U2 Pin 2 (GND) --- GND
 U2 Pin 4 (NC) --- No connection
 ```
 
-**U2 NCP170 (C603670) Pinout (TSOP-5):**
+**U2 NCP170 (C510641) Pinout (TSOP-5):**
 | Pin | Function |
 |-----|----------|
 | 1 | VIN |
 | 2 | GND |
 | 3 | EN (active high, tie to VIN) |
 | 4 | NC |
-| 5 | VOUT (3.0V) |
+| 5 | VOUT (3.3V) |
 
 ---
 
@@ -370,7 +370,7 @@ VBAT (J2+) ---[R2 1M]---+--- U3 GPIO35 (ADC1_CH7)
 **Voltage scaling:** VBAT ÷ 2
 - 4.2V (full) → 2.1V ADC
 - 3.7V (nominal) → 1.85V ADC
-- 3.0V (empty) → 1.5V ADC
+- 3.0V (battery empty) → 1.5V ADC
 
 **Current draw:** ~2.1µA continuous (10x improvement over 100k divider)
 
@@ -384,7 +384,7 @@ VBAT (J2+) ---[R2 1M]---+--- U3 GPIO35 (ADC1_CH7)
 J5 (4-pin header to external SHT30 module):
 
   Pin 1 (GND) --- GND
-  Pin 2 (VCC) --- 3V0
+  Pin 2 (VCC) --- 3V3
   Pin 3 (SDA) --- U3 GPIO21 (I2C SDA)
   Pin 4 (SCL) --- U3 GPIO22 (I2C SCL)
 ```
@@ -393,7 +393,7 @@ J5 (4-pin header to external SHT30 module):
 | Pin | Function | Connection |
 |-----|----------|------------|
 | 1 | GND | Ground |
-| 2 | VCC | 3V0 |
+| 2 | VCC | 3V3 |
 | 3 | SDA | GPIO21 (I2C bus) |
 | 4 | SCL | GPIO22 (I2C bus) |
 
@@ -428,6 +428,6 @@ J5 (4-pin header to external SHT30 module):
 | GPIO32 | I2S SDOUT | U1 (ES7243E, C2929446) pin 3 |
 | GPIO34 | SD Card Detect | J1 (MicroSD, C113206) pin 9 via R6 |
 | GPIO35 | VBAT ADC | R2/R3 (1M, C22935) divider midpoint |
-| 3V0 | Power | 3V0 rail |
+| 3V3 | Power | 3V3 rail |
 | GND | Ground | GND rail |
 

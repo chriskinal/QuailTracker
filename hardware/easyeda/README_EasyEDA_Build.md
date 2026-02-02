@@ -16,7 +16,7 @@ Search for these parts in EasyEDA's component library (use LCSC part numbers):
 | Ref | LCSC # | Component | Description |
 |-----|--------|-----------|-------------|
 | U1 | C2929446 | ES7243E | 24-bit I2S ADC, QFN-20 |
-| U2 | C603670 | NCP170ASN300T2G | 3.0V 150mA Ultra-Low Iq LDO, TSOP-5 |
+| U2 | C510641 | NCP170ASN330T2G | 3.3V 150mA Ultra-Low Iq LDO, TSOP-5 |
 | J1 | C113206 | TF-015 | MicroSD Card Socket |
 | J2 | C295747 | S2B-PH-SM4-TB | JST PH 2-pin Battery Connector |
 | J3 | C158012 | B2B-XH-A(LF)(SN) | Mic Connector JST XH 2-pin |
@@ -54,7 +54,7 @@ For each component, use the Library panel:
 ### 3. Power Subsystem
 
 ```
-Battery (J2: C295747) → 10µF ceramic → NCP170 (U2: C603670) → 3.0V rail
+Battery (J2: C295747) → 10µF ceramic → NCP170 (U2: C510641) → 3.3V rail
                                               ↓
                                         Decoupling caps:
                                         - 10µF (C89827) input
@@ -68,14 +68,14 @@ Battery (J2: C295747) → 10µF ceramic → NCP170 (U2: C603670) → 3.0V rail
 | 2 (GND) | Ground |
 | 3 (EN) | Tie to VIN (always enabled) |
 | 4 (NC) | No connection |
-| 5 (VOUT) | 3.0V Rail |
+| 5 (VOUT) | 3.3V Rail |
 
 **Note:** NCP170 has ultra-low 500nA quiescent current for extended battery life.
 
 ### 4. Audio Subsystem
 
 ```
-3V0 → R1 (2.0kΩ) → J3 pin 1 (Mic+)
+3V3 → R1 (2.0kΩ) → J3 pin 1 (Mic+)
                      ↓
                    1µF DC block cap (C11)
                      ↓
@@ -92,8 +92,8 @@ Battery (J2: C295747) → 10µF ceramic → NCP170 (U2: C603670) → 3.0V rail
 | SDA | GPIO21 | I2C Data |
 | SCL | GPIO22 | I2C Clock |
 | AD0 | GND | I2C Address = 0x10 |
-| DVDD | 3V0 | Digital Power |
-| AVDD | 3V0 | Analog Power |
+| DVDD | 3V3 | Digital Power |
+| AVDD | 3V3 | Analog Power |
 | GND | GND | Ground |
 | AINLP | Mic via C11 | Left + Audio Input |
 | AINLN | 1µF to AGND | Left - (AC-coupled) |
@@ -114,7 +114,7 @@ The L76K GPS module connects via J4 (8-pin 1.25mm connector, C3029401).
 |--------|-------------|------------|------------|
 | 1 | GND | GND | Brown |
 | 2 | VCC | Q1 drain (switched) + C6 | Orange |
-| 3 | V_BCKP | 3V0 (always on) | White |
+| 3 | V_BCKP | 3V3 (always on) | White |
 | 4 | TX_GPS | GPIO16 (RX2) | Blue |
 | 5 | RX_GPS | GPIO17 (TX2) | Green |
 | 6 | WAKEUP | Q3 collector | Yellow |
@@ -145,7 +145,7 @@ The L76K GPS module connects via J4 (8-pin 1.25mm connector, C3029401).
 **TF-015 (J1: C113206) Connections:**
 | Pin | ESP32 GPIO | Function |
 |-----|------------|----------|
-| VCC | 3V0 | Power |
+| VCC | 3V3 | Power |
 | GND | GND | Ground |
 | CS | GPIO5 | Chip Select |
 | SCK | GPIO18 | SPI Clock |
@@ -180,13 +180,13 @@ Since U3 (ESP32S NodeMCU 38-pin) is a through-hole module:
 | GPIO22 | I2C SCL | Output |
 | GPIO23 | SPI MOSI | Output |
 | GPIO32 | I2S Data | Input |
-| 3V0 | Power | - |
+| 3V3 | Power | - |
 | GND | Ground | - |
 
 ### 8. Add Net Labels
 
 Use netlabels for cleaner routing:
-- `3V0` - 3.0V power rail (from NCP170)
+- `3V3` - 3.3V power rail (from NCP170)
 - `GND` - Ground
 - `VBAT` - Battery voltage
 - `MCLK`, `SCLK`, `LRCK`, `SDOUT` - I2S signals

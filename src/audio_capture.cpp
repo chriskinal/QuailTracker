@@ -21,13 +21,21 @@
 
 #include <Arduino.h>
 #include <driver/i2s.h>
+
+#if !USE_PDM_MIC
 #include <driver/i2c.h>
 #include <Wire.h>
+#endif
 
 static RingBuffer* s_audioBuffer = nullptr;
 static TaskHandle_t s_audioTask = nullptr;
 static volatile bool s_running = false;
 static AudioStats s_stats = {0};
+
+// =============================================================================
+// ES7243E I2S ADC Functions (only when USE_PDM_MIC=0)
+// =============================================================================
+#if !USE_PDM_MIC
 
 static bool es7243eWriteReg(uint8_t reg, uint8_t value)
 {
@@ -42,20 +50,6 @@ static bool es7243eWriteReg(uint8_t reg, uint8_t value)
     return true;
 }
 
-// ESP-IDF based I2C write with explicit control
-static esp_err_t es7243eWriteRegIDF(uint8_t reg, uint8_t value)
-{
-    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (ES7243E_ADDR << 1) | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(cmd, reg, true);
-    i2c_master_write_byte(cmd, value, true);
-    i2c_master_stop(cmd);
-    esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, pdMS_TO_TICKS(100));
-    i2c_cmd_link_delete(cmd);
-    return ret;
-}
-
 static uint8_t es7243eReadReg(uint8_t reg)
 {
     Wire.beginTransmission(ES7243E_ADDR);
@@ -63,20 +57,6 @@ static uint8_t es7243eReadReg(uint8_t reg)
     Wire.endTransmission(false);
     Wire.requestFrom(ES7243E_ADDR, (uint8_t)1);
     return Wire.available() ? Wire.read() : 0xFF;
-}
-
-static bool es7243eWriteRegVerify(uint8_t reg, uint8_t value)
-{
-    if (!es7243eWriteReg(reg, value)) {
-        return false;
-    }
-    delayMicroseconds(500);
-    uint8_t readback = es7243eReadReg(reg);
-    if (readback != value) {
-        Serial.printf("  Reg 0x%02X: wrote 0x%02X, read 0x%02X\n", reg, value, readback);
-        return false;
-    }
-    return true;
 }
 
 static bool es7243eInit()
@@ -101,42 +81,21 @@ static bool es7243eInit()
     }
     Serial.printf("  ES7243E found at 0x%02X\n", ES7243E_ADDR);
 
-    // Verify chip identity (from datasheet page 26)
-    uint8_t chipId1 = es7243eReadReg(0xFD);  // Should be 0x7A
-    uint8_t chipId2 = es7243eReadReg(0xFE);  // Should be 0x43
-    uint8_t chipVer = es7243eReadReg(0xFF);  // Should be 0x00
-    Serial.printf("  Chip ID: 0x%02X 0x%02X ver=0x%02X", chipId1, chipId2, chipVer);
+    // Verify chip identity
+    uint8_t chipId1 = es7243eReadReg(0xFD);
+    uint8_t chipId2 = es7243eReadReg(0xFE);
+    Serial.printf("  Chip ID: 0x%02X 0x%02X", chipId1, chipId2);
     if (chipId1 == 0x7A && chipId2 == 0x43) {
         Serial.println(" (ES7243E confirmed!)");
     } else {
         Serial.println(" (NOT ES7243E - wrong chip ID!)");
-        Serial.println("  Expected: 0x7A 0x43");
         return false;
     }
 
-    // Test write capability
-    Serial.println("  Testing register write...");
-    Serial.printf("    Before: 0x01=0x%02X\n", es7243eReadReg(0x01));
-    es7243eWriteReg(0x01, 0x3A);
-    delay(5);
-    uint8_t testVal = es7243eReadReg(0x01);
-    Serial.printf("    After:  0x01=0x%02X (expect 0x3A)\n", testVal);
-
-    if (testVal != 0x3A) {
-        Serial.println("  *** I2C WRITES STILL FAILING ***");
-        Serial.println("  Add 4.7k pull-up resistors to SDA and SCL!");
-        return false;
-    }
-    Serial.println("  I2C writes working!");
-
-    // If still failing, the chip may have hardware write protection
-    // or there's an issue with the SDA line during writes
-
-    // Use the official ESP-ADF initialization sequence
-    Serial.println("\n  Using ESP-ADF init sequence:");
+    // ESP-ADF initialization sequence
+    Serial.println("  Configuring ES7243E...");
 
     // Phase 1: Initial startup
-    Serial.println("  Phase 1: Initial startup");
     es7243eWriteReg(0x01, 0x3A);
     es7243eWriteReg(0x00, 0x80);
     es7243eWriteReg(0xF9, 0x00);
@@ -147,27 +106,24 @@ static bool es7243eInit()
     es7243eWriteReg(0x01, 0x00);
     delay(10);
 
-    // Phase 2: Clock and format configuration
-    Serial.println("  Phase 2: Clock configuration");
+    // Phase 2: Clock configuration
     es7243eWriteReg(0x02, 0x00);
     es7243eWriteReg(0x03, 0x20);
     es7243eWriteReg(0x04, 0x01);
     es7243eWriteReg(0x0D, 0x00);
     es7243eWriteReg(0x05, 0x00);
-    es7243eWriteReg(0x06, 0x03);  // SCLK=MCLK/4
-    es7243eWriteReg(0x07, 0x00);  // LRCK divider low
-    es7243eWriteReg(0x08, 0xFF);  // LRCK divider high
+    es7243eWriteReg(0x06, 0x03);
+    es7243eWriteReg(0x07, 0x00);
+    es7243eWriteReg(0x08, 0xFF);
 
-    // Phase 3: Audio path configuration
-    Serial.println("  Phase 3: Audio path");
+    // Phase 3: Audio path
     es7243eWriteReg(0x09, 0xCA);
     es7243eWriteReg(0x0A, 0x85);
-    es7243eWriteReg(0x0B, 0x00);  // I2S format, 24-bit, unmuted
-    es7243eWriteReg(0x0E, 0xBF);  // ADC volume 0dB
+    es7243eWriteReg(0x0B, 0x00);
+    es7243eWriteReg(0x0E, 0xBF);
     es7243eWriteReg(0x0F, 0x80);
 
     // Phase 4: Analog configuration
-    Serial.println("  Phase 4: Analog configuration");
     es7243eWriteReg(0x14, 0x0C);
     es7243eWriteReg(0x15, 0x0C);
     es7243eWriteReg(0x17, 0x02);
@@ -180,64 +136,41 @@ static bool es7243eInit()
     es7243eWriteReg(0x1F, 0x0C);
 
     // Phase 5: PGA gain
-    Serial.println("  Phase 5: PGA gain");
-    es7243eWriteReg(0x20, 0x1A);  // PGA +30dB
-    es7243eWriteReg(0x21, 0x1A);  // PGA +30dB
+    es7243eWriteReg(0x20, 0x1A);
+    es7243eWriteReg(0x21, 0x1A);
 
-    // Phase 6: Final startup - enter slave mode
-    Serial.println("  Phase 6: Final startup");
-    es7243eWriteReg(0x00, 0x80);  // Slave mode
+    // Phase 6: Final startup
+    es7243eWriteReg(0x00, 0x80);
     es7243eWriteReg(0x01, 0x3A);
-    es7243eWriteReg(0x16, 0x3F);  // Power sequence
-    es7243eWriteReg(0x16, 0x00);  // Power up analog
+    es7243eWriteReg(0x16, 0x3F);
+    es7243eWriteReg(0x16, 0x00);
     delay(100);
 
-    // Phase 7: Activate codec (from ESP-ADF es7243e_adc_ctrl_state_active)
-    Serial.println("  Phase 7: Activate codec");
+    // Phase 7: Activate
     es7243eWriteReg(0xF9, 0x00);
     es7243eWriteReg(0x04, 0x01);
-    es7243eWriteReg(0x17, 0x01);  // Changed from 0x02
-    es7243eWriteReg(0x20, 0x1F);  // Max PGA gain (+33.5dB)
-    es7243eWriteReg(0x21, 0x1F);  // Max PGA gain
+    es7243eWriteReg(0x17, 0x01);
+    es7243eWriteReg(0x20, 0x1F);
+    es7243eWriteReg(0x21, 0x1F);
     es7243eWriteReg(0x00, 0x80);
     es7243eWriteReg(0x01, 0x3A);
     es7243eWriteReg(0x16, 0x3F);
     es7243eWriteReg(0x16, 0x00);
     delay(50);
 
-    // Final register check (ESP-ADF expected values after activation)
-    Serial.println("\n  Final register state:");
-    Serial.printf("    [0x00] = 0x%02X (need 0x80)\n", es7243eReadReg(0x00));
-    Serial.printf("    [0x01] = 0x%02X (need 0x3A)\n", es7243eReadReg(0x01));
-    Serial.printf("    [0x04] = 0x%02X (need 0x01)\n", es7243eReadReg(0x04));
-    Serial.printf("    [0x06] = 0x%02X (need 0x03 SCLK div)\n", es7243eReadReg(0x06));
-    Serial.printf("    [0x0B] = 0x%02X (need 0x00 I2S 24-bit)\n", es7243eReadReg(0x0B));
-    Serial.printf("    [0x16] = 0x%02X (need 0x00 analog on)\n", es7243eReadReg(0x16));
-    Serial.printf("    [0x17] = 0x%02X (need 0x01 after activate)\n", es7243eReadReg(0x17));
-    Serial.printf("    [0x20] = 0x%02X (need 0x1F max PGA gain)\n", es7243eReadReg(0x20));
-    Serial.printf("    [0xF9] = 0x%02X (need 0x00 after activate)\n", es7243eReadReg(0xF9));
-    Serial.printf("    [0xFC] = 0x%02X (CSM: bits5-4=state, bit0=automute)\n", es7243eReadReg(0xFC));
-
-    // Check if writes worked
-    if (es7243eReadReg(0x01) == 0x3A && es7243eReadReg(0x00) == 0x80) {
-        Serial.println("  ES7243E configured successfully!");
-        return true;
-    } else {
-        Serial.println("\n  *** WRITES FAILED ***");
-        Serial.println("  Check hardware: SDA line, pull-ups, connections");
-        return false;
-    }
+    Serial.println("  ES7243E configured!");
+    return true;
 }
 
-static bool i2sInit()
+static bool i2sInitStandard()
 {
-    Serial.println("Initializing I2S...");
+    Serial.println("Initializing I2S (standard mode for ES7243E)...");
 
     i2s_config_t i2s_config = {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
         .sample_rate = SAMPLE_RATE,
-        .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,  // ES7243E outputs 24-bit in 32-bit frames
-        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,  // Capture BOTH channels
+        .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
+        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
         .communication_format = I2S_COMM_FORMAT_STAND_I2S,
         .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
         .dma_buf_count = DMA_BUF_COUNT,
@@ -267,14 +200,78 @@ static bool i2sInit()
         return false;
     }
 
-    Serial.printf("  I2S configured: %d Hz, MCLK=%d Hz\n",
-                  SAMPLE_RATE, SAMPLE_RATE * 256);
+    Serial.printf("  I2S configured: %d Hz, MCLK=%d Hz\n", SAMPLE_RATE, SAMPLE_RATE * 256);
     return true;
 }
 
-// Static buffers to avoid stack overflow (moved from task stack to .bss)
-static int32_t s_dmaBuffer[DMA_BUF_LEN];  // 32-bit for 24-bit audio in 32-bit frames
+#endif // !USE_PDM_MIC
+
+// =============================================================================
+// PDM Mic Functions (when USE_PDM_MIC=1)
+// =============================================================================
+#if USE_PDM_MIC
+
+static bool i2sInitPDM()
+{
+    Serial.println("Initializing I2S (PDM mode for digital MEMS mic)...");
+
+    i2s_config_t i2s_config = {
+        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM),
+        .sample_rate = SAMPLE_RATE,
+        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+        .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,  // Single mic, SELECT pin to GND
+        .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+        .dma_buf_count = DMA_BUF_COUNT,
+        .dma_buf_len = DMA_BUF_LEN,
+        .use_apll = true,
+        .tx_desc_auto_clear = false,
+        .fixed_mclk = 0
+    };
+
+    // PDM mode: WS pin is used as PDM clock output, DATA_IN is PDM data
+    i2s_pin_config_t pin_config = {
+        .mck_io_num = I2S_PIN_NO_CHANGE,
+        .bck_io_num = I2S_PIN_NO_CHANGE,
+        .ws_io_num = PIN_PDM_CLK,       // PDM clock output
+        .data_out_num = I2S_PIN_NO_CHANGE,
+        .data_in_num = PIN_PDM_DATA     // PDM data input
+    };
+
+    esp_err_t err = i2s_driver_install(I2S_PORT, &i2s_config, 0, NULL);
+    if (err != ESP_OK) {
+        Serial.printf("  I2S PDM driver install failed: %d\n", err);
+        return false;
+    }
+
+    err = i2s_set_pin(I2S_PORT, &pin_config);
+    if (err != ESP_OK) {
+        Serial.printf("  I2S PDM pin config failed: %d\n", err);
+        return false;
+    }
+
+    // Set PDM clock - the mic needs a clock in the range of ~1-5 MHz
+    // ESP32 PDM RX generates CLK = sample_rate * PDM_decimation
+    // Default decimation is 64, so 48000 * 64 = 3.072 MHz (perfect for IM72D128/IM73D122)
+
+    Serial.printf("  PDM configured: %d Hz sample rate\n", SAMPLE_RATE);
+    Serial.printf("  PDM CLK: GPIO%d, DATA: GPIO%d\n", PIN_PDM_CLK, PIN_PDM_DATA);
+    return true;
+}
+
+#endif // USE_PDM_MIC
+
+// =============================================================================
+// Common Audio Functions
+// =============================================================================
+
+// Static buffers to avoid stack overflow
+#if USE_PDM_MIC
+static int16_t s_dmaBuffer[DMA_BUF_LEN];  // PDM gives 16-bit directly
+#else
+static int32_t s_dmaBuffer[DMA_BUF_LEN];  // I2S gives 32-bit frames
 static int16_t s_monoBuffer[DMA_BUF_LEN / 2];
+#endif
 
 static void audioTaskFunc(void* param)
 {
@@ -287,26 +284,17 @@ static void audioTaskFunc(void* param)
         i2s_read(I2S_PORT, s_dmaBuffer, sizeof(s_dmaBuffer), &bytesRead, portMAX_DELAY);
     }
 
-    // Debug: print first few samples to verify I2S is working
-    // With stereo capture, samples are interleaved: L0, R0, L1, R1, L2, R2...
+    // Debug: print first samples
     i2s_read(I2S_PORT, s_dmaBuffer, sizeof(s_dmaBuffer), &bytesRead, portMAX_DELAY);
-    Serial.printf("I2S debug - bytes: %d\n", bytesRead);
-    Serial.printf("  Left  channel: %ld %ld %ld %ld\n",
-        (long)s_dmaBuffer[0], (long)s_dmaBuffer[2], (long)s_dmaBuffer[4], (long)s_dmaBuffer[6]);
-    Serial.printf("  Right channel: %ld %ld %ld %ld\n",
-        (long)s_dmaBuffer[1], (long)s_dmaBuffer[3], (long)s_dmaBuffer[5], (long)s_dmaBuffer[7]);
-    Serial.printf("  Hex: 0x%08lX 0x%08lX 0x%08lX 0x%08lX\n",
-        (unsigned long)s_dmaBuffer[0], (unsigned long)s_dmaBuffer[1],
-        (unsigned long)s_dmaBuffer[2], (unsigned long)s_dmaBuffer[3]);
+    Serial.printf("I2S debug - bytes read: %d\n", bytesRead);
 
-    // Check if ANY samples are non-zero
-    int nonZeroCount = 0;
-    for (int i = 0; i < bytesRead / sizeof(int32_t); i++) {
-        if (s_dmaBuffer[i] != 0) nonZeroCount++;
-    }
-    Serial.printf("  Non-zero samples: %d / %d\n", nonZeroCount, (int)(bytesRead / sizeof(int32_t)));
-
-    static int debugCounter = 0;
+#if USE_PDM_MIC
+    Serial.printf("  PDM samples: %d %d %d %d\n",
+        s_dmaBuffer[0], s_dmaBuffer[1], s_dmaBuffer[2], s_dmaBuffer[3]);
+#else
+    Serial.printf("  I2S samples (32-bit): 0x%08lX 0x%08lX\n",
+        (unsigned long)s_dmaBuffer[0], (unsigned long)s_dmaBuffer[1]);
+#endif
 
     while (s_running) {
         esp_err_t err = i2s_read(I2S_PORT, s_dmaBuffer, sizeof(s_dmaBuffer),
@@ -318,30 +306,42 @@ static void audioTaskFunc(void* param)
         }
 
         if (bytesRead > 0) {
-            // Convert 32-bit stereo to 16-bit mono (left channel only)
-            // ES7243E outputs 24-bit data left-justified in 32-bit frame
+#if USE_PDM_MIC
+            // PDM mode: data is already 16-bit mono
+            int numSamples = bytesRead / sizeof(int16_t);
+
+            // Track peak level
+            for (int i = 0; i < numSamples; i++) {
+                int16_t sample = s_dmaBuffer[i];
+                int16_t absSample = sample < 0 ? -sample : sample;
+                if (absSample > s_stats.peakLevel) {
+                    s_stats.peakLevel = absSample;
+                }
+            }
+
+            // Write directly to ring buffer
+            size_t written = s_audioBuffer->write((uint8_t*)s_dmaBuffer, bytesRead);
+            s_stats.samplesCaptures += numSamples;
+
+            if (written < bytesRead) {
+                s_stats.bufferOverflows++;
+            }
+#else
+            // I2S mode: convert 32-bit stereo to 16-bit mono
             int numStereoSamples = bytesRead / (sizeof(int32_t) * 2);
             int monoIdx = 0;
 
-            // Debug: print samples every ~1 second during recording
-            if (debugCounter++ % 100 == 0) {
-                // Serial.printf("Recording: raw32[0]=0x%08lX, >>16=%d, samples=%d\n", (unsigned long)s_dmaBuffer[0], (int)(int16_t)(s_dmaBuffer[0] >> 16), numStereoSamples);
-            }
-
             for (int i = 0; i < numStereoSamples; i++) {
-                // Left channel is at even indices, extract upper 16 bits of 24-bit data
                 int32_t sample32 = s_dmaBuffer[i * 2];  // Left channel
-                int16_t sample16 = (int16_t)(sample32 >> 16);  // Take upper 16 bits
+                int16_t sample16 = (int16_t)(sample32 >> 16);
                 s_monoBuffer[monoIdx++] = sample16;
 
-                // Track peak level
                 int16_t absSample = sample16 < 0 ? -sample16 : sample16;
                 if (absSample > s_stats.peakLevel) {
                     s_stats.peakLevel = absSample;
                 }
             }
 
-            // Write 16-bit mono to ring buffer
             size_t bytesToWrite = monoIdx * sizeof(int16_t);
             size_t written = s_audioBuffer->write((uint8_t*)s_monoBuffer, bytesToWrite);
             s_stats.samplesCaptures += monoIdx;
@@ -349,6 +349,7 @@ static void audioTaskFunc(void* param)
             if (written < bytesToWrite) {
                 s_stats.bufferOverflows++;
             }
+#endif
         }
     }
 
@@ -360,19 +361,30 @@ bool audioInit(RingBuffer* buffer)
 {
     s_audioBuffer = buffer;
 
-    // Start I2S FIRST to get MCLK running - ES7243E needs clock before config
-    if (!i2sInit()) {
+#if USE_PDM_MIC
+    Serial.println("\n=== PDM Digital Mic Mode ===");
+    Serial.println("Using IM72D128/IM73D122 digital MEMS microphone");
+
+    if (!i2sInitPDM()) {
+        return false;
+    }
+#else
+    Serial.println("\n=== I2S ADC Mode ===");
+    Serial.println("Using ES7243E I2S ADC");
+
+    // Start I2S first to get MCLK running
+    if (!i2sInitStandard()) {
         return false;
     }
 
     // Give MCLK time to stabilize
     delay(50);
 
-    // Now configure ES7243E with MCLK running
+    // Configure ES7243E
     if (!es7243eInit()) {
         Serial.println("ES7243E init failed - continuing anyway for testing");
-        // Don't return false - allow testing without ES7243E
     }
+#endif
 
     return true;
 }
@@ -398,7 +410,6 @@ void audioStart()
 void audioStop()
 {
     s_running = false;
-    // Task will delete itself
     s_audioTask = nullptr;
 }
 

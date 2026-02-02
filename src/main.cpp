@@ -29,6 +29,9 @@
 
 #include <Arduino.h>
 #include "config.h"
+#if !DISABLE_BLE
+#include <NimBLEDevice.h>
+#endif
 #include "ring_buffer.h"
 #include "audio_capture.h"
 #include "sd_writer.h"
@@ -36,11 +39,97 @@
 #include "battery.h"
 #include "temperature.h"
 
+#if !DISABLE_BLE
+// Nordic UART Service UUIDs
+#define SERVICE_UUID           "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
+#define CHARACTERISTIC_UUID_RX "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
+#define CHARACTERISTIC_UUID_TX "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
+
+// BLE objects
+static NimBLEServer* pServer = nullptr;
+static NimBLECharacteristic* pTxCharacteristic = nullptr;
+static bool bleConnected = false;
+static String bleRxBuffer = "";
+
+// BLE callbacks
+class ServerCallbacks : public NimBLEServerCallbacks {
+    void onConnect(NimBLEServer* pServer) {
+        bleConnected = true;
+        Serial.println("BLE client connected");
+    }
+    void onDisconnect(NimBLEServer* pServer) {
+        bleConnected = false;
+        Serial.println("BLE client disconnected");
+        // Restart advertising
+        NimBLEDevice::startAdvertising();
+    }
+};
+
+class RxCallbacks : public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic* pCharacteristic) {
+        std::string rxValue = pCharacteristic->getValue();
+        if (rxValue.length() > 0) {
+            bleRxBuffer += rxValue.c_str();
+        }
+    }
+};
+#endif // !DISABLE_BLE
+
 // Global ring buffer for audio data
 static RingBuffer *audioBuffer = nullptr;
 
 // Recording state
 static bool isRecording = false;
+
+#if !DISABLE_BLE
+// BLE send helper (splits long messages into 20-byte chunks)
+static void bleSend(const char* str)
+{
+    if (!bleConnected || !pTxCharacteristic) return;
+
+    size_t len = strlen(str);
+    size_t offset = 0;
+    while (offset < len) {
+        size_t chunkLen = min((size_t)20, len - offset);
+        pTxCharacteristic->setValue((uint8_t*)(str + offset), chunkLen);
+        pTxCharacteristic->notify();
+        offset += chunkLen;
+        delay(10);  // Give BLE stack time to send
+    }
+}
+#endif // !DISABLE_BLE
+
+// Dual-output print helpers (Serial + BLE)
+static void logPrint(const char* str)
+{
+    Serial.print(str);
+#if !DISABLE_BLE
+    bleSend(str);
+#endif
+}
+
+static void logPrintf(const char* format, ...)
+{
+    char buf[256];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(buf, sizeof(buf), format, args);
+    va_end(args);
+    Serial.print(buf);
+#if !DISABLE_BLE
+    bleSend(buf);
+#endif
+}
+
+static void logPrintln(const char* str = "")
+{
+    Serial.println(str);
+#if !DISABLE_BLE
+    char buf[258];
+    snprintf(buf, sizeof(buf), "%s\r\n", str);
+    bleSend(buf);
+#endif
+}
 
 // Forward declarations
 void printStatus();
@@ -53,35 +142,73 @@ void setup()
     Serial.begin(115200);
     delay(1000);
 
-    Serial.println("\n\n");
-    Serial.println("================================================");
-    Serial.println("  QuailTracker - Autonomous Recording Unit");
-    Serial.printf("  Firmware Version: %s\n", FIRMWARE_VERSION);
-    Serial.println("================================================");
-    Serial.printf("ESP32 CPU Freq: %d MHz\n", ESP.getCpuFreqMHz());
-    Serial.printf("Free Heap: %d bytes\n", ESP.getFreeHeap());
-    Serial.println();
+#if !DISABLE_BLE
+    // Initialize NimBLE
+    NimBLEDevice::init("QuailTracker");
+    pServer = NimBLEDevice::createServer();
+    pServer->setCallbacks(new ServerCallbacks());
+
+    NimBLEService* pService = pServer->createService(SERVICE_UUID);
+
+    pTxCharacteristic = pService->createCharacteristic(
+        CHARACTERISTIC_UUID_TX,
+        NIMBLE_PROPERTY::NOTIFY
+    );
+
+    NimBLECharacteristic* pRxCharacteristic = pService->createCharacteristic(
+        CHARACTERISTIC_UUID_RX,
+        NIMBLE_PROPERTY::WRITE
+    );
+    pRxCharacteristic->setCallbacks(new RxCallbacks());
+
+    pService->start();
+
+    // Configure advertising
+    NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
+    pAdvertising->addServiceUUID(SERVICE_UUID);
+    pAdvertising->setName("QuailTracker");
+    pAdvertising->setScanResponse(true);
+    pAdvertising->setMinPreferred(0x06);  // For iPhone compatibility
+    pAdvertising->setMaxPreferred(0x12);
+    pAdvertising->start();
+    Serial.println("BLE advertising started");
+    Serial.printf("BLE MAC: %s\n", NimBLEDevice::getAddress().toString().c_str());
+#endif
+
+    logPrintln("\n\n");
+    logPrintln("================================================");
+    logPrintln("  QuailTracker - Autonomous Recording Unit");
+    logPrintf("  Firmware Version: %s\n", FIRMWARE_VERSION);
+    logPrintln("================================================");
+    logPrintf("ESP32 CPU Freq: %d MHz\n", ESP.getCpuFreqMHz());
+    logPrintf("Free Heap: %d bytes\n", ESP.getFreeHeap());
+    logPrintln();
+#if !DISABLE_BLE
+    logPrintln("BLE: QuailTracker (Nordic UART Service)");
+#else
+    logPrintln("BLE: DISABLED (noise testing mode)");
+#endif
 
     // Create audio ring buffer
-    Serial.printf("Creating ring buffer (%d bytes)...\n", RING_BUFFER_SIZE);
-    Serial.printf("Free heap before: %d bytes\n", ESP.getFreeHeap());
+    logPrintf("Creating ring buffer (%d bytes)...\n", RING_BUFFER_SIZE);
+    logPrintf("Free heap before: %d bytes\n", ESP.getFreeHeap());
 
     audioBuffer = new RingBuffer(RING_BUFFER_SIZE);
 
     if (!audioBuffer->isValid())
     {
-        Serial.println("FATAL: Ring buffer allocation failed!");
-        Serial.println("Halting...");
+        logPrintln("FATAL: Ring buffer allocation failed!");
+        logPrintln("Halting...");
         while (1)
         {
             delay(1000);
         }
     }
-    Serial.printf("Free heap after: %d bytes\n", ESP.getFreeHeap());
-    Serial.println("Ring buffer OK");
+    logPrintf("Free heap after: %d bytes\n", ESP.getFreeHeap());
+    logPrintln("Ring buffer OK");
 
     // Initialize subsystems
-    Serial.println("\n--- Initializing Subsystems ---\n");
+    logPrintln("\n--- Initializing Subsystems ---\n");
 
     // Battery monitor
     batteryInit();
@@ -90,32 +217,32 @@ void setup()
     bool sdOk = sdWriterInit(audioBuffer);
     if (!sdOk)
     {
-        Serial.println("WARNING: SD card not available!");
+        logPrintln("WARNING: SD card not available!");
     }
 
     // GPS
     bool gpsOk = gpsInit();
     if (!gpsOk)
     {
-        Serial.println("WARNING: GPS init failed!");
+        logPrintln("WARNING: GPS init failed!");
     }
 
     // Audio (I2S + ES7243E)
     bool audioOk = audioInit(audioBuffer);
     if (!audioOk)
     {
-        Serial.println("WARNING: Audio init failed!");
+        logPrintln("WARNING: Audio init failed!");
     }
 
     // Temperature/Humidity sensor
     bool tempOk = tempInit();
     if (!tempOk)
     {
-        Serial.println("WARNING: Temperature sensor not found!");
+        logPrintln("WARNING: Temperature sensor not found!");
     }
 
     // Start background tasks
-    Serial.println("\n--- Starting Tasks ---\n");
+    logPrintln("\n--- Starting Tasks ---\n");
 
     batteryStart();
     gpsStart();
@@ -126,18 +253,33 @@ void setup()
         tempStart();
     }
 
-    Serial.println("\n--- System Ready ---\n");
+    logPrintln("\n--- System Ready ---\n");
     printMenu();
+}
+
+// Get command character from Serial or BLE
+static int getCommand()
+{
+    if (Serial.available()) {
+        int c = Serial.read();
+        while (Serial.available()) Serial.read();  // Flush
+        return c;
+    }
+#if !DISABLE_BLE
+    if (bleRxBuffer.length() > 0) {
+        int c = bleRxBuffer[0];
+        bleRxBuffer.remove(0, 1);
+        return c;
+    }
+#endif
+    return -1;
 }
 
 void loop()
 {
-    if (Serial.available())
+    int c = getCommand();
+    if (c >= 0)
     {
-        char c = Serial.read();
-        // Flush extra characters
-        while (Serial.available())
-            Serial.read();
 
         switch (c)
         {
@@ -153,7 +295,7 @@ void loop()
             }
             else
             {
-                Serial.println("Already recording!");
+                logPrintln("Already recording!");
             }
             printMenu();
             break;
@@ -165,7 +307,7 @@ void loop()
             }
             else
             {
-                Serial.println("Not recording!");
+                logPrintln("Not recording!");
             }
             printMenu();
             break;
@@ -175,14 +317,14 @@ void loop()
             SDCardInfo info = sdGetCardInfo();
             if (info.mounted)
             {
-                Serial.println("\n=== SD Card Info ===");
-                Serial.printf("Total: %llu MB\n", info.totalBytes / (1024 * 1024));
-                Serial.printf("Used:  %llu MB\n", info.usedBytes / (1024 * 1024));
-                Serial.printf("Free:  %llu MB\n", info.freeBytes / (1024 * 1024));
+                logPrintln("\n=== SD Card Info ===");
+                logPrintf("Total: %llu MB\n", info.totalBytes / (1024 * 1024));
+                logPrintf("Used:  %llu MB\n", info.usedBytes / (1024 * 1024));
+                logPrintf("Free:  %llu MB\n", info.freeBytes / (1024 * 1024));
             }
             else
             {
-                Serial.println("SD card not mounted!");
+                logPrintln("SD card not mounted!");
             }
             printMenu();
             break;
@@ -194,19 +336,19 @@ void loop()
             uint32_t validSentences, checksumErrors;
             gpsGetStats(&validSentences, &checksumErrors);
 
-            Serial.println("\n=== GPS Data ===");
-            Serial.printf("Valid: %s\n", gps.valid ? "Yes" : "No");
-            Serial.printf("Satellites: %d\n", gps.satellites);
-            Serial.printf("Position: %.6f, %.6f\n", gps.latitude, gps.longitude);
-            Serial.printf("Altitude: %.1f m\n", gps.altitude);
-            Serial.printf("Time: %02d:%02d:%02d UTC\n",
+            logPrintln("\n=== GPS Data ===");
+            logPrintf("Valid: %s\n", gps.valid ? "Yes" : "No");
+            logPrintf("Satellites: %d\n", gps.satellites);
+            logPrintf("Position: %.6f, %.6f\n", gps.latitude, gps.longitude);
+            logPrintf("Altitude: %.1f m\n", gps.altitude);
+            logPrintf("Time: %02d:%02d:%02d UTC\n",
                           gps.hour, gps.minute, gps.second);
-            Serial.printf("Date: %04d-%02d-%02d\n",
+            logPrintf("Date: %04d-%02d-%02d\n",
                           gps.year, gps.month, gps.day);
-            Serial.printf("PPS: %s (last: %lu ms ago)\n",
+            logPrintf("PPS: %s (last: %lu ms ago)\n",
                           gps.ppsValid ? "OK" : "No signal",
                           millis() - gps.lastPpsTime);
-            Serial.printf("NMEA: %lu valid, %lu checksum errors\n",
+            logPrintf("NMEA: %lu valid, %lu checksum errors\n",
                           validSentences, checksumErrors);
             printMenu();
             break;
@@ -215,10 +357,10 @@ void loop()
         case '6':
         {
             BatteryData batt = batteryGetData();
-            Serial.println("\n=== Battery ===");
-            Serial.printf("Voltage: %.2f V\n", batt.voltage);
-            Serial.printf("Level: %d%%\n", batt.percentage);
-            Serial.printf("Status: %s\n",
+            logPrintln("\n=== Battery ===");
+            logPrintf("Voltage: %.2f V\n", batt.voltage);
+            logPrintf("Level: %d%%\n", batt.percentage);
+            logPrintf("Status: %s\n",
                           batt.level == BATTERY_OK ? "OK" : batt.level == BATTERY_LOW ? "LOW"
                                                                                       : "CRITICAL");
             printMenu();
@@ -230,24 +372,24 @@ void loop()
             if (tempIsPresent())
             {
                 TempHumidityData temp = tempGetData();
-                Serial.println("\n=== Temperature/Humidity ===");
+                logPrintln("\n=== Temperature/Humidity ===");
                 if (temp.valid)
                 {
-                    Serial.printf("Temperature: %.1f C (%.1f F)\n",
+                    logPrintf("Temperature: %.1f C (%.1f F)\n",
                                   temp.temperature,
                                   temp.temperature * 9.0f / 5.0f + 32.0f);
-                    Serial.printf("Humidity: %.1f%%\n", temp.humidity);
-                    Serial.printf("Last read: %lu ms ago\n",
+                    logPrintf("Humidity: %.1f%%\n", temp.humidity);
+                    logPrintf("Last read: %lu ms ago\n",
                                   millis() - temp.lastReadTime);
                 }
                 else
                 {
-                    Serial.println("No valid reading yet");
+                    logPrintln("No valid reading yet");
                 }
             }
             else
             {
-                Serial.println("\nTemperature sensor not present!");
+                logPrintln("\nTemperature sensor not present!");
             }
             printMenu();
             break;
@@ -295,7 +437,7 @@ void loop()
         BatteryData batt = batteryGetData();
         if (batt.level == BATTERY_CRITICAL)
         {
-            Serial.println("\n!!! CRITICAL BATTERY - STOPPING RECORDING !!!\n");
+            logPrintln("\n!!! CRITICAL BATTERY - STOPPING RECORDING !!!\n");
             stopRecording();
         }
     }
@@ -305,34 +447,34 @@ void loop()
 
 void printStatus()
 {
-    Serial.println("\n========== STATUS ==========");
+    logPrintln("\n========== STATUS ==========");
 
     // Audio
     AudioStats audio = audioGetStats();
-    Serial.println("Audio:");
-    Serial.printf("  Running: %s\n", audioIsRunning() ? "Yes" : "No");
-    Serial.printf("  Samples: %lu\n", audio.samplesCaptures);
-    Serial.printf("  Overflows: %lu\n", audio.bufferOverflows);
-    Serial.printf("  Peak Level: %d\n", audio.peakLevel);
-    Serial.printf("  Buffer: %d / %d bytes\n",
+    logPrintln("Audio:");
+    logPrintf("  Running: %s\n", audioIsRunning() ? "Yes" : "No");
+    logPrintf("  Samples: %lu\n", audio.samplesCaptures);
+    logPrintf("  Overflows: %lu\n", audio.bufferOverflows);
+    logPrintf("  Peak Level: %d\n", audio.peakLevel);
+    logPrintf("  Buffer: %d / %d bytes\n",
                   audioBuffer->available(), audioBuffer->capacity());
 
     // Recording
     SDWriterStats sd = sdWriterGetStats();
-    Serial.println("Recording:");
-    Serial.printf("  Active: %s\n", isRecording ? "Yes" : "No");
+    logPrintln("Recording:");
+    logPrintf("  Active: %s\n", isRecording ? "Yes" : "No");
     if (isRecording)
     {
-        Serial.printf("  File: %s\n", sd.currentFilename);
-        Serial.printf("  Size: %lu bytes\n", sd.currentFileSize);
-        Serial.printf("  Errors: %lu\n", sd.writeErrors);
+        logPrintf("  File: %s\n", sd.currentFilename);
+        logPrintf("  Size: %lu bytes\n", sd.currentFileSize);
+        logPrintf("  Errors: %lu\n", sd.writeErrors);
     }
 
     // SD Card
-    Serial.println("SD Card:");
-    Serial.printf("  Inserted: %s\n", sdCardInserted() ? "Yes" : "No");
+    logPrintln("SD Card:");
+    logPrintf("  Inserted: %s\n", sdCardInserted() ? "Yes" : "No");
     SDCardInfo cardInfo = sdGetCardInfo();
-    Serial.printf("  Mounted: %s\n", cardInfo.mounted ? "Yes" : "No");
+    logPrintf("  Mounted: %s\n", cardInfo.mounted ? "Yes" : "No");
 
     // GPS
     GPSData gps = gpsGetData();
@@ -342,57 +484,57 @@ void printStatus()
         case GPS_STANDBY:    gpsPowerStr = "Standby (~1mA)"; break;
         case GPS_BACKUP:     gpsPowerStr = "Backup (~7uA)"; break;
     }
-    Serial.println("GPS:");
-    Serial.printf("  Power: %s\n", gpsPowerStr);
-    Serial.printf("  Fix: %s (%d sats)\n",
+    logPrintln("GPS:");
+    logPrintf("  Power: %s\n", gpsPowerStr);
+    logPrintf("  Fix: %s (%d sats)\n",
                   gps.valid ? "Yes" : "No", gps.satellites);
-    Serial.printf("  PPS: %s\n", gps.ppsValid ? "OK" : "No signal");
+    logPrintf("  PPS: %s\n", gps.ppsValid ? "OK" : "No signal");
 
     // Battery
     BatteryData batt = batteryGetData();
-    Serial.println("Battery:");
-    Serial.printf("  %.2fV (%d%%)\n", batt.voltage, batt.percentage);
+    logPrintln("Battery:");
+    logPrintf("  %.2fV (%d%%)\n", batt.voltage, batt.percentage);
 
     // Temperature/Humidity
     if (tempIsPresent())
     {
         TempHumidityData temp = tempGetData();
-        Serial.println("Environment:");
+        logPrintln("Environment:");
         if (temp.valid)
         {
-            Serial.printf("  %.1fC / %.1f%% RH\n", temp.temperature, temp.humidity);
+            logPrintf("  %.1fC / %.1f%% RH\n", temp.temperature, temp.humidity);
         }
         else
         {
-            Serial.println("  (no reading)");
+            logPrintln("  (no reading)");
         }
     }
 
-    Serial.println("============================\n");
+    logPrintln("============================\n");
 }
 
 void printMenu()
 {
-    Serial.println("\n===== MENU =====");
-    Serial.println("1. Status");
-    Serial.println("2. Start Recording");
-    Serial.println("3. Stop Recording");
-    Serial.println("4. SD Card Info");
-    Serial.println("5. GPS Data");
-    Serial.println("6. Battery");
-    Serial.println("7. Temperature/Humidity");
-    Serial.println("8. GPS Continuous Mode");
-    Serial.println("9. GPS Standby Mode");
-    Serial.println("0. GPS Backup Mode");
-    Serial.println("R. Toggle Recording");
-    Serial.println("D. GPS Debug (raw UART)");
-    Serial.println("================");
-    Serial.printf("[%s] > ", isRecording ? "REC" : "IDLE");
+    logPrintln("\n===== MENU =====");
+    logPrintln("1. Status");
+    logPrintln("2. Start Recording");
+    logPrintln("3. Stop Recording");
+    logPrintln("4. SD Card Info");
+    logPrintln("5. GPS Data");
+    logPrintln("6. Battery");
+    logPrintln("7. Temperature/Humidity");
+    logPrintln("8. GPS Continuous Mode");
+    logPrintln("9. GPS Standby Mode");
+    logPrintln("0. GPS Backup Mode");
+    logPrintln("R. Toggle Recording");
+    logPrintln("D. GPS Debug (raw UART)");
+    logPrintln("================");
+    logPrintf("[%s] > ", isRecording ? "REC" : "IDLE");
 }
 
 void startRecording()
 {
-    Serial.println("\nStarting recording...");
+    logPrintln("\nStarting recording...");
 
     // Reset audio stats
     audioResetStats();
@@ -405,26 +547,26 @@ void startRecording()
     uint32_t timestamp = gpsGetTimestamp();
     if (!sdWriterStartRecording(timestamp))
     {
-        Serial.println("Failed to start recording!");
+        logPrintln("Failed to start recording!");
         return;
     }
 
     isRecording = true;
-    Serial.println("Recording started!");
+    logPrintln("Recording started!");
 }
 
 void stopRecording()
 {
-    Serial.println("\nStopping recording...");
+    logPrintln("\nStopping recording...");
 
     sdWriterStopRecording();
     isRecording = false;
 
     // Print final stats
     AudioStats audio = audioGetStats();
-    Serial.printf("Total samples captured: %lu\n", audio.samplesCaptures);
-    Serial.printf("Buffer overflows: %lu\n", audio.bufferOverflows);
-    Serial.printf("Ring buffer overflows: %lu\n", audioBuffer->getOverflowCount());
+    logPrintf("Total samples captured: %lu\n", audio.samplesCaptures);
+    logPrintf("Buffer overflows: %lu\n", audio.bufferOverflows);
+    logPrintf("Ring buffer overflows: %lu\n", audioBuffer->getOverflowCount());
 
-    Serial.println("Recording stopped!");
+    logPrintln("Recording stopped!");
 }

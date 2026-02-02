@@ -26,7 +26,14 @@
 // -----------------------------------------------------------------------------
 // Version
 // -----------------------------------------------------------------------------
-#define FIRMWARE_VERSION "0.1.28"
+#define FIRMWARE_VERSION "0.1.34"
+
+// -----------------------------------------------------------------------------
+// Feature Flags
+// -----------------------------------------------------------------------------
+#define DISABLE_BLE     1   // Set to 1 to disable BLE for noise testing
+#define USE_PDM_MIC     1   // Set to 1 for PDM digital mic (IM72D128/IM73D122)
+                            // Set to 0 for I2S ADC (ES7243E)
 
 // -----------------------------------------------------------------------------
 // Core Assignment
@@ -54,7 +61,13 @@
 #define STACK_TEMP          2048
 
 // -----------------------------------------------------------------------------
-// I2S Pins (ES7243E ADC)
+// PDM Mic Pins (IM72D128 / IM73D122 digital MEMS)
+// -----------------------------------------------------------------------------
+#define PIN_PDM_CLK     14  // PDM clock output to mic (directly drives mic CLOCK pin)
+#define PIN_PDM_DATA    32  // PDM data input from mic
+
+// -----------------------------------------------------------------------------
+// I2S Pins (ES7243E ADC) - only used if USE_PDM_MIC=0
 // -----------------------------------------------------------------------------
 #define PIN_I2S_MCLK    0   // Master clock to ES7243E
 #define PIN_I2S_BCLK    14  // Bit clock
@@ -62,7 +75,7 @@
 #define PIN_I2S_DIN     32  // Data from ES7243E
 
 // -----------------------------------------------------------------------------
-// I2C Pins (ES7243E configuration)
+// I2C Pins (ES7243E configuration) - only used if USE_PDM_MIC=0
 // -----------------------------------------------------------------------------
 #define PIN_I2C_SDA     21
 #define PIN_I2C_SCL     22
@@ -137,7 +150,7 @@
 // Power Management
 // -----------------------------------------------------------------------------
 #define BATTERY_CHECK_INTERVAL_MS   60000   // Check every minute
-#define BATTERY_LOW_THRESHOLD       3.3     // Volts
-#define BATTERY_CRITICAL_THRESHOLD  3.1     // Volts
+#define BATTERY_LOW_THRESHOLD       2.8     // Volts (lowered for bench testing)
+#define BATTERY_CRITICAL_THRESHOLD  2.6     // Volts (lowered for bench testing)
 
 #endif // CONFIG_H
