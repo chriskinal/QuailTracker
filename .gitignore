@@ -21,6 +21,7 @@
 # STM32CubeIDE build output
 stm32/**/Debug/
 stm32/**/Release/
+stm32/**/.pio/
 *.launch
 *.list
 *.map
