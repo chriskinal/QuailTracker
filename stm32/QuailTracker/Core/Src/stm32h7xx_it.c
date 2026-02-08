@@ -84,7 +84,11 @@ void NMI_Handler(void)
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
-
+  const char *msg = "\r\n!!! HardFault !!!\r\n";
+  while (*msg) {
+      while (!(USART3->ISR & USART_ISR_TXE_TXFNF));
+      USART3->TDR = *msg++;
+  }
   /* USER CODE END HardFault_IRQn 0 */
   while (1)
   {

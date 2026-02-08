@@ -54,7 +54,6 @@ UART_HandleTypeDef huart3;
 /* USER CODE BEGIN PV */
 #define AUDIO_BUF_SIZE 1024
 #define SAMPLE_RATE    50000
-#define RECORD_SECONDS 5
 
 __attribute__((section(".RAM_D2"))) int32_t audioBuffer[AUDIO_BUF_SIZE];
 volatile uint8_t halfComplete = 0;
@@ -62,6 +61,13 @@ volatile uint8_t fullComplete = 0;
 
 /* Conversion buffer: 512 DFSDM samples -> 512 int16 samples = 1024 bytes */
 int16_t pcmBuffer[AUDIO_BUF_SIZE / 2];
+
+/* Recording state */
+static FIL wavFile;
+static uint8_t isRecording = 0;
+static uint8_t sdMounted = 0;
+static uint32_t totalDataBytes = 0;
+static uint32_t fileCounter = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -78,11 +84,27 @@ static void MX_SPI1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+/* Direct UART TX — bypasses HAL state machine entirely */
 int _write(int file, char *ptr, int len)
- {
-     HAL_UART_Transmit(&huart3, (uint8_t*)ptr, len, HAL_MAX_DELAY);
-     return len;
- }
+{
+    for (int i = 0; i < len; i++) {
+        while (!(USART3->ISR & USART_ISR_TXE_TXFNF));
+        USART3->TDR = (uint8_t)ptr[i];
+    }
+    return len;
+}
+
+/* Direct UART RX — non-blocking, clears errors */
+static int getChar(void)
+{
+    /* Clear any error flags */
+    USART3->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
+    /* Check if data available */
+    if (USART3->ISR & USART_ISR_RXNE_RXFNE) {
+        return (int)(USART3->RDR & 0xFF);
+    }
+    return -1;
+}
 
 static void WAV_WriteHeader(FIL *fp, uint32_t sampleRate, uint32_t dataSize)
 {
@@ -93,12 +115,10 @@ static void WAV_WriteHeader(FIL *fp, uint32_t sampleRate, uint32_t dataSize)
     uint32_t byteRate = sampleRate * channels * bitsPerSample / 8;
     uint16_t blockAlign = channels * bitsPerSample / 8;
 
-    /* RIFF header */
     memcpy(&hdr[0], "RIFF", 4);
     memcpy(&hdr[4], &fileSize, 4);
     memcpy(&hdr[8], "WAVE", 4);
 
-    /* fmt subchunk */
     memcpy(&hdr[12], "fmt ", 4);
     uint32_t fmtSize = 16;
     memcpy(&hdr[16], &fmtSize, 4);
@@ -110,12 +130,152 @@ static void WAV_WriteHeader(FIL *fp, uint32_t sampleRate, uint32_t dataSize)
     memcpy(&hdr[32], &blockAlign, 2);
     memcpy(&hdr[34], &bitsPerSample, 2);
 
-    /* data subchunk */
     memcpy(&hdr[36], "data", 4);
     memcpy(&hdr[40], &dataSize, 4);
 
     UINT bw;
     f_write(fp, hdr, 44, &bw);
+}
+
+static void printMenu(void)
+{
+    printf("\r\n===== MENU =====\r\n");
+    printf("1. Status\r\n");
+    printf("2. Start Recording\r\n");
+    printf("3. Stop Recording\r\n");
+    printf("4. SD Card Info\r\n");
+    printf("5. Format SD Card\r\n");
+    printf("6. Eject SD Card\r\n");
+    printf("7. Mount SD Card\r\n");
+    printf("R. Toggle Recording\r\n");
+    printf("================\r\n");
+    printf("[%s] > ", isRecording ? "REC" : "IDLE");
+}
+
+static void printStatus(void)
+{
+    printf("\r\n========== STATUS ==========\r\n");
+
+    printf("Audio:\r\n");
+    printf("  DFSDM: Running (Sinc3, FOSR=64)\r\n");
+    printf("  Sample Rate: %lu Hz\r\n", (unsigned long)SAMPLE_RATE);
+    printf("  DMA Buffer: %d x 32-bit\r\n", AUDIO_BUF_SIZE);
+
+    printf("Recording:\r\n");
+    printf("  Active: %s\r\n", isRecording ? "Yes" : "No");
+    if (isRecording) {
+        uint32_t seconds = totalDataBytes / (SAMPLE_RATE * 2);
+        printf("  Duration: %lus\r\n", (unsigned long)seconds);
+        printf("  Size: %lu bytes\r\n", (unsigned long)totalDataBytes);
+    }
+
+    printf("SD Card:\r\n");
+    printf("  Mounted: %s\r\n", sdMounted ? "Yes" : "No");
+    if (sdMounted) {
+        FATFS *fs;
+        DWORD fre_clust;
+        if (f_getfree("", &fre_clust, &fs) == FR_OK) {
+            DWORD tot_sect = (fs->n_fatent - 2) * fs->csize;
+            DWORD fre_sect = fre_clust * fs->csize;
+            printf("  Total: %lu KB\r\n", (unsigned long)(tot_sect / 2));
+            printf("  Free:  %lu KB\r\n", (unsigned long)(fre_sect / 2));
+        }
+    }
+
+    printf("============================\r\n");
+}
+
+static void startRecording(void)
+{
+    if (!sdMounted) {
+        printf("SD card not mounted!\r\n");
+        return;
+    }
+    if (isRecording) {
+        printf("Already recording!\r\n");
+        return;
+    }
+
+    /* Generate filename: rec_000.wav, rec_001.wav, ... */
+    char fname[20];
+    snprintf(fname, sizeof(fname), "rec_%03lu.wav", (unsigned long)fileCounter);
+
+    FRESULT fres = f_open(&wavFile, fname, FA_WRITE | FA_CREATE_ALWAYS);
+    if (fres != FR_OK) {
+        printf("f_open FAILED: %d\r\n", fres);
+        return;
+    }
+
+    /* Write placeholder header (will be rewritten on stop) */
+    WAV_WriteHeader(&wavFile, SAMPLE_RATE, 0);
+    f_sync(&wavFile);
+
+    totalDataBytes = 0;
+    isRecording = 1;
+    fileCounter++;
+
+    printf("Recording to %s...\r\n", fname);
+}
+
+static void stopRecording(void)
+{
+    if (!isRecording) {
+        printf("Not recording!\r\n");
+        return;
+    }
+
+    isRecording = 0;
+
+    /* Rewrite WAV header with actual data size */
+    f_lseek(&wavFile, 0);
+    WAV_WriteHeader(&wavFile, SAMPLE_RATE, totalDataBytes);
+    f_close(&wavFile);
+
+    uint32_t seconds = totalDataBytes / (SAMPLE_RATE * 2);
+    printf("Recording stopped: %lu bytes (%lus)\r\n",
+        (unsigned long)totalDataBytes, (unsigned long)seconds);
+}
+
+static int formatSD(void)
+{
+    extern FATFS USERFatFS;
+    extern char USERPath[];
+
+    printf("Formatting SD card (FAT32)...\r\n");
+
+    /* Unmount first if mounted */
+    if (sdMounted) {
+        f_mount(NULL, USERPath, 0);
+        sdMounted = 0;
+    }
+
+    /* Mount with no forced check (needed for f_mkfs) */
+    FRESULT fres = f_mount(&USERFatFS, USERPath, 0);
+    if (fres != FR_OK) {
+        printf("f_mount failed: %d\r\n", fres);
+        return 0;
+    }
+
+    /* Format as FAT32, default allocation unit */
+    static uint8_t workBuf[512];
+    fres = f_mkfs(USERPath, FM_FAT32, 0, workBuf, sizeof(workBuf));
+    if (fres != FR_OK) {
+        printf("f_mkfs failed: %d\r\n", fres);
+        f_mount(NULL, USERPath, 0);
+        return 0;
+    }
+
+    /* Remount to verify */
+    f_mount(NULL, USERPath, 0);
+    fres = f_mount(&USERFatFS, USERPath, 1);
+    if (fres != FR_OK) {
+        printf("Mount after format failed: %d\r\n", fres);
+        return 0;
+    }
+
+    sdMounted = 1;
+    printf("Format complete, SD card ready\r\n");
+    return 1;
 }
 /* USER CODE END 0 */
 
@@ -157,48 +317,40 @@ int main(void)
   MX_SPI1_Init();
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
-  HAL_Delay(5000);
-  char msg[] = "\r\nHello from Nucleo\r\n";
-  HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
-  HAL_UART_Transmit(&huart3, (uint8_t*)"DFSDM init passed\r\n", 19, HAL_MAX_DELAY);
+  setvbuf(stdout, NULL, _IONBF, 0); /* Disable stdout buffering — printf goes straight to UART */
+  HAL_Delay(3000);
 
-  HAL_StatusTypeDef dma_status = HAL_DFSDM_FilterRegularStart_DMA(&hdfsdm1_filter0, audioBuffer, AUDIO_BUF_SIZE);
-  if (dma_status != HAL_OK) {
-      char err[32];
-      snprintf(err, sizeof(err), "DMA FAILED: %d\r\n", dma_status);
-      HAL_UART_Transmit(&huart3, (uint8_t*)err, strlen(err), HAL_MAX_DELAY);
+  printf("\r\n\r\n");
+  printf("================================================\r\n");
+  printf("  QuailTracker STM32 - PDM Audio Prototype\r\n");
+  printf("  Nucleo-H723ZG + IM73D122 + SD Card\r\n");
+  printf("================================================\r\n");
+
+  /* Start DFSDM DMA */
+  printf("DFSDM: ");
+  if (HAL_DFSDM_FilterRegularStart_DMA(&hdfsdm1_filter0, audioBuffer, AUDIO_BUF_SIZE) != HAL_OK) {
+      printf("FAILED\r\n");
   } else {
-      HAL_UART_Transmit(&huart3, (uint8_t*)"DMA running\r\n", 13, HAL_MAX_DELAY);
+      printf("OK (50kHz, Sinc3)\r\n");
   }
 
-  /* Mount SD card */
+  /* Mount SD card — auto-format if unrecognized */
   extern FATFS USERFatFS;
   extern char USERPath[];
-  FRESULT fres = f_mount(&USERFatFS, USERPath, 1);
-  if (fres != FR_OK) {
-      printf("f_mount FAILED: %d\r\n", fres);
+  printf("SD Card: ");
+  if (f_mount(&USERFatFS, USERPath, 1) == FR_OK) {
+      sdMounted = 1;
+      printf("Mounted\r\n");
   } else {
-      printf("SD card mounted OK\r\n");
-  }
-
-  /* Record WAV file */
-  static FIL wavFile;
-  uint8_t recording = 0;
-  uint32_t totalDataBytes = 0;
-  uint32_t targetBytes = SAMPLE_RATE * RECORD_SECONDS * sizeof(int16_t);
-
-  if (fres == FR_OK) {
-      fres = f_open(&wavFile, "record.wav", FA_WRITE | FA_CREATE_ALWAYS);
-      if (fres != FR_OK) {
-          printf("f_open FAILED: %d\r\n", fres);
+      printf("Not readable, formatting...\r\n");
+      if (formatSD()) {
+          printf("SD Card: Ready\r\n");
       } else {
-          WAV_WriteHeader(&wavFile, SAMPLE_RATE, targetBytes);
-          fres = f_sync(&wavFile);
-          printf("Header written, sync=%d\r\n", fres);
-          recording = 1;
-          printf("Recording %d seconds to record.wav...\r\n", RECORD_SECONDS);
+          printf("SD Card: No card detected\r\n");
       }
   }
+
+  printMenu();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -208,7 +360,117 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    if (recording) {
+
+    /* Process serial commands */
+    int c = getChar();
+    if (c >= 0) {
+        switch (c) {
+        case '1':
+            printStatus();
+            printMenu();
+            break;
+
+        case '2':
+            startRecording();
+            printMenu();
+            break;
+
+        case '3':
+            stopRecording();
+            printMenu();
+            break;
+
+        case '4':
+            if (sdMounted) {
+                FATFS *fs;
+                DWORD fre_clust;
+                printf("\r\n=== SD Card Info ===\r\n");
+                if (f_getfree("", &fre_clust, &fs) == FR_OK) {
+                    DWORD tot_sect = (fs->n_fatent - 2) * fs->csize;
+                    DWORD fre_sect = fre_clust * fs->csize;
+                    printf("Total: %lu KB\r\n", (unsigned long)(tot_sect / 2));
+                    printf("Free:  %lu KB\r\n", (unsigned long)(fre_sect / 2));
+                }
+            } else {
+                printf("SD card not mounted!\r\n");
+            }
+            printMenu();
+            break;
+
+        case '5':
+            if (isRecording) {
+                printf("Stop recording first!\r\n");
+            } else {
+                printf("Format SD card? ALL DATA WILL BE ERASED. (y/n) > ");
+                /* Wait for confirmation */
+                int confirm = -1;
+                while (confirm < 0) confirm = getChar();
+                printf("%c\r\n", confirm);
+                if (confirm == 'y' || confirm == 'Y') {
+                    formatSD();
+                } else {
+                    printf("Cancelled\r\n");
+                }
+            }
+            printMenu();
+            break;
+
+        case '6':
+            if (isRecording) {
+                printf("Stop recording first!\r\n");
+            } else if (!sdMounted) {
+                printf("Already ejected\r\n");
+            } else {
+                extern char USERPath[];
+                f_mount(NULL, USERPath, 0);
+                sdMounted = 0;
+                printf("SD card ejected — safe to remove\r\n");
+            }
+            printMenu();
+            break;
+
+        case '7':
+        {
+            if (sdMounted) {
+                printf("Already mounted\r\n");
+            } else {
+                extern FATFS USERFatFS;
+                extern char USERPath[];
+                printf("Mounting... ");
+                if (f_mount(&USERFatFS, USERPath, 1) == FR_OK) {
+                    sdMounted = 1;
+                    printf("OK\r\n");
+                } else {
+                    printf("Not readable, formatting...\r\n");
+                    if (formatSD()) {
+                        printf("SD card ready\r\n");
+                    } else {
+                        printf("No card detected\r\n");
+                    }
+                }
+            }
+            printMenu();
+            break;
+        }
+
+        case 'r':
+        case 'R':
+            if (isRecording) {
+                stopRecording();
+            } else {
+                startRecording();
+            }
+            printMenu();
+            break;
+
+        case '\r':
+        case '\n':
+            break;
+        }
+    }
+
+    /* Background recording: write DMA buffers to SD */
+    if (isRecording) {
         int32_t *src = NULL;
 
         if (halfComplete) {
@@ -220,34 +482,22 @@ int main(void)
         }
 
         if (src) {
-            /* Convert 32-bit DFSDM to 16-bit PCM */
             for (int i = 0; i < AUDIO_BUF_SIZE / 2; i++) {
                 pcmBuffer[i] = (int16_t)(src[i] >> 4);
             }
 
             UINT bw;
-            fres = f_write(&wavFile, pcmBuffer, sizeof(pcmBuffer), &bw);
+            FRESULT fres = f_write(&wavFile, pcmBuffer, sizeof(pcmBuffer), &bw);
             if (fres != FR_OK) {
-                printf("f_write FAILED: %d at %lu bytes\r\n", fres, totalDataBytes);
+                printf("f_write FAILED: %d at %lu bytes\r\n", fres, (unsigned long)totalDataBytes);
                 f_close(&wavFile);
-                recording = 0;
+                isRecording = 0;
             }
             totalDataBytes += bw;
 
-            /* Progress every ~1 second (50000 Hz / 512 samples ≈ 98 callbacks/sec) */
+            /* Sync every ~1 second */
             if ((totalDataBytes % (SAMPLE_RATE * 2)) < sizeof(pcmBuffer)) {
-                printf("%lu/%lu bytes\r\n", totalDataBytes, targetBytes);
                 f_sync(&wavFile);
-            }
-
-            if (recording && totalDataBytes >= targetBytes) {
-                /* Finalize WAV: rewrite header with actual size, close */
-                f_lseek(&wavFile, 0);
-                WAV_WriteHeader(&wavFile, SAMPLE_RATE, totalDataBytes);
-                f_close(&wavFile);
-                recording = 0;
-                printf("Done! Recorded %lu bytes (%lu samples)\r\n",
-                    totalDataBytes, totalDataBytes / sizeof(int16_t));
             }
         }
     }
@@ -559,13 +809,15 @@ void MPU_Config(void)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  char errmsg[] = "\r\n!!! Error_Handler called !!!\r\n";
-  HAL_UART_Transmit(&huart3, (uint8_t*)errmsg, strlen(errmsg), HAL_MAX_DELAY);
-  while (1)
-  {
+  const char *msg = "\r\n!!! Error_Handler !!!\r\n";
+  while (*msg) {
+      while (!(USART3->ISR & USART_ISR_TXE_TXFNF));
+      USART3->TDR = *msg++;
   }
+  while (1) { }
   /* USER CODE END Error_Handler_Debug */
 }
+
 #ifdef USE_FULL_ASSERT
 /**
   * @brief  Reports the name of the source file and the source line number
