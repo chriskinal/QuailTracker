@@ -18,6 +18,16 @@
 *.elf
 *.bin
 
+# STM32CubeIDE build output
+stm32/**/Debug/
+stm32/**/Release/
+*.launch
+*.list
+*.map
+
+# Audio recordings
+*.wav
+
 # .NET
 bin/
 obj/
