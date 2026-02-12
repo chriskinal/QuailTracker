@@ -36,3 +36,4 @@ obj/
 *.suo
 *.cache
 *.nupkg
+stm32/QuailTracker/*/com.st.stm32cube.ide.mcu.sfrview.prefs
