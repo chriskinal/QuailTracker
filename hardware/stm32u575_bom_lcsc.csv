@@ -1,0 +1,98 @@
+Designator,Comment,Footprint,LCSC Part #,Qty,Notes
+# MCU & Modules
+U1,STM32U575VGT6,LQFP-100,C5270988,1,MCU 160MHz Cortex-M33 1MB flash 784KB RAM
+COMM1,PB-03F (Ai-Thinker),Module,C2980027,1,BLE 5.2 module UART AT commands
+U2,Seeed L76K GPS Module,XIAO footprint,,1,Off-board GPS breakout (hand-solder)
+# Power Supply
+Q1,XC6220B331MR-G,SOT-23-5,C86534,1,LDO 3.3V 20mV dropout 8uA Iq 1A (Torex)
+L1,2.2uH SWPA3015S2R2MT,3015 (3x3x1.5mm),C43389,1,SMPS inductor 2A rated
+# Decoupling - 100nF (x11)
+# C1-C6: VDD pins (11 27 50 51 75 100)
+# C7: VDDA, C8: VREF+, C9: VDDUSB, C10: VBAT, C18: NRST
+C1-C10 C18,100nF X7R 16V,0402,C1525,11,Decoupling (Samsung CL05B104KO5NNNC)
+# Decoupling - 10uF bulk
+C11,10uF X5R 25V,0805,C15850,1,VDD bulk (per AN5373 10uF typ 4.7uF min)
+# Decoupling - SMPS / VDD11 (per AN5373 Figure 7)
+# VDDSMPS ties to VDD (same 3.3V rail) — no separate decoupling needed
+# Inductor L1 goes from VLXSMPS (pin 45) to VDD11 (pin 48)
+# VDD11 is the 1.1V SMPS output — decoupled to VSSSMPS
+C12,2.2uF X5R 6.3V,0402,C12530,1,VDD11 SMPS output cap 1 (to VSSSMPS)
+C13,2.2uF X5R 6.3V,0402,C12530,1,VDD11 SMPS output cap 2 (to VSSSMPS)
+# Decoupling - 1uF (x4)
+# C14: VDDA, C15: VREF+, C16: LDO output, C17: LDO input
+C14-C17,1uF X5R 25V,0402,C52923,4,Analog + LDO decoupling
+# LSE Crystal
+X1,32.768kHz NX3215SA,SMD3215,C156244,1,LSE RTC crystal NDK 14pF CL
+# Crystal load caps - using STM32U5 internal trimming caps so external caps optional
+# GPS Power Control
+Q2,SI2301CDS P-FET,SOT-23,C10487,1,GPS VCC switch (BASIC)
+Q3,MMBT3904 NPN,SOT-23,C20526,1,GPS FET gate drive (BASIC)
+Q4,MMBT3904 NPN,SOT-23,C20526,1,GPS level shift (BASIC)
+# Resistors - 10k (x4)
+# R1: Q2 gate pull-up, R2: Q3 base, R5: Q4 base, R6: BOOT0 pull-down
+R1 R2 R5 R6,10k 1%,0603,C25804,4,GPS circuit + BOOT0 (BASIC)
+# I2C Pull-ups
+R3,4.7k 1%,0603,C23162,1,I2C1 SCL pull-up PB6 (BASIC)
+R4,4.7k 1%,0603,C23162,1,I2C1 SDA pull-up PB7 (BASIC)
+# Battery Voltage Divider
+R7,1M 1%,0603,C22935,1,Battery divider high side (BASIC)
+R8,1M 1%,0603,C22935,1,Battery divider low side (BASIC)
+# Status LED
+R9,1k 1%,0603,C21190,1,LED current limit ~1.5mA (BASIC)
+LED1,Green 0805,0805,C2297,1,Status LED (BASIC)
+# Connectors - JLCPCB assembled (SMD)
+CARD1,MicroSD TF-015,SMD push-push,C113206,1,SD card slot SPI mode
+CN1,JST SH 2-pin,SMD 1.0mm pitch,C160402,1,Battery connector
+CN2,JST SH 4-pin,SMD 1.0mm pitch,C160404,1,Mic breakout connector (CLK DATA VDD GND)
+# Connectors - Through-hole
+H1,1x4 Male Header 2.54mm,TH,C124378,1,SHT30 module connector
+H2,1x4 Male Header 2.54mm,TH,C124378,1,SWD debug header
+# -------------------------------------------------------
+# PASSIVE SUMMARY
+# -------------------------------------------------------
+# 100nF 0402 (C1525): 11 total (C1-C10 C18)
+# 10uF 0805 (C15850): 1 total (C11)
+# 2.2uF 0402 (C12530): 2 total (C12-C13)
+# 1uF 0402 (C52923): 4 total (C14-C17)
+# 10k 0603 (C25804): 4 total (R1 R2 R5 R6)
+# 4.7k 0603 (C23162): 2 total (R3-R4)
+# 1M 0603 (C22935): 2 total (R7-R8)
+# 1k 0603 (C21190): 1 total (R9)
+# -------------------------------------------------------
+# COST ESTIMATE (per board, qty 10)
+# -------------------------------------------------------
+# STM32U575VGT6: $6.36
+# PB-03F BLE: $1.26
+# SHT30 module (pre-made, off-board): $1.50
+# XC6220 LDO: $0.47
+# All passives+discretes: ~$0.50
+# Connectors (SMD): ~$0.50
+# Crystal: $0.38
+# PCB + assembly: ~$8-10
+# Total: ~$19-21 per unit
+# -------------------------------------------------------
+# JLCPCB BASIC PARTS (no $3 extended fee)
+# -------------------------------------------------------
+# C1525 - 100nF 0402
+# C15850 - 10uF 0805
+# C12530 - 2.2uF 0402
+# C52923 - 1uF 0402
+# C10487 - SI2301CDS
+# C20526 - MMBT3904
+# C25804 - 10k 0603
+# C23162 - 4.7k 0603
+# C22935 - 1M 0603
+# C21190 - 1k 0603
+# C2297 - Green LED 0805
+# -------------------------------------------------------
+# EXTENDED PARTS (7 unique x $3 = $21 per order)
+# -------------------------------------------------------
+# C5270988 - STM32U575VGT6
+# C2980027 - PB-03F BLE module
+# C86534 - XC6220B331MR-G LDO
+# C43389 - 2.2uH inductor
+# C156244 - 32.768kHz crystal
+# C113206 - MicroSD TF-015
+# C160402 - JST SH 2-pin
+# C160404 - JST SH 4-pin
+# C124378 - 4-pin header TH (x2, but same part = 1 unique)

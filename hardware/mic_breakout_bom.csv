@@ -1,0 +1,40 @@
+Designator,Comment,Footprint,Source,Qty,Placement,Notes
+MIC1,IM73D122V01,SMD bottom-port,Mouser/DigiKey (consign),1,Stencil + reflow,PDM MEMS mic 70dB SNR
+C1,100nF ceramic,0402 or 0603 TH,LCSC C1525 (0402) or TH equivalent,1,Hand-solder,VDD decoupling
+J1,JST SH 4-pin 1.0mm,TH right-angle,LCSC (search JST SH 4P TH),1,Hand-solder,Cable to main board
+# -------------------------------------------------------
+# MIC BREAKOUT BOARD SPECIFICATIONS
+# -------------------------------------------------------
+# PCB: 2-layer ~10x8mm 1.6mm FR4
+# Sound hole: 0.8mm NPTH under mic acoustic port
+# Mic is bottom-port: mounted on TOP side sound enters from BOTTOM through PCB hole
+# Ground pour on bottom layer under mic but NO copper under sound hole
+# Order PCB + stencil from JLCPCB (no assembly - hand-built)
+# -------------------------------------------------------
+# PINOUT (JST SH connector)
+# -------------------------------------------------------
+# Pin 1: CLK  (ADF1_CCK0 from PE9)
+# Pin 2: DATA (ADF1_SDI0 to PE10)
+# Pin 3: VDD  (3.3V)
+# Pin 4: GND
+# -------------------------------------------------------
+# IM73D122 CONNECTIONS
+# -------------------------------------------------------
+# Pin 1 (DATA): ADF1_SDI0 -> JST pin 2
+# Pin 2 (VDD):  3.3V via 100nF cap -> JST pin 3
+# Pin 3 (CLK):  ADF1_CCK0 -> JST pin 1
+# Pin 4 (SEL):  GND (left channel / rising edge)
+# Pin 5 (GND):  GND -> JST pin 4
+# -------------------------------------------------------
+# ASSEMBLY PROCESS
+# -------------------------------------------------------
+# 1. Apply solder paste via stencil (MIC1 pads only)
+# 2. Place IM73D122 on paste (check orientation - dot = pin 1)
+# 3. Reflow on hot plate (peak 250C 30s)
+# 4. Hand-solder through-hole 100nF cap and JST connector
+# 5. Verify continuity and no shorts
+# -------------------------------------------------------
+# CABLE
+# -------------------------------------------------------
+# JST SH 1.0mm 4-wire pre-crimped cable 50-100mm
+# Available from Adafruit STEMMA QT or AliExpress JST SH 4P
