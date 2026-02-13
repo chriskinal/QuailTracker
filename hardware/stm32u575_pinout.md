@@ -26,6 +26,7 @@ LCSC: C5270988
 | GPS PPS | PC2 | 17 | GPIO | EXTI input, rising | 1ms sync accuracy |
 | GPS WAKEUP | PD14 | 61 | GPIO | Output | L76K WAKEUP pin |
 | GPS RESET | PD15 | 62 | GPIO | Output, active low | L76K RESET pin |
+| GPS Power EN | PD12 | 59 | GPIO | Output | HIGH=GPS on, LOW=GPS off |
 | Status LED | PD13 | 60 | GPIO | Output | Via 1k R9 to LED1 |
 | SWDIO | PA13 | 72 | AF0 | SWD debug | Default after reset |
 | SWCLK | PA14 | 76 | AF0 | SWD debug | Default after reset |
@@ -151,7 +152,7 @@ Available GPIOs not assigned (active-low-power by configuring as analog input):
 
 PE0-PE6, PE7, PE8, PE11-PE15, PA0, PA1, PA8, PA11, PA12, PA15,
 PB0-PB5, PB8-PB10, PB13-PB15, PC1, PC3-PC9, PC10-PC12,
-PD0-PD7, PD10-PD12, PH0, PH1
+PD0-PD7, PD10, PD11, PH0, PH1
 
 Note: PB11/PB12 are NOT available on LQFP100 SMPS variant
 (pins occupied by VLXSMPS/VDDSMPS infrastructure).

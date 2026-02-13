@@ -59,21 +59,14 @@ Place the **GND** net port label on every pin listed below.
 | **GPS_PPS** | Pulse-per-second sync | U2.PPS, U1.pin17 (PC2 / EXTI) |
 | **GPS_WAKE** | GPS wakeup control | U2.WAKEUP, U1.pin61 (PD14) |
 | **GPS_RST** | GPS reset (active low) | U2.RESET, U1.pin62 (PD15) |
-| **GPS_EN** | GPS power enable (MCU→Q3) | R2.1, U1.GPIO *(TBD — assign unused GPIO, e.g. PD12)* |
+| **GPS_EN** | GPS power enable (MCU→Q3) | R2.1, U1.pin59 (PD12, GPIO) |
 
-### GPS Power Switching Circuit
+### GPS Power Switch — How It Works
 
-```
-3V3 ─── R1(10k) ─┬─ Q2.Gate     Q2 = SI2301 P-FET
-                  │              Q2.Source = 3V3
-   Q2_GATE net ───┘              Q2.Drain = GPS_VCC → U2.VCC
-                  Q3.Collector ──┘
-                  Q3.Base ← R2(10k) ← GPS_EN (MCU GPIO)
-                  Q3.Emitter → GND
+Q2 = SI2301CDS P-FET, Q3 = MMBT3904 NPN. All pin connections are in the net tables above (Q2_GATE, GPS_VCC, GPS_EN) and local-only wires below (R2→Q3, Q3.Emitter→GND).
 
-MCU drives GPS_EN HIGH → Q3 ON → Q2 gate pulled LOW → P-FET ON → GPS powered
-MCU drives GPS_EN LOW  → Q3 OFF → R1 pulls gate to 3V3 → P-FET OFF → GPS off
-```
+- **GPS_EN HIGH** → Q3 ON → Q2 gate pulled LOW → P-FET ON → GPS powered
+- **GPS_EN LOW** → Q3 OFF → R1 pulls gate to 3V3 → P-FET OFF → GPS off
 
 ---
 
@@ -212,6 +205,7 @@ Only pins with net port connections are listed — all others are unused (config
 | 31 | PA7 | SD_MOSI | SPI1_MOSI (AF5) |
 | 37 | PE9 | PDM_CLK | ADF1_CCK0 (AF3) |
 | 38 | PE10 | PDM_DATA | ADF1_SDI0 (AF3) |
+| 59 | PD12 | GPS_EN | GPIO output |
 | 55 | PD8 | — | USART3_TX (optional debug) |
 | 56 | PD9 | — | USART3_RX (optional debug) |
 | 60 | PD13 | LED_OUT | GPIO output |
