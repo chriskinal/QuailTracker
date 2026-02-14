@@ -1,26 +1,22 @@
 Designator,Comment,Footprint,LCSC Part #,Qty,Notes
 # MCU & Modules
-U1,STM32U575VGT6,LQFP-100,C5270988,1,MCU 160MHz Cortex-M33 1MB flash 784KB RAM
+U1,STM32U575VGT6,LQFP-100,C5270988,1,MCU 160MHz Cortex-M33 1MB flash 784KB RAM (non-SMPS / LDO variant)
 COMM1,PB-03F (Ai-Thinker),Module,C2980027,1,BLE 5.2 module UART AT commands
 U2,Seeed L76K GPS Module,XIAO footprint,,1,Off-board GPS breakout (hand-solder)
 # Power Supply
 Q1,XC6220B331MR-G,SOT-23-5,C86534,1,LDO 3.3V 20mV dropout 8uA Iq 1A (Torex)
-L1,2.2uH SWPA3015S2R2MT,3015 (3x3x1.5mm),C43389,1,SMPS inductor 2A rated
-# Decoupling - 100nF (x11)
-# C1-C6: VDD pins (11 27 50 51 75 100)
-# C7: VDDA, C8: VREF+, C9: VDDUSB, C10: VBAT, C18: NRST
-C1-C10 C18,100nF X7R 16V,0402,C1525,11,Decoupling (Samsung CL05B104KO5NNNC)
+# Decoupling - 100nF (x10)
+# C1-C5: VDD pins (11 28 50 75 100)
+# C6: VDDA(22), C7: VREF+(21), C8: VDDUSB(73), C9: VBAT(6), C10: NRST(14)
+C1-C10,100nF X7R 16V,0402,C1525,10,Decoupling (Samsung CL05B104KO5NNNC)
 # Decoupling - 10uF bulk
-C11,10uF X5R 25V,0805,C15850,1,VDD bulk (per AN5373 10uF typ 4.7uF min)
-# Decoupling - SMPS / VDD11 (per AN5373 Figure 7)
-# VDDSMPS ties to VDD (same 3.3V rail) — no separate decoupling needed
-# Inductor L1 goes from VLXSMPS (pin 45) to VDD11 (pin 48)
-# VDD11 is the 1.1V SMPS output — decoupled to VSSSMPS
-C12,2.2uF X5R 6.3V,0402,C12530,1,VDD11 SMPS output cap 1 (to VSSSMPS)
-C13,2.2uF X5R 6.3V,0402,C12530,1,VDD11 SMPS output cap 2 (to VSSSMPS)
+C11,10uF X5R 25V,0805,C15850,1,VDD bulk (near pin 11)
+# VCAP - internal LDO output bypass (non-SMPS variant)
+# Pin 48 (VCAP) to GND — required for internal 1.1V LDO regulator
+C12,4.7uF X5R 10V,0402,C23733,1,VCAP pin 48 internal LDO bypass
 # Decoupling - 1uF (x4)
-# C14: VDDA, C15: VREF+, C16: LDO output, C17: LDO input
-C14-C17,1uF X5R 25V,0402,C52923,4,Analog + LDO decoupling
+# C13: VREF+(21), C14: VDDA(22), C15: LDO output, C16: LDO input
+C13-C16,1uF X5R 25V,0402,C52923,4,Analog + LDO decoupling
 # LSE Crystal
 X1,32.768kHz NX3215SA,SMD3215,C156244,1,LSE RTC crystal NDK 14pF CL
 # Crystal load caps - using STM32U5 internal trimming caps so external caps optional
@@ -50,10 +46,10 @@ H2,1x4 Male Header 2.54mm,TH,C124378,1,SWD debug header
 # -------------------------------------------------------
 # PASSIVE SUMMARY
 # -------------------------------------------------------
-# 100nF 0402 (C1525): 11 total (C1-C10 C18)
+# 100nF 0402 (C1525): 10 total (C1-C10)
 # 10uF 0805 (C15850): 1 total (C11)
-# 2.2uF 0402 (C12530): 2 total (C12-C13)
-# 1uF 0402 (C52923): 4 total (C14-C17)
+# 4.7uF 0402 (C23733): 1 total (C12 VCAP)
+# 1uF 0402 (C52923): 4 total (C13-C16)
 # 10k 0603 (C25804): 4 total (R1 R2 R5 R6)
 # 4.7k 0603 (C23162): 2 total (R3-R4)
 # 1M 0603 (C22935): 2 total (R7-R8)
@@ -65,7 +61,7 @@ H2,1x4 Male Header 2.54mm,TH,C124378,1,SWD debug header
 # PB-03F BLE: $1.26
 # SHT30 module (pre-made, off-board): $1.50
 # XC6220 LDO: $0.47
-# All passives+discretes: ~$0.50
+# All passives+discretes: ~$0.45
 # Connectors (SMD): ~$0.50
 # Crystal: $0.38
 # PCB + assembly: ~$8-10
@@ -75,7 +71,6 @@ H2,1x4 Male Header 2.54mm,TH,C124378,1,SWD debug header
 # -------------------------------------------------------
 # C1525 - 100nF 0402
 # C15850 - 10uF 0805
-# C12530 - 2.2uF 0402
 # C52923 - 1uF 0402
 # C10487 - SI2301CDS
 # C20526 - MMBT3904
@@ -90,7 +85,7 @@ H2,1x4 Male Header 2.54mm,TH,C124378,1,SWD debug header
 # C5270988 - STM32U575VGT6
 # C2980027 - PB-03F BLE module
 # C86534 - XC6220B331MR-G LDO
-# C43389 - 2.2uH inductor
+# C23733 - 4.7uF 0402 VCAP (verify BASIC/extended status)
 # C156244 - 32.768kHz crystal
 # C113206 - MicroSD TF-015
 # C160402 - JST SH 2-pin
