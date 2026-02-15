@@ -23,8 +23,9 @@ C5270988 is the non-SMPS variant — uses internal LDO, no external inductor.
 | SD Card MISO | PA6 | 31 | AF5 | SPI1_MISO | SPI mode SD |
 | SD Card MOSI | PA7 | 32 | AF5 | SPI1_MOSI | SPI mode SD |
 | SD Card CS | PA4 | 29 | GPIO | Output, active low | Software NSS |
-| SHT30 SCL | PB6 | 94 | AF4 | I2C1_SCL | 4.7k pull-up R3 |
-| SHT30 SDA | PB7 | 95 | AF4 | I2C1_SDA | 4.7k pull-up R4 |
+| SD Card CD | PC4 | 33 | GPIO | Input, low = inserted | Card detect switch |
+| SHT30 SCL | PB6 | 92 | AF4 | I2C1_SCL | 4.7k pull-up R3 |
+| SHT30 SDA | PB7 | 93 | AF4 | I2C1_SDA | 4.7k pull-up R4 |
 | Battery ADC | PC0 | 15 | analog | ADC1_IN1 | 1M/1M divider R7/R8 |
 | GPS PPS | PC2 | 17 | GPIO | EXTI input, rising | 1ms sync accuracy |
 | GPS WAKEUP | PD14 | 61 | GPIO | Output | L76K WAKEUP pin |
@@ -35,7 +36,7 @@ C5270988 is the non-SMPS variant — uses internal LDO, no external inductor.
 | SWCLK | PA14 | 76 | AF0 | SWD debug | Default after reset |
 | LSE Crystal | PC14 | 8 | - | OSC32_IN | 32.768kHz |
 | LSE Crystal | PC15 | 9 | - | OSC32_OUT | 32.768kHz |
-| BOOT0 | PH3 | 98 | - | BOOT0 | 10k pull-down R6 |
+| BOOT0 | PH3 | 94 | - | BOOT0 | 10k pull-down R6 |
 
 ## Power Pins (LQFP100 non-SMPS / LDO variant)
 
@@ -143,7 +144,7 @@ Available GPIOs not assigned (configure as analog input for lowest leakage):
 
 PE0-PE6, PE7, PE8, PE11-PE15, PA0, PA1, PA8, PA11, PA12, PA15,
 PB0-PB5, PB8-PB10, PB12-PB15, PC1, PC3-PC9, PC10-PC12,
-PD0-PD7, PD10, PD11, PC4, PC5, PH0, PH1
+PD0-PD7, PD10, PD11, PC5, PH0, PH1
 
 Note: PB11 is NOT bonded out on LQFP100 (neither SMPS nor non-SMPS variant).
 
@@ -152,7 +153,7 @@ Note: PB11 is NOT bonded out on LQFP100 (neither SMPS nor non-SMPS variant).
 1. **Power** — Q1 (LDO), C1-C16 (decoupling), CN1 (battery)
 2. **MCU** — U1 (STM32U575VGT6), X1 (LSE crystal), R6 (BOOT0 pull-down)
 3. **Audio** — CN2 (JST SH 4-pin to mic breakout: CLK, DATA, VDD, GND)
-4. **GPS** — U2 (L76K module), Q2 (P-FET switch), Q3/Q4 (level shift), R1/R2/R5 (10k)
+4. **GPS** — U2 (L76K module), Q2 (P-FET switch), Q3 (gate drive), R1/R2 (10k)
 5. **Storage** — CARD1 (MicroSD slot), SPI1 on PA4-PA7
 6. **BLE** — COMM1 (PB-03F module), USART2 on PA2/PA3
 7. **Sensor** — H1 (4-pin header to off-board SHT30), R3/R4 (I2C pull-ups)

@@ -22,9 +22,9 @@ Cross-reference: `stm32u575_pinout.md` (pin assignments), `stm32u575_bom_lcsc.cs
 | Net Port | Description | Connected Pins |
 |----------|-------------|----------------|
 | **VBAT+** | Battery positive rail | CN1.1, Q1.VIN(1), Q1.CE(3), C16.+, R7.1 |
-| **3V3** | 3.3V regulated rail | Q1.VOUT(5), C15.+, C11.+, U1 VDD pins (11, 28, 50, 75, 100), U1.VDDA(22), U1.VREF+(21), U1.VDDUSB(73), U1.VBAT(6), C1.+, C2.+, C3.+, C4.+, C5.+, C6.+, C7.+, C8.+, C9.+, C13.+, C14.+, R1.1, R3.1, R4.1, COMM1.VCC, CARD1.VDD, CN2.3, H1.1, H2.1, U2.VBKP |
+| **3V3** | 3.3V regulated rail | Q1.VOUT(5), C15.+, C11.+, U1 VDD pins (11, 28, 50, 75, 100), U1.VDDA(22), U1.VREF+(21), U1.VDDUSB(73), U1.VBAT(6), C1.+, C2.+, C3.+, C4.+, C5.+, C6.+, C7.+, C8.+, C9.+, C13.+, C14.+, R1.1, R3.1, R4.1, Q2.Source, COMM1.VCC, CARD1.VDD, CN2.3, H1.1, H2.1, U2.VBKP |
 | **GND** | Ground | *(see dedicated GND table below)* |
-| **GPS_VCC** | Switched 3.3V to GPS module | Q2.Source, U2.VCC |
+| **GPS_VCC** | Switched 3.3V to GPS module | Q2.Drain, U2.VCC |
 | **VBAT_SENSE** | Battery ADC midpoint | R7.2, R8.1, U1.pin15 (PC0/ADC1_IN1) |
 | **Q2_GATE** | GPS P-FET gate drive | Q2.Gate, R1.2, Q3.Collector |
 
@@ -39,7 +39,7 @@ Place the **GND** net port label on every pin listed below.
 | Decoupling caps (−) | C1.−, C2.−, C3.−, C4.−, C5.−, C6.−, C7.−, C8.−, C9.−, C10.−, C11.−, C12.−, C13.−, C14.−, C15.−, C16.− |
 | Connectors | CN1.2, CN2.4, CARD1.VSS, COMM1.GND, H1.2, H2.2 |
 | GPS module | U2.GND |
-| Transistors | Q3.Emitter, Q4.Emitter |
+| Transistors | Q3.Emitter |
 | Divider low side | R8.2 |
 | BOOT0 pull-down | R6.2 |
 | LED cathode | LED1.Cathode |
@@ -87,6 +87,7 @@ COMM1 (PB-03F) VCC → 3V3, GND → GND (already in power nets above).
 | **SD_MISO** | SPI data out (SD→MCU) | CARD1.DAT0, U1.pin31 (PA6 / SPI1_MISO, AF5) |
 | **SD_MOSI** | SPI data in (MCU→SD) | CARD1.CMD, U1.pin32 (PA7 / SPI1_MOSI, AF5) |
 | **SD_CS** | SPI chip select (active low) | CARD1.CD/DAT3, U1.pin29 (PA4, GPIO) |
+| **SD_CD** | Card detect (low = inserted) | CARD1.CD_SW, U1.pin33 (PC4, GPIO input) |
 
 CARD1 VDD → 3V3, VSS → GND (already in power nets above).
 
@@ -107,8 +108,8 @@ CN2 (JST SH 4-pin): pin 1 = CLK, pin 2 = DATA, pin 3 = VDD (3V3), pin 4 = GND.
 
 | Net Port | Description | Connected Pins |
 |----------|-------------|----------------|
-| **I2C_SCL** | I2C clock (4.7k pull-up) | H1.3, R3.2, U1.pin94 (PB6 / I2C1_SCL, AF4) |
-| **I2C_SDA** | I2C data (4.7k pull-up) | H1.4, R4.2, U1.pin95 (PB7 / I2C1_SDA, AF4) |
+| **I2C_SCL** | I2C clock (4.7k pull-up) | H1.3, R3.2, U1.pin92 (PB6 / I2C1_SCL, AF4) |
+| **I2C_SDA** | I2C data (4.7k pull-up) | H1.4, R4.2, U1.pin93 (PB7 / I2C1_SDA, AF4) |
 
 R3.1 → 3V3, R4.1 → 3V3 (pull-ups, already in power nets above).
 H1 (1x4 header): pin 1 = 3V3, pin 2 = GND, pin 3 = SCL, pin 4 = SDA.
@@ -146,10 +147,7 @@ These connections are short enough to wire directly — no net port label needed
 | LED1.Cathode | GND | Via GND net port on cathode |
 | R2.2 | Q3.Base | GPS enable base resistor |
 | Q3.Emitter | GND | Via GND net port |
-| R5.1 | *(Q4 drive signal)* | Level shift base resistor |
-| R5.2 | Q4.Base | Short wire |
-| Q4.Emitter | GND | Via GND net port |
-| R6.1 | U1.pin98 (PH3/BOOT0) | BOOT0 pull-down |
+| R6.1 | U1.pin94 (PH3/BOOT0) | BOOT0 pull-down |
 | R6.2 | GND | Via GND net port |
 | C10.1 | U1.pin14 (NRST) | Reset filter cap |
 | C10.2 | GND | Via GND net port |
@@ -183,7 +181,7 @@ Only pins with net port connections are listed — all others are unused (config
 | 73 | VDDUSB | 3V3 (C8) |
 | 74 | VSS | GND |
 | 75 | VDD | 3V3 (C4) |
-| 98 | PH3 / BOOT0 | local: R6→GND |
+| 94 | PH3 / BOOT0 | local: R6→GND |
 | 99 | VSS | GND |
 | 100 | VDD | 3V3 (C5) |
 
@@ -199,6 +197,7 @@ Only pins with net port connections are listed — all others are unused (config
 | 30 | PA5 | SD_SCK | SPI1_SCK (AF5) |
 | 31 | PA6 | SD_MISO | SPI1_MISO (AF5) |
 | 32 | PA7 | SD_MOSI | SPI1_MOSI (AF5) |
+| 33 | PC4 | SD_CD | GPIO input (card detect) |
 | 40 | PE9 | PDM_CLK | ADF1_CCK0 (AF3) |
 | 41 | PE10 | PDM_DATA | ADF1_SDI0 (AF3) |
 | 55 | PD8 | — | USART3_TX (optional debug) |
@@ -211,8 +210,8 @@ Only pins with net port connections are listed — all others are unused (config
 | 69 | PA10 | GPS_TX | USART1_RX (AF7) |
 | 72 | PA13 | SWDIO | SWD (AF0) |
 | 76 | PA14 | SWCLK | SWD (AF0) |
-| 94 | PB6 | I2C_SCL | I2C1_SCL (AF4) |
-| 95 | PB7 | I2C_SDA | I2C1_SDA (AF4) |
+| 92 | PB6 | I2C_SCL | I2C1_SCL (AF4) |
+| 93 | PB7 | I2C_SDA | I2C1_SDA (AF4) |
 
 ---
 
@@ -256,7 +255,7 @@ Added VCAP cap (C12) for internal LDO bypass.
 - [ ] GPS: U2.VCC on GPS_VCC (switched), U2.VBKP on 3V3 (always on)
 - [ ] I2C: R3/R4 pull-ups between 3V3 and I2C_SCL/I2C_SDA
 - [ ] Battery divider: R7 (VBAT+→midpoint), R8 (midpoint→GND), midpoint=VBAT_SENSE
-- [ ] BOOT0 (PH3 pin 98): R6 pull-down to GND
+- [ ] BOOT0 (PH3 pin 94): R6 pull-down to GND
 - [ ] NRST (pin 14): C10 to GND
 - [ ] LSE crystal: X1 between OSC32_IN and OSC32_OUT (no external load caps — using internal)
 - [ ] Pin numbers match DS13737 Figure 15 (LQFP100 non-SMPS), NOT Figure 14
