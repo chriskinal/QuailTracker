@@ -37,9 +37,9 @@ R9,1k 1%,0603,C21190,1,LED current limit ~1.5mA (BASIC)
 LED1,Green 0805,0805,C2297,1,Status LED (BASIC)
 # Connectors - JLCPCB assembled (SMD)
 CARD1,MicroSD TF-015,SMD push-push,C113206,1,SD card slot SPI mode
-CN1,JST SH 2-pin,SMD 1.0mm pitch,C160402,1,Battery connector
-CN2,JST SH 4-pin,SMD 1.0mm pitch,C160404,1,Mic breakout connector (CLK DATA VDD GND)
 # Connectors - Through-hole
+CN1,JST PH 2-pin B2B-PH-K-S,TH 2.0mm pitch,C131337,1,Battery connector (vertical)
+CN2,JST PH 4-pin B4B-PH-K-S,TH 2.0mm pitch,C131334,1,Mic breakout connector CLK DATA VDD GND (vertical)
 H1,1x4 Male Header 2.54mm,TH,C124378,1,SHT30 module connector
 H2,1x4 Male Header 2.54mm,TH,C124378,1,SWD debug header
 # -------------------------------------------------------
@@ -87,6 +87,6 @@ H2,1x4 Male Header 2.54mm,TH,C124378,1,SWD debug header
 # C23733 - 4.7uF 0402 VCAP (verify BASIC/extended status)
 # C156244 - 32.768kHz crystal
 # C113206 - MicroSD TF-015
-# C160402 - JST SH 2-pin
-# C160404 - JST SH 4-pin
+# C131337 - JST PH 2-pin (battery)
+# C131334 - JST PH 4-pin (mic breakout)
 # C124378 - 4-pin header TH (x2, but same part = 1 unique)

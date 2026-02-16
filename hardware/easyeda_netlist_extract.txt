@@ -1,0 +1,495 @@
+========================================================================
+EasyEDA Schematic Netlist Extraction
+Source: /Users/chris/Downloads/SCH_QuailTrack_v1_2026-02-15.json
+========================================================================
+
+------------------------------------------------------------------------
+COMPONENT LIST
+------------------------------------------------------------------------
+
+  C1          100nF                           [C0402]
+              Pins: pin 1=1, pin 2=2
+
+  C2          100nF                           [C0402]
+              Pins: pin 1=1, pin 2=2
+
+  C3          100nF                           [C0402]
+              Pins: pin 1=1, pin 2=2
+
+  C4          100nF                           [C0402]
+              Pins: pin 1=1, pin 2=2
+
+  C5          100nF                           [C0402]
+              Pins: pin 1=1, pin 2=2
+
+  C6          100nF                           [C0402]
+              Pins: pin 1=1, pin 2=2
+
+  C7          100nF                           [C0402]
+              Pins: pin 1=1, pin 2=2
+
+  C8          100nF                           [C0402]
+              Pins: pin 1=1, pin 2=2
+
+  C9          100nF                           [C0402]
+              Pins: pin 1=1, pin 2=2
+
+  C10         100nF                           [C0402]
+              Pins: pin 1=1, pin 2=2
+
+  C11         10uF                            [C0805]
+              Pins: pin 1=1, pin 2=2
+
+  C12         4.7uF                           [C0402]
+              Pins: pin 1=1, pin 2=2
+
+  C13         1uF                             [C0402]
+              Pins: pin 1=1, pin 2=2
+
+  C14         1uF                             [C0402]
+              Pins: pin 1=1, pin 2=2
+
+  C15         1uF                             [C0402]
+              Pins: pin 1=1, pin 2=2
+
+  C16         1uF                             [C0402]
+              Pins: pin 1=1, pin 2=2
+
+  CARD1       TF-015                          [TF-SMD_TF-015]
+              Pins: pin 1=DAT2(RSV), pin 2=CDDAT3(CS), pin 3=CMD(DI), pin 4=VDD, pin 5=CLK(SCLK), pin 6=VSS
+                  pin 7=DAT0(D0), pin 8=DAT1(RSV), pin 9=CD, pin 10=GND, pin 11=GND, pin 12=GND
+                  pin 13=GND
+
+  CN1         SM02B-SRSS-TB (LF)(SN)          [CONN-SMD_2P-P1.00_SM02B-SRSS-TB-LF-SN]
+              Pins: pin 1=1, pin 2=2, pin 3=3, pin 4=4
+
+  CN2         SM04B-SRSS-TB (LF)(SN)          [CONN-SMD_4P-P1.00_SM04B-SRSS-TB-LF-SN]
+              Pins: pin 1=1, pin 2=2, pin 3=3, pin 4=4, pin 5=5, pin 6=6
+
+  COMM1       PB-03F                          [BULETM-SMD_PB-03F]
+              Pins: pin 1=P15, pin 2=P11, pin 3=P31, pin 4=P7, pin 5=P32, pin 6=P33
+                  pin 7=P14, pin 8=VDD, pin 9=P16, pin 10=P17, pin 11=P18, pin 12=P0
+                  pin 13=P34, pin 14=NC, pin 15=GND, pin 16=P2, pin 17=P3, pin 18=P20
+                  pin 19=P23, pin 20=P24, pin 21=RXD, pin 22=TXD
+
+  H1          SHT30                           [HDR-TH_4P-P2.54-V-M]
+              Pins: pin 1=1, pin 2=2, pin 3=3, pin 4=4
+
+  H2          SWD                             [HDR-TH_4P-P2.54-V-M]
+              Pins: pin 1=1, pin 2=2, pin 3=3, pin 4=4
+
+  J1          PPS                             [HDR-M-2.54_1X1]
+              Pins: pin 1=1
+
+  J2          VBKP                            [HDR-M-2.54_1X1]
+              Pins: pin 1=1
+
+  LED1        0805G (Green)                   [LED0805-R-RD]
+              Pins: pin 1=A, pin 2=K
+
+  Q1          XC6220B331MR-G                  [SOT-25_L3.0-W1.6-P0.95-LS2.8-TL]
+              Pins: pin 1=VIN, pin 2=VSS, pin 3=CE, pin 4=NC, pin 5=VOUT
+
+  Q2          SI2301CDS-T1-GE3                [SOT-23-3_L3.0-W1.7-P0.95-LS2.9-BR]
+              Pins: pin 1=G, pin 2=S, pin 3=D
+
+  Q3          MMBT3904-C20526                 [SOT-23-3_L2.9-W1.3-P1.90-LS2.4-BR]
+              Pins: pin 1=B, pin 2=E, pin 3=C
+
+  R1          10kΩ                            [R0603]
+              Pins: pin 1=1, pin 2=2
+
+  R2          10kΩ                            [R0603]
+              Pins: pin 1=1, pin 2=2
+
+  R3          4.7kΩ                           [R0603]
+              Pins: pin 1=1, pin 2=2
+
+  R4          4.7kΩ                           [R0603]
+              Pins: pin 1=1, pin 2=2
+
+  R6          10kΩ                            [R0603]
+              Pins: pin 1=1, pin 2=2
+
+  R7          1MΩ                             [R0603]
+              Pins: pin 1=1, pin 2=2
+
+  R8          1MΩ                             [R0603]
+              Pins: pin 1=1, pin 2=2
+
+  R9          1kΩ                             [R0603]
+              Pins: pin 1=1, pin 2=2
+
+  U1          STM32U575VGT6                   [LQFP-100_L14.0-W14.0-P0.50-LS16.0-BL]
+              Pins: pin 1=PE2, pin 2=PE3, pin 3=PE4, pin 4=PE5, pin 5=PE6, pin 6=VBAT
+                  pin 7=PC13, pin 8=PC14-OSC32_IN, pin 9=PC15-OSC32_OUT, pin 10=VSS, pin 11=VDD, pin 12=PH0-OSC_IN
+                  pin 13=PH1-OSC_OUT, pin 14=NRST, pin 15=PC0, pin 16=PC1, pin 17=PC2, pin 18=PC3
+                  pin 19=VSSA, pin 20=VREF-, pin 21=VREF+, pin 22=VDDA, pin 23=PA0, pin 24=PA1
+                  pin 25=PA2, pin 26=PA3, pin 27=VSS, pin 28=VDD, pin 29=PA4, pin 30=PA5
+                  pin 31=PA6, pin 32=PA7, pin 33=PC4, pin 34=PC5, pin 35=PB0, pin 36=PB1
+                  pin 37=PB2, pin 38=PE7, pin 39=PE8, pin 40=PE9, pin 41=PE10, pin 42=PE11
+                  pin 43=PE12, pin 44=PE13, pin 45=PE14, pin 46=PE15, pin 47=PB10, pin 48=VCAP
+                  pin 49=VSS, pin 50=VDD, pin 51=PB12, pin 52=PB13, pin 53=PB14, pin 54=PB15
+                  pin 55=PD8, pin 56=PD9, pin 57=PD10, pin 58=PD11, pin 59=PD12, pin 60=PD13
+                  pin 61=PD14, pin 62=PD15, pin 63=PC6, pin 64=PC7, pin 65=PC8, pin 66=PC9
+                  pin 67=PA8, pin 68=PA9, pin 69=PA10, pin 70=PA11, pin 71=PA12, pin 72=PA13
+                  pin 73=VDDUSB, pin 74=VSS, pin 75=VDD, pin 76=PA14, pin 77=PA15, pin 78=PC10
+                  pin 79=PC11, pin 80=PC12, pin 81=PD0, pin 82=PD1, pin 83=PD2, pin 84=PD3
+                  pin 85=PD4, pin 86=PD5, pin 87=PD6, pin 88=PD7, pin 89=PB3, pin 90=PB4
+                  pin 91=PB5, pin 92=PB6, pin 93=PB7, pin 94=PH3-BOOTO, pin 95=PB8, pin 96=PB9
+                  pin 97=PE0, pin 98=PE1, pin 99=VSS, pin 100=VDD
+
+  U2          Seeed L76K GPS Module           [COMM-SMD_SEEEDUINO-XIAO]
+              Pins: pin 1=RXD, pin 2=2, pin 3=3, pin 4=4, pin 5=5, pin 6=6
+                  pin 7=WAKE, pin 8=5V, pin 9=GND, pin 10=3v3, pin 11=RESET, pin 12=12
+                  pin 13=13, pin 14=TXD
+
+  X1          32.768kHz                       [OSC-SMD_L3.2-W1.5]
+              Pins: pin 1=OSC1, pin 2=OSC2
+
+------------------------------------------------------------------------
+NETLIST BY NET NAME
+------------------------------------------------------------------------
+
+  Net: 3V3
+  ────────────────────────────────────────
+    C1          pin 2     (2)
+    C11         pin 2     (2)
+    C13         pin 2     (2)
+    C14         pin 2     (2)
+    C15         pin 2     (2)
+    C2          pin 2     (2)
+    C3          pin 2     (2)
+    C4          pin 2     (2)
+    C5          pin 2     (2)
+    C6          pin 2     (2)
+    C7          pin 2     (2)
+    C8          pin 2     (2)
+    C9          pin 2     (2)
+    CARD1       pin 4     (VDD)
+    CN2         pin 3     (3)
+    COMM1       pin 8     (VDD)
+    H1          pin 1     (1)
+    H2          pin 1     (1)
+    J2          pin 1     (1)
+    Q1          pin 5     (VOUT)
+    Q2          pin 2     (S)
+    R1          pin 2     (2)
+    R3          pin 2     (2)
+    R4          pin 2     (2)
+    U1          pin 6     (VBAT)
+    U1          pin 100   (VDD)
+    U1          pin 11    (VDD)
+    U1          pin 28    (VDD)
+    U1          pin 50    (VDD)
+    U1          pin 75    (VDD)
+    U1          pin 22    (VDDA)
+    U1          pin 73    (VDDUSB)
+    U1          pin 21    (VREF+)
+
+  Net: BLE_RX
+  ────────────────────────────────────────
+    COMM1       pin 21    (RXD)
+    U1          pin 25    (PA2)
+
+  Net: BLE_TX
+  ────────────────────────────────────────
+    COMM1       pin 22    (TXD)
+    U1          pin 26    (PA3)
+
+  Net: BOOT0
+  ────────────────────────────────────────
+    R6          pin 2     (2)
+    U1          pin 94    (PH3-BOOTO)
+
+  Net: GND
+  ────────────────────────────────────────
+    C1          pin 1     (1)
+    C10         pin 1     (1)
+    C11         pin 1     (1)
+    C12         pin 1     (1)
+    C13         pin 1     (1)
+    C14         pin 1     (1)
+    C15         pin 1     (1)
+    C16         pin 1     (1)
+    C2          pin 1     (1)
+    C3          pin 1     (1)
+    C4          pin 1     (1)
+    C5          pin 1     (1)
+    C6          pin 1     (1)
+    C7          pin 1     (1)
+    C8          pin 1     (1)
+    C9          pin 1     (1)
+    CARD1       pin 6     (VSS)
+    CN1         pin 2     (2)
+    CN2         pin 4     (4)
+    COMM1       pin 15    (GND)
+    H1          pin 2     (2)
+    H2          pin 2     (2)
+    LED1        pin 2     (K)
+    Q1          pin 2     (VSS)
+    Q3          pin 2     (E)
+    R6          pin 1     (1)
+    R8          pin 1     (1)
+    U1          pin 20    (VREF-)
+    U1          pin 10    (VSS)
+    U1          pin 27    (VSS)
+    U1          pin 49    (VSS)
+    U1          pin 74    (VSS)
+    U1          pin 99    (VSS)
+    U1          pin 19    (VSSA)
+    U2          pin 9     (GND)
+
+  Net: GPS_EN
+  ────────────────────────────────────────
+    R2          pin 1     (1)
+    U1          pin 59    (PD12)
+
+  Net: GPS_RST
+  ────────────────────────────────────────
+    U1          pin 62    (PD15)
+    U2          pin 11    (RESET)
+
+  Net: GPS_RX
+  ────────────────────────────────────────
+    U1          pin 68    (PA9)
+    U2          pin 1     (RXD)
+
+  Net: GPS_TX
+  ────────────────────────────────────────
+    U1          pin 69    (PA10)
+    U2          pin 14    (TXD)
+
+  Net: GPS_VCC
+  ────────────────────────────────────────
+    Q2          pin 3     (D)
+    U2          pin 10    (3v3)
+
+  Net: GPS_WAKE
+  ────────────────────────────────────────
+    U1          pin 61    (PD14)
+    U2          pin 7     (WAKE)
+
+  Net: I2C_SCL
+  ────────────────────────────────────────
+    H1          pin 3     (3)
+    R3          pin 1     (1)
+    U1          pin 92    (PB6)
+
+  Net: I2C_SDA
+  ────────────────────────────────────────
+    H1          pin 4     (4)
+    R4          pin 1     (1)
+    U1          pin 93    (PB7)
+
+  Net: LED_OUT
+  ────────────────────────────────────────
+    R9          pin 1     (1)
+    U1          pin 60    (PD13)
+
+  Net: NRST
+  ────────────────────────────────────────
+    C10         pin 2     (2)
+    U1          pin 14    (NRST)
+
+  Net: PDM_CLK
+  ────────────────────────────────────────
+    CN2         pin 1     (1)
+    U1          pin 40    (PE9)
+
+  Net: PDM_DATA
+  ────────────────────────────────────────
+    CN2         pin 2     (2)
+    U1          pin 41    (PE10)
+
+  Net: PPS
+  ────────────────────────────────────────
+    J1          pin 1     (1)
+
+  Net: Q2_GATE
+  ────────────────────────────────────────
+    Q2          pin 1     (G)
+    Q3          pin 3     (C)
+    R1          pin 1     (1)
+
+  Net: SD_CD
+  ────────────────────────────────────────
+    CARD1       pin 9     (CD)
+    U1          pin 33    (PC4)
+
+  Net: SD_CS
+  ────────────────────────────────────────
+    CARD1       pin 2     (CDDAT3(CS))
+    U1          pin 29    (PA4)
+
+  Net: SD_MISO
+  ────────────────────────────────────────
+    CARD1       pin 7     (DAT0(D0))
+    U1          pin 31    (PA6)
+
+  Net: SD_MOSI
+  ────────────────────────────────────────
+    CARD1       pin 3     (CMD(DI))
+    U1          pin 32    (PA7)
+
+  Net: SD_SCK
+  ────────────────────────────────────────
+    CARD1       pin 5     (CLK(SCLK))
+    U1          pin 30    (PA5)
+
+  Net: SWCLK
+  ────────────────────────────────────────
+    H2          pin 4     (4)
+    U1          pin 76    (PA14)
+
+  Net: SWDIO
+  ────────────────────────────────────────
+    H2          pin 3     (3)
+    U1          pin 72    (PA13)
+
+  Net: VBAT+
+  ────────────────────────────────────────
+    C16         pin 2     (2)
+    CN1         pin 1     (1)
+    Q1          pin 3     (CE)
+    Q1          pin 1     (VIN)
+    R7          pin 1     (1)
+
+  Net: VBAT_Sense
+  ────────────────────────────────────────
+    R7          pin 2     (2)
+    R8          pin 2     (2)
+    U1          pin 15    (PC0)
+
+  Net: (unnamed)
+  ────────────────────────────────────────
+    Q3          pin 1     (B)
+    R2          pin 2     (2)
+
+  Net: (unnamed)
+  ────────────────────────────────────────
+    C12         pin 2     (2)
+    U1          pin 48    (VCAP)
+
+  Net: (unnamed)
+  ────────────────────────────────────────
+    U1          pin 8     (PC14-OSC32_IN)
+    X1          pin 1     (OSC1)
+
+  Net: (unnamed)
+  ────────────────────────────────────────
+    LED1        pin 1     (A)
+    R9          pin 2     (2)
+
+  Net: (unnamed)
+  ────────────────────────────────────────
+    U1          pin 9     (PC15-OSC32_OUT)
+    X1          pin 2     (OSC2)
+
+------------------------------------------------------------------------
+SUMMARY
+------------------------------------------------------------------------
+  Total components:    39
+  Total named nets:    28
+  Total unnamed nets:  5
+  Total component pins: 232
+  Connected pin refs:   136
+  Unconnected pins:     96
+
+  Unconnected pin details:
+    CARD1       pin 1     (DAT2(RSV))
+    CARD1       pin 10    (GND)
+    CARD1       pin 11    (GND)
+    CARD1       pin 12    (GND)
+    CARD1       pin 13    (GND)
+    CARD1       pin 8     (DAT1(RSV))
+    CN1         pin 3     (3)
+    CN1         pin 4     (4)
+    CN2         pin 5     (5)
+    CN2         pin 6     (6)
+    COMM1       pin 1     (P15)
+    COMM1       pin 10    (P17)
+    COMM1       pin 11    (P18)
+    COMM1       pin 12    (P0)
+    COMM1       pin 13    (P34)
+    COMM1       pin 14    (NC)
+    COMM1       pin 16    (P2)
+    COMM1       pin 17    (P3)
+    COMM1       pin 18    (P20)
+    COMM1       pin 19    (P23)
+    COMM1       pin 2     (P11)
+    COMM1       pin 20    (P24)
+    COMM1       pin 3     (P31)
+    COMM1       pin 4     (P7)
+    COMM1       pin 5     (P32)
+    COMM1       pin 6     (P33)
+    COMM1       pin 7     (P14)
+    COMM1       pin 9     (P16)
+    Q1          pin 4     (NC)
+    U1          pin 1     (PE2)
+    U1          pin 12    (PH0-OSC_IN)
+    U1          pin 13    (PH1-OSC_OUT)
+    U1          pin 16    (PC1)
+    U1          pin 17    (PC2)
+    U1          pin 18    (PC3)
+    U1          pin 2     (PE3)
+    U1          pin 23    (PA0)
+    U1          pin 24    (PA1)
+    U1          pin 3     (PE4)
+    U1          pin 34    (PC5)
+    U1          pin 35    (PB0)
+    U1          pin 36    (PB1)
+    U1          pin 37    (PB2)
+    U1          pin 38    (PE7)
+    U1          pin 39    (PE8)
+    U1          pin 4     (PE5)
+    U1          pin 42    (PE11)
+    U1          pin 43    (PE12)
+    U1          pin 44    (PE13)
+    U1          pin 45    (PE14)
+    U1          pin 46    (PE15)
+    U1          pin 47    (PB10)
+    U1          pin 5     (PE6)
+    U1          pin 51    (PB12)
+    U1          pin 52    (PB13)
+    U1          pin 53    (PB14)
+    U1          pin 54    (PB15)
+    U1          pin 55    (PD8)
+    U1          pin 56    (PD9)
+    U1          pin 57    (PD10)
+    U1          pin 58    (PD11)
+    U1          pin 63    (PC6)
+    U1          pin 64    (PC7)
+    U1          pin 65    (PC8)
+    U1          pin 66    (PC9)
+    U1          pin 67    (PA8)
+    U1          pin 7     (PC13)
+    U1          pin 70    (PA11)
+    U1          pin 71    (PA12)
+    U1          pin 77    (PA15)
+    U1          pin 78    (PC10)
+    U1          pin 79    (PC11)
+    U1          pin 80    (PC12)
+    U1          pin 81    (PD0)
+    U1          pin 82    (PD1)
+    U1          pin 83    (PD2)
+    U1          pin 84    (PD3)
+    U1          pin 85    (PD4)
+    U1          pin 86    (PD5)
+    U1          pin 87    (PD6)
+    U1          pin 88    (PD7)
+    U1          pin 89    (PB3)
+    U1          pin 90    (PB4)
+    U1          pin 91    (PB5)
+    U1          pin 95    (PB8)
+    U1          pin 96    (PB9)
+    U1          pin 97    (PE0)
+    U1          pin 98    (PE1)
+    U2          pin 12    (12)
+    U2          pin 13    (13)
+    U2          pin 2     (2)
+    U2          pin 3     (3)
+    U2          pin 4     (4)
+    U2          pin 5     (5)
+    U2          pin 6     (6)
+    U2          pin 8     (5V)

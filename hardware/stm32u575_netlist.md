@@ -22,10 +22,10 @@ Cross-reference: `stm32u575_pinout.md` (pin assignments), `stm32u575_bom_lcsc.cs
 | Net Port | Description | Connected Pins |
 |----------|-------------|----------------|
 | **VBAT+** | Battery positive rail | CN1.1, Q1.VIN(1), Q1.CE(3), C16.+, R7.1 |
-| **3V3** | 3.3V regulated rail | Q1.VOUT(5), C15.+, C11.+, U1 VDD pins (11, 28, 50, 75, 100), U1.VDDA(22), U1.VREF+(21), U1.VDDUSB(73), U1.VBAT(6), C1.+, C2.+, C3.+, C4.+, C5.+, C6.+, C7.+, C8.+, C9.+, C13.+, C14.+, R1.1, R3.1, R4.1, Q2.Source, COMM1.VCC, CARD1.VDD, CN2.3, H1.1, H2.1, U2.VBKP |
+| **3V3** | 3.3V regulated rail | Q1.VOUT(5), C15.+, C11.+, U1 VDD pins (11, 28, 50, 75, 100), U1.VDDA(22), U1.VREF+(21), U1.VDDUSB(73), U1.VBAT(6), C1.+, C2.+, C3.+, C4.+, C5.+, C6.+, C7.+, C8.+, C9.+, C13.+, C14.+, R1.1, R3.1, R4.1, Q2.Source, COMM1.VCC, CARD1.VDD, CN2.3, H1.1, H2.1, J2.1 — bodge wire from U2 VBKP pad to J2 |
 | **GND** | Ground | *(see dedicated GND table below)* |
 | **GPS_VCC** | Switched 3.3V to GPS module | Q2.Drain, U2.VCC |
-| **VBAT_SENSE** | Battery ADC midpoint | R7.2, R8.1, U1.pin15 (PC0/ADC1_IN1) |
+| **VBAT_Sense** | Battery ADC midpoint | R7.2, R8.1, U1.pin15 (PC0/ADC1_IN1) |
 | **Q2_GATE** | GPS P-FET gate drive | Q2.Gate, R1.2, Q3.Collector |
 
 ### GND Net — All Ground Connections
@@ -54,7 +54,7 @@ Place the **GND** net port label on every pin listed below.
 |----------|-------------|----------------|
 | **GPS_TX** | GPS UART data out (GPS→MCU) | U2.TX, U1.pin69 (PA10 / USART1_RX, AF7) |
 | **GPS_RX** | GPS UART data in (MCU→GPS) | U2.RX, U1.pin68 (PA9 / USART1_TX, AF7) |
-| **GPS_PPS** | Pulse-per-second sync | U2.PPS, U1.pin17 (PC2 / EXTI) |
+| **GPS_PPS** | Pulse-per-second sync | J1.1, U1.pin17 (PC2 / EXTI) — bodge wire from U2 PPS pad to J1 |
 | **GPS_WAKE** | GPS wakeup control | U2.WAKEUP, U1.pin61 (PD14) |
 | **GPS_RST** | GPS reset (active low) | U2.RESET, U1.pin62 (PD15) |
 | **GPS_EN** | GPS power enable (MCU→Q3) | R2.1, U1.pin59 (PD12, GPIO) |
@@ -189,7 +189,7 @@ Only pins with net port connections are listed — all others are unused (config
 
 | Pin | GPIO | Net Port | Peripheral |
 |-----|------|----------|------------|
-| 15 | PC0 | VBAT_SENSE | ADC1_IN1 |
+| 15 | PC0 | VBAT_Sense | ADC1_IN1 |
 | 17 | PC2 | GPS_PPS | EXTI |
 | 25 | PA2 | BLE_RX | USART2_TX (AF7) |
 | 26 | PA3 | BLE_TX | USART2_RX (AF7) |
@@ -254,7 +254,7 @@ Added VCAP cap (C12) for internal LDO bypass.
 - [ ] GPS: Q2 P-FET Source=3V3, Drain=GPS_VCC, Gate=Q2_GATE
 - [ ] GPS: U2.VCC on GPS_VCC (switched), U2.VBKP on 3V3 (always on)
 - [ ] I2C: R3/R4 pull-ups between 3V3 and I2C_SCL/I2C_SDA
-- [ ] Battery divider: R7 (VBAT+→midpoint), R8 (midpoint→GND), midpoint=VBAT_SENSE
+- [ ] Battery divider: R7 (VBAT+→midpoint), R8 (midpoint→GND), midpoint=VBAT_Sense
 - [ ] BOOT0 (PH3 pin 94): R6 pull-down to GND
 - [ ] NRST (pin 14): C10 to GND
 - [ ] LSE crystal: X1 between OSC32_IN and OSC32_OUT (no external load caps — using internal)
