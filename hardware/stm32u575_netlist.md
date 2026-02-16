@@ -54,7 +54,7 @@ Place the **GND** net port label on every pin listed below.
 |----------|-------------|----------------|
 | **GPS_TX** | GPS UART data out (GPS→MCU) | U2.TX, U1.pin69 (PA10 / USART1_RX, AF7) |
 | **GPS_RX** | GPS UART data in (MCU→GPS) | U2.RX, U1.pin68 (PA9 / USART1_TX, AF7) |
-| **GPS_PPS** | Pulse-per-second sync | J1.1, U1.pin17 (PC2 / EXTI) — bodge wire from U2 PPS pad to J1 |
+| **GPS_PPS** | Pulse-per-second sync | J1.1, U1.pin67 (PA8 / EXTI) — bodge wire from U2 PPS pad to J1 |
 | **GPS_WAKE** | GPS wakeup control | U2.WAKEUP, U1.pin61 (PD14) |
 | **GPS_RST** | GPS reset (active low) | U2.RESET, U1.pin62 (PD15) |
 | **GPS_EN** | GPS power enable (MCU→Q3) | R2.1, U1.pin59 (PD12, GPIO) |
@@ -190,7 +190,7 @@ Only pins with net port connections are listed — all others are unused (config
 | Pin | GPIO | Net Port | Peripheral |
 |-----|------|----------|------------|
 | 15 | PC0 | VBAT_Sense | ADC1_IN1 |
-| 17 | PC2 | GPS_PPS | EXTI |
+| 67 | PA8 | GPS_PPS | EXTI |
 | 25 | PA2 | BLE_RX | USART2_TX (AF7) |
 | 26 | PA3 | BLE_TX | USART2_RX (AF7) |
 | 29 | PA4 | SD_CS | GPIO output |

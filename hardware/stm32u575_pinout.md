@@ -27,7 +27,7 @@ C5270988 is the non-SMPS variant — uses internal LDO, no external inductor.
 | SHT30 SCL | PB6 | 92 | AF4 | I2C1_SCL | 4.7k pull-up R3 |
 | SHT30 SDA | PB7 | 93 | AF4 | I2C1_SDA | 4.7k pull-up R4 |
 | Battery ADC | PC0 | 15 | analog | ADC1_IN1 | 1M/1M divider R7/R8 |
-| GPS PPS | PC2 | 17 | GPIO | EXTI input, rising | 1ms sync accuracy |
+| GPS PPS | PA8 | 67 | GPIO | EXTI input, rising | 1ms sync accuracy |
 | GPS WAKEUP | PD14 | 61 | GPIO | Output | L76K WAKEUP pin |
 | GPS RESET | PD15 | 62 | GPIO | Output, active low | L76K RESET pin |
 | GPS Power EN | PD12 | 59 | GPIO | Output | HIGH=GPS on, LOW=GPS off |
@@ -142,9 +142,9 @@ Divider current: ~2uA continuous (acceptable for battery life).
 
 Available GPIOs not assigned (configure as analog input for lowest leakage):
 
-PE0-PE6, PE7, PE8, PE11-PE15, PA0, PA1, PA8, PA11, PA12, PA15,
-PB0-PB5, PB8-PB10, PB12-PB15, PC1, PC3-PC9, PC10-PC12,
-PD0-PD7, PD10, PD11, PC5, PH0, PH1
+PE0-PE6, PE7, PE8, PE11-PE15, PA0, PA1, PA11, PA12, PA15,
+PB0-PB5, PB8-PB10, PB12-PB15, PC1, PC2, PC3, PC5-PC9, PC10-PC12,
+PD0-PD7, PD10, PD11, PH0, PH1
 
 Note: PB11 is NOT bonded out on LQFP100 (neither SMPS nor non-SMPS variant).
 
