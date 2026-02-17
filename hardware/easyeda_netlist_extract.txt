@@ -1,6 +1,6 @@
 ========================================================================
 EasyEDA Schematic Netlist Extraction
-Source: /Users/chris/Downloads/SCH_QuailTrack_v1_2026-02-15.json
+Source: /Users/chris/Downloads/SCH_QuailTrack_v1_2026-02-16.json
 ========================================================================
 
 ------------------------------------------------------------------------
@@ -60,11 +60,11 @@ COMPONENT LIST
                   pin 7=DAT0(D0), pin 8=DAT1(RSV), pin 9=CD, pin 10=GND, pin 11=GND, pin 12=GND
                   pin 13=GND
 
-  CN1         SM02B-SRSS-TB (LF)(SN)          [CONN-SMD_2P-P1.00_SM02B-SRSS-TB-LF-SN]
-              Pins: pin 1=1, pin 2=2, pin 3=3, pin 4=4
+  CN1         B2B-PH-K-S(LF)(SN)              [CONN-TH_B2B-PH-K-S]
+              Pins: pin 1=1, pin 2=2
 
-  CN2         SM04B-SRSS-TB (LF)(SN)          [CONN-SMD_4P-P1.00_SM04B-SRSS-TB-LF-SN]
-              Pins: pin 1=1, pin 2=2, pin 3=3, pin 4=4, pin 5=5, pin 6=6
+  CN2         B4B-PH-K-S(LF)(SN)              [CONN-TH_B4B-PH-K-S]
+              Pins: pin 1=1, pin 2=2, pin 3=3, pin 4=4
 
   COMM1       PB-03F                          [BULETM-SMD_PB-03F]
               Pins: pin 1=P15, pin 2=P11, pin 3=P31, pin 4=P7, pin 5=P32, pin 6=P33
@@ -77,12 +77,6 @@ COMPONENT LIST
 
   H2          SWD                             [HDR-TH_4P-P2.54-V-M]
               Pins: pin 1=1, pin 2=2, pin 3=3, pin 4=4
-
-  J1          PPS                             [HDR-M-2.54_1X1]
-              Pins: pin 1=1
-
-  J2          VBKP                            [HDR-M-2.54_1X1]
-              Pins: pin 1=1
 
   LED1        0805G (Green)                   [LED0805-R-RD]
               Pins: pin 1=A, pin 2=K
@@ -171,7 +165,6 @@ NETLIST BY NET NAME
     COMM1       pin 8     (VDD)
     H1          pin 1     (1)
     H2          pin 1     (1)
-    J2          pin 1     (1)
     Q1          pin 5     (VOUT)
     Q2          pin 2     (S)
     R1          pin 2     (2)
@@ -220,6 +213,10 @@ NETLIST BY NET NAME
     C7          pin 1     (1)
     C8          pin 1     (1)
     C9          pin 1     (1)
+    CARD1       pin 10    (GND)
+    CARD1       pin 11    (GND)
+    CARD1       pin 12    (GND)
+    CARD1       pin 13    (GND)
     CARD1       pin 6     (VSS)
     CN1         pin 2     (2)
     CN2         pin 4     (4)
@@ -304,7 +301,7 @@ NETLIST BY NET NAME
 
   Net: PPS
   ────────────────────────────────────────
-    J1          pin 1     (1)
+    U1          pin 67    (PA8)
 
   Net: Q2_GATE
   ────────────────────────────────────────
@@ -355,21 +352,21 @@ NETLIST BY NET NAME
     Q1          pin 1     (VIN)
     R7          pin 1     (1)
 
-  Net: VBAT_Sense
+  Net: VBAT_SENSE
   ────────────────────────────────────────
     R7          pin 2     (2)
     R8          pin 2     (2)
     U1          pin 15    (PC0)
 
+  Net: VCAP
+  ────────────────────────────────────────
+    C12         pin 2     (2)
+    U1          pin 48    (VCAP)
+
   Net: (unnamed)
   ────────────────────────────────────────
     Q3          pin 1     (B)
     R2          pin 2     (2)
-
-  Net: (unnamed)
-  ────────────────────────────────────────
-    C12         pin 2     (2)
-    U1          pin 48    (VCAP)
 
   Net: (unnamed)
   ────────────────────────────────────────
@@ -389,24 +386,16 @@ NETLIST BY NET NAME
 ------------------------------------------------------------------------
 SUMMARY
 ------------------------------------------------------------------------
-  Total components:    39
-  Total named nets:    28
-  Total unnamed nets:  5
-  Total component pins: 232
-  Connected pin refs:   136
-  Unconnected pins:     96
+  Total components:    37
+  Total named nets:    29
+  Total unnamed nets:  4
+  Total component pins: 226
+  Connected pin refs:   139
+  Unconnected pins:     87
 
   Unconnected pin details:
     CARD1       pin 1     (DAT2(RSV))
-    CARD1       pin 10    (GND)
-    CARD1       pin 11    (GND)
-    CARD1       pin 12    (GND)
-    CARD1       pin 13    (GND)
     CARD1       pin 8     (DAT1(RSV))
-    CN1         pin 3     (3)
-    CN1         pin 4     (4)
-    CN2         pin 5     (5)
-    CN2         pin 6     (6)
     COMM1       pin 1     (P15)
     COMM1       pin 10    (P17)
     COMM1       pin 11    (P18)
@@ -462,7 +451,6 @@ SUMMARY
     U1          pin 64    (PC7)
     U1          pin 65    (PC8)
     U1          pin 66    (PC9)
-    U1          pin 67    (PA8)
     U1          pin 7     (PC13)
     U1          pin 70    (PA11)
     U1          pin 71    (PA12)

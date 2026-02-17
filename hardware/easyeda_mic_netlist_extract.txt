@@ -1,0 +1,56 @@
+========================================================================
+EasyEDA Schematic Netlist Extraction
+Source: /Users/chris/Downloads/SCH_QuailTrackMic_v1_2026-02-16.json
+========================================================================
+
+------------------------------------------------------------------------
+COMPONENT LIST
+------------------------------------------------------------------------
+
+  C1          100nF                           [C0603]
+              Pins: pin 1=1, pin 2=2
+
+  U1          IM73D122V01XTMA1                [MIC-SMD_5P-L4.0-W3.0-P0.70-TR_IM69D130V01]
+              Pins: pin 1=DATA, pin 2=VDD, pin 3=CLOCK, pin 4=LR, pin 5=GND
+
+  U2          S4B-PH-SM4-TB(LF)(SN)           [CONN-SMD_S4B-PH-SM4-TB-LF-SN]
+              Pins: pin 1=1, pin 2=2, pin 3=3, pin 4=4, pin 5=5, pin 6=6
+
+------------------------------------------------------------------------
+NETLIST BY NET NAME
+------------------------------------------------------------------------
+
+  Net: GND
+  ────────────────────────────────────────
+    C1          pin 2     (2)
+    U1          pin 5     (GND)
+    U1          pin 4     (LR)
+    U2          pin 4     (4)
+    U2          pin 5     (5)
+    U2          pin 6     (6)
+
+  Net: PDM_CLK
+  ────────────────────────────────────────
+    U1          pin 3     (CLOCK)
+    U2          pin 1     (1)
+
+  Net: PDM_DATA
+  ────────────────────────────────────────
+    U1          pin 1     (DATA)
+    U2          pin 2     (2)
+
+  Net: VDD
+  ────────────────────────────────────────
+    C1          pin 1     (1)
+    U1          pin 2     (VDD)
+    U2          pin 3     (3)
+
+------------------------------------------------------------------------
+SUMMARY
+------------------------------------------------------------------------
+  Total components:    3
+  Total named nets:    4
+  Total unnamed nets:  0
+  Total component pins: 13
+  Connected pin refs:   13
+  Unconnected pins:     0

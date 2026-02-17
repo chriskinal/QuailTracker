@@ -14,8 +14,8 @@ import json
 import sys
 from collections import defaultdict
 
-INPUT_FILE = "/Users/chris/Downloads/SCH_QuailTrack_v1_2026-02-15.json"
-OUTPUT_FILE = "/Users/chris/Code/QuailTracker/hardware/easyeda_netlist_extract.txt"
+DEFAULT_INPUT = "/Users/chris/Downloads/SCH_QuailTrack_v1_2026-02-15.json"
+DEFAULT_OUTPUT = "/Users/chris/Code/QuailTracker/hardware/easyeda_netlist_extract.txt"
 
 EPSILON = 0.5  # coordinate matching tolerance
 
@@ -306,12 +306,12 @@ def build_netlist(components, net_labels, wires, junctions):
     return dict(netlist)
 
 
-def format_output(components, netlist):
+def format_output(components, netlist, source_file=""):
     """Format the extraction results as readable text."""
     lines = []
     lines.append("=" * 72)
     lines.append("EasyEDA Schematic Netlist Extraction")
-    lines.append(f"Source: {INPUT_FILE}")
+    lines.append(f"Source: {source_file}")
     lines.append("=" * 72)
     lines.append("")
 
@@ -398,9 +398,20 @@ def format_output(components, netlist):
 
 
 def main():
+    # Determine input/output files from CLI args or defaults
+    if len(sys.argv) >= 3:
+        input_file = sys.argv[1]
+        output_file = sys.argv[2]
+    elif len(sys.argv) == 2:
+        input_file = sys.argv[1]
+        output_file = DEFAULT_OUTPUT
+    else:
+        input_file = DEFAULT_INPUT
+        output_file = DEFAULT_OUTPUT
+
     # Load schematic
-    print(f"Loading {INPUT_FILE}...")
-    with open(INPUT_FILE) as f:
+    print(f"Loading {input_file}...")
+    with open(input_file) as f:
         data = json.load(f)
 
     shapes = data["schematics"][0]["dataStr"]["shape"]
@@ -425,11 +436,11 @@ def main():
     print(f"  Found {len(netlist)} nets")
 
     # Format and write output
-    output = format_output(components, netlist)
+    output = format_output(components, netlist, input_file)
 
-    with open(OUTPUT_FILE, "w") as f:
+    with open(output_file, "w") as f:
         f.write(output)
-    print(f"\nOutput written to {OUTPUT_FILE}")
+    print(f"\nOutput written to {output_file}")
 
     # Also print to stdout
     print()

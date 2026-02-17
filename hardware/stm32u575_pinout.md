@@ -68,7 +68,7 @@ C5270988 is the non-SMPS variant — uses internal LDO, no external inductor.
 | 9 | PC15 / OSC32_OUT | 32.768kHz LSE crystal |
 | 12 | PH0 / OSC_IN | HSE — NC for V1 (using HSI16 + PLL) |
 | 13 | PH1 / OSC_OUT | HSE — NC for V1 |
-| 14 | NRST | 100nF C18 to GND |
+| 14 | NRST | 100nF C10 to GND |
 
 ## Internal LDO Configuration
 
@@ -98,16 +98,20 @@ Supports LPBAM for autonomous audio capture in Stop 2 mode.
 PA9/PA10 are the boot-default USART1 pins. 3.3V logic levels match L76K.
 GPS module (U2, Seeed L76K on XIAO footprint):
 
-| Header Pin | Signal | MCU Pin | Direction |
-|------------|--------|---------|-----------|
-| 1 | GND | - | - |
-| 2 | VCC | 3.3V (switched) | Power |
-| 3 | VBKP | 3.3V direct | Backup power |
-| 4 | TX (GPS→MCU) | PA10 / USART1_RX | Input |
-| 5 | RX (MCU→GPS) | PA9 / USART1_TX | Output |
-| 6 | WAKEUP | PD14 | Output |
-| 7 | PPS | PC2 | Input (EXTI) |
-| 8 | RESET | PD15 | Output |
+| XIAO Pin | Signal | MCU Pin | Direction | Notes |
+|----------|--------|---------|-----------|-------|
+| 1 | RXD (MCU→GPS) | PA9 / USART1_TX | Output | |
+| 7 | WAKEUP | PD14 | Output | |
+| 8 | 5V | NC | - | Not used |
+| 9 | GND | - | - | |
+| 10 | VCC (3v3) | GPS_VCC (switched) | Power | Via Q2 P-FET |
+| 11 | RESET | PD15 | Output | Active low |
+| 14 | TXD (GPS→MCU) | PA10 / USART1_RX | Input | |
+| 3 | PPS | PA8 / EXTI | Input | Bodge wire on L76K: PPS pad → XIAO pin 3 |
+
+**L76K bodge wires** (soldered on the GPS module, not the main board):
+- **PPS**: L76K PPS pad → XIAO header pin 3
+- **VBKP**: L76K VBKP pad → XIAO 3V3 pin (keeps RTC/hot-start alive when GPS_VCC off)
 
 ### USART2 — BLE Module (PB-03F)
 
@@ -152,7 +156,7 @@ Note: PB11 is NOT bonded out on LQFP100 (neither SMPS nor non-SMPS variant).
 
 1. **Power** — Q1 (LDO), C1-C16 (decoupling), CN1 (battery)
 2. **MCU** — U1 (STM32U575VGT6), X1 (LSE crystal), R6 (BOOT0 pull-down)
-3. **Audio** — CN2 (JST SH 4-pin to mic breakout: CLK, DATA, VDD, GND)
+3. **Audio** — CN2 (JST PH 4-pin to mic breakout: CLK, DATA, VDD, GND)
 4. **GPS** — U2 (L76K module), Q2 (P-FET switch), Q3 (gate drive), R1/R2 (10k)
 5. **Storage** — CARD1 (MicroSD slot), SPI1 on PA4-PA7
 6. **BLE** — COMM1 (PB-03F module), USART2 on PA2/PA3
