@@ -134,7 +134,7 @@ COMPONENT LIST
                   pin 97=PE0, pin 98=PE1, pin 99=VSS, pin 100=VDD
 
   U2          Seeed L76K GPS Module           [COMM-SMD_SEEEDUINO-XIAO]
-              Pins: pin 1=RXD, pin 2=2, pin 3=3, pin 4=4, pin 5=5, pin 6=6
+              Pins: pin 1=RXD, pin 2=2, pin 3=PPS, pin 4=4, pin 5=5, pin 6=6
                   pin 7=WAKE, pin 8=5V, pin 9=GND, pin 10=3v3, pin 11=RESET, pin 12=12
                   pin 13=13, pin 14=TXD
 
@@ -242,6 +242,11 @@ NETLIST BY NET NAME
     R2          pin 1     (1)
     U1          pin 59    (PD12)
 
+  Net: GPS_PPS
+  ────────────────────────────────────────
+    U1          pin 67    (PA8)
+    U2          pin 3     (PPS)
+
   Net: GPS_RST
   ────────────────────────────────────────
     U1          pin 62    (PD15)
@@ -298,10 +303,6 @@ NETLIST BY NET NAME
   ────────────────────────────────────────
     CN2         pin 2     (2)
     U1          pin 41    (PE10)
-
-  Net: PPS
-  ────────────────────────────────────────
-    U1          pin 67    (PA8)
 
   Net: Q2_GATE
   ────────────────────────────────────────
@@ -390,8 +391,8 @@ SUMMARY
   Total named nets:    29
   Total unnamed nets:  4
   Total component pins: 226
-  Connected pin refs:   139
-  Unconnected pins:     87
+  Connected pin refs:   140
+  Unconnected pins:     86
 
   Unconnected pin details:
     CARD1       pin 1     (DAT2(RSV))
@@ -476,7 +477,6 @@ SUMMARY
     U2          pin 12    (12)
     U2          pin 13    (13)
     U2          pin 2     (2)
-    U2          pin 3     (3)
     U2          pin 4     (4)
     U2          pin 5     (5)
     U2          pin 6     (6)
