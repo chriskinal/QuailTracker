@@ -443,7 +443,10 @@ int main(void)
             } else {
                 printf("Format SD card? ALL DATA WILL BE ERASED. (y/n) > ");
                 int confirm = -1;
-                while (confirm < 0) confirm = getChar();
+                while (confirm < 0) {
+                    confirm = getChar();
+                    if (confirm == '\r' || confirm == '\n') confirm = -1;
+                }
                 printf("%c\r\n", confirm);
                 if (confirm == 'y' || confirm == 'Y') {
                     formatSD();
