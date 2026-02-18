@@ -22,6 +22,9 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <string.h>
+#include <stdio.h>
+#include "fatfs.h"
+#include "user_diskio.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -45,8 +48,26 @@ COM_InitTypeDef BspCOMInit;
 
 UART_HandleTypeDef hlpuart1;
 
-/* USER CODE BEGIN PV */
+SPI_HandleTypeDef hspi1;
 
+/* USER CODE BEGIN PV */
+#define AUDIO_BUF_SIZE 1024
+#define SAMPLE_RATE    48000
+
+int32_t audioBuffer[AUDIO_BUF_SIZE];
+volatile uint8_t halfComplete = 0;
+volatile uint8_t fullComplete = 0;
+
+/* Conversion buffer: 512 samples -> 512 int16 samples = 1024 bytes */
+int16_t pcmBuffer[AUDIO_BUF_SIZE / 2];
+
+/* Recording state */
+static FIL wavFile;
+static uint8_t isRecording = 0;
+static uint8_t sdMounted = 0;
+static uint8_t audioStarted = 0;
+static uint32_t totalDataBytes = 0;
+static uint32_t fileCounter = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -55,13 +76,195 @@ static void SystemPower_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_ICACHE_Init(void);
 static void MX_LPUART1_UART_Init(void);
+static void MX_SPI1_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-#define FW_VERSION "0.1.0"
+#define FW_VERSION "0.2.0"
+
+/* Direct UART RX - non-blocking, clears errors (VCP = USART1 on Nucleo-U575ZI-Q) */
+static int getChar(void)
+{
+    USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
+    if (USART1->ISR & USART_ISR_RXNE_RXFNE) {
+        return (int)(USART1->RDR & 0xFF);
+    }
+    return -1;
+}
+
+static void WAV_WriteHeader(FIL *fp, uint32_t sampleRate, uint32_t dataSize)
+{
+    uint8_t hdr[44];
+    uint32_t fileSize = dataSize + 36;
+    uint16_t channels = 1;
+    uint16_t bitsPerSample = 16;
+    uint32_t byteRate = sampleRate * channels * bitsPerSample / 8;
+    uint16_t blockAlign = channels * bitsPerSample / 8;
+
+    memcpy(&hdr[0], "RIFF", 4);
+    memcpy(&hdr[4], &fileSize, 4);
+    memcpy(&hdr[8], "WAVE", 4);
+
+    memcpy(&hdr[12], "fmt ", 4);
+    uint32_t fmtSize = 16;
+    memcpy(&hdr[16], &fmtSize, 4);
+    uint16_t audioFmt = 1; /* PCM */
+    memcpy(&hdr[20], &audioFmt, 2);
+    memcpy(&hdr[22], &channels, 2);
+    memcpy(&hdr[24], &sampleRate, 4);
+    memcpy(&hdr[28], &byteRate, 4);
+    memcpy(&hdr[32], &blockAlign, 2);
+    memcpy(&hdr[34], &bitsPerSample, 2);
+
+    memcpy(&hdr[36], "data", 4);
+    memcpy(&hdr[40], &dataSize, 4);
+
+    UINT bw;
+    f_write(fp, hdr, 44, &bw);
+}
+
+static void printMenu(void)
+{
+    printf("\r\n===== MENU =====\r\n");
+    printf("1. Status\r\n");
+    printf("2. Start Recording\r\n");
+    printf("3. Stop Recording\r\n");
+    printf("4. SD Card Info\r\n");
+    printf("5. Format SD Card\r\n");
+    printf("6. Eject SD Card\r\n");
+    printf("7. Mount SD Card\r\n");
+    printf("R. Toggle Recording\r\n");
+    printf("================\r\n");
+    printf("[%s] > ", isRecording ? "REC" : "IDLE");
+}
+
+static void printStatus(void)
+{
+    printf("\r\n========== STATUS ==========\r\n");
+
+    printf("Audio:\r\n");
+    if (audioStarted) {
+        printf("  ADF1: Running (Sinc4, FOSR=64)\r\n");
+    } else {
+        printf("  ADF1: Not started\r\n");
+    }
+    printf("  Sample Rate: %lu Hz\r\n", (unsigned long)SAMPLE_RATE);
+    printf("  DMA Buffer: %d x 32-bit\r\n", AUDIO_BUF_SIZE);
+
+    printf("Recording:\r\n");
+    printf("  Active: %s\r\n", isRecording ? "Yes" : "No");
+    if (isRecording) {
+        uint32_t seconds = totalDataBytes / (SAMPLE_RATE * 2);
+        printf("  Duration: %lus\r\n", (unsigned long)seconds);
+        printf("  Size: %lu bytes\r\n", (unsigned long)totalDataBytes);
+    }
+
+    printf("SD Card:\r\n");
+    printf("  Mounted: %s\r\n", sdMounted ? "Yes" : "No");
+    if (sdMounted) {
+        FATFS *fs;
+        DWORD fre_clust;
+        if (f_getfree("", &fre_clust, &fs) == FR_OK) {
+            DWORD tot_sect = (fs->n_fatent - 2) * fs->csize;
+            DWORD fre_sect = fre_clust * fs->csize;
+            printf("  Total: %lu KB\r\n", (unsigned long)(tot_sect / 2));
+            printf("  Free:  %lu KB\r\n", (unsigned long)(fre_sect / 2));
+        }
+    }
+
+    printf("============================\r\n");
+}
+
+static void startRecording(void)
+{
+    if (!sdMounted) {
+        printf("SD card not mounted!\r\n");
+        return;
+    }
+    if (isRecording) {
+        printf("Already recording!\r\n");
+        return;
+    }
+
+    char fname[20];
+    snprintf(fname, sizeof(fname), "rec_%03lu.wav", (unsigned long)fileCounter);
+
+    FRESULT fres = f_open(&wavFile, fname, FA_WRITE | FA_CREATE_ALWAYS);
+    if (fres != FR_OK) {
+        printf("f_open FAILED: %d\r\n", fres);
+        return;
+    }
+
+    /* Write placeholder header (will be rewritten on stop) */
+    WAV_WriteHeader(&wavFile, SAMPLE_RATE, 0);
+    f_sync(&wavFile);
+
+    totalDataBytes = 0;
+    isRecording = 1;
+    fileCounter++;
+
+    printf("Recording to %s...\r\n", fname);
+}
+
+static void stopRecording(void)
+{
+    if (!isRecording) {
+        printf("Not recording!\r\n");
+        return;
+    }
+
+    isRecording = 0;
+
+    /* Rewrite WAV header with actual data size */
+    f_lseek(&wavFile, 0);
+    WAV_WriteHeader(&wavFile, SAMPLE_RATE, totalDataBytes);
+    f_close(&wavFile);
+
+    uint32_t seconds = totalDataBytes / (SAMPLE_RATE * 2);
+    printf("Recording stopped: %lu bytes (%lus)\r\n",
+        (unsigned long)totalDataBytes, (unsigned long)seconds);
+}
+
+static int formatSD(void)
+{
+    extern FATFS USERFatFS;
+    extern char USERPath[];
+
+    printf("Formatting SD card (FAT32)...\r\n");
+
+    if (sdMounted) {
+        f_mount(NULL, USERPath, 0);
+        sdMounted = 0;
+    }
+
+    FRESULT fres = f_mount(&USERFatFS, USERPath, 0);
+    if (fres != FR_OK) {
+        printf("f_mount failed: %d\r\n", fres);
+        return 0;
+    }
+
+    static uint8_t workBuf[512];
+    fres = f_mkfs(USERPath, FM_FAT32, 0, workBuf, sizeof(workBuf));
+    if (fres != FR_OK) {
+        printf("f_mkfs failed: %d\r\n", fres);
+        f_mount(NULL, USERPath, 0);
+        return 0;
+    }
+
+    f_mount(NULL, USERPath, 0);
+    fres = f_mount(&USERFatFS, USERPath, 1);
+    if (fres != FR_OK) {
+        printf("Mount after format failed: %d\r\n", fres);
+        return 0;
+    }
+
+    sdMounted = 1;
+    printf("Format complete, SD card ready\r\n");
+    return 1;
+}
 /* USER CODE END 0 */
 
 /**
@@ -98,8 +301,9 @@ int main(void)
   MX_GPIO_Init();
   MX_ICACHE_Init();
   MX_LPUART1_UART_Init();
+  MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
-
+  setvbuf(stdout, NULL, _IONBF, 0);
   /* USER CODE END 2 */
 
   /* Initialize leds */
@@ -123,15 +327,72 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  setvbuf(stdout, NULL, _IONBF, 0);
-
   printf("\r\n\r\n");
   printf("================================================\r\n");
-  printf("  QuailTracker U575 - Firmware Bring-Up\r\n");
+  printf("  QuailTracker U575 - PDM Audio Recorder\r\n");
   printf("  Nucleo-U575ZI-Q  v%s\r\n", FW_VERSION);
   printf("  SYSCLK: %lu MHz\r\n",
          (unsigned long)(HAL_RCC_GetSysClockFreq() / 1000000UL));
-  printf("================================================\r\n\r\n");
+  printf("================================================\r\n");
+
+#ifdef HAL_MDF_MODULE_ENABLED
+  /* Phase 2: Start ADF1 DMA acquisition
+   * CubeMX generates hadf1 handle and MX_ADF1_Init().
+   * Uncomment below after CubeMX ADF1 configuration is done.
+   */
+#if 0 /* Enable after CubeMX Phase 2 */
+  {
+    extern MDF_HandleTypeDef hadf1;
+    MDF_FilterConfigTypeDef filterConfig = {0};
+    filterConfig.DataSource = MDF_DATA_SOURCE_BSMX;
+    filterConfig.Delay = 0;
+    filterConfig.CicMode = MDF_ONE_FILTER_SINC4;
+    filterConfig.DecimationRatio = 64;
+    filterConfig.Gain = 0;
+    filterConfig.ReshapeFilter.Activation = DISABLE;
+    filterConfig.HighPassFilter.Activation = DISABLE;
+    filterConfig.Integrator.Activation = DISABLE;
+    filterConfig.SoundActivity.Activation = DISABLE;
+    filterConfig.AcquisitionMode = MDF_MODE_ASYNC_CONT;
+    filterConfig.FifoThreshold = MDF_FIFO_THRESHOLD_NOT_EMPTY;
+    filterConfig.DiscardSamples = 0;
+
+    MDF_DmaConfigTypeDef dmaConfig = {0};
+    dmaConfig.Address = (uint32_t)audioBuffer;
+    dmaConfig.DataLength = AUDIO_BUF_SIZE * 4;
+    dmaConfig.MsbOnly = ENABLE;
+
+    printf("ADF1: ");
+    if (HAL_MDF_AcqStart_DMA(&hadf1, &filterConfig, &dmaConfig) != HAL_OK) {
+        printf("FAILED\r\n");
+    } else {
+        audioStarted = 1;
+        printf("OK (48kHz, Sinc4)\r\n");
+    }
+  }
+#endif
+#endif /* HAL_MDF_MODULE_ENABLED */
+
+  /* Init FatFS (normally CubeMX adds this to init sequence; manual until Phase 1) */
+  MX_FATFS_Init();
+
+  /* Mount SD card - auto-format if unrecognized */
+  extern FATFS USERFatFS;
+  extern char USERPath[];
+  printf("SD Card: ");
+  if (f_mount(&USERFatFS, USERPath, 1) == FR_OK) {
+      sdMounted = 1;
+      printf("Mounted\r\n");
+  } else {
+      printf("Not readable, formatting...\r\n");
+      if (formatSD()) {
+          printf("SD Card: Ready\r\n");
+      } else {
+          printf("SD Card: No card detected\r\n");
+      }
+  }
+
+  printMenu();
 
   while (1)
   {
@@ -139,9 +400,148 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    BSP_LED_Toggle(LED_GREEN);
-    printf("[%7lu] heartbeat\r\n", (unsigned long)HAL_GetTick());
-    HAL_Delay(1000);
+
+    /* Process serial commands */
+    int c = getChar();
+    if (c >= 0) {
+        switch (c) {
+        case '1':
+            printStatus();
+            printMenu();
+            break;
+
+        case '2':
+            startRecording();
+            printMenu();
+            break;
+
+        case '3':
+            stopRecording();
+            printMenu();
+            break;
+
+        case '4':
+            if (sdMounted) {
+                FATFS *fs;
+                DWORD fre_clust;
+                printf("\r\n=== SD Card Info ===\r\n");
+                if (f_getfree("", &fre_clust, &fs) == FR_OK) {
+                    DWORD tot_sect = (fs->n_fatent - 2) * fs->csize;
+                    DWORD fre_sect = fre_clust * fs->csize;
+                    printf("Total: %lu KB\r\n", (unsigned long)(tot_sect / 2));
+                    printf("Free:  %lu KB\r\n", (unsigned long)(fre_sect / 2));
+                }
+            } else {
+                printf("SD card not mounted!\r\n");
+            }
+            printMenu();
+            break;
+
+        case '5':
+            if (isRecording) {
+                printf("Stop recording first!\r\n");
+            } else {
+                printf("Format SD card? ALL DATA WILL BE ERASED. (y/n) > ");
+                int confirm = -1;
+                while (confirm < 0) confirm = getChar();
+                printf("%c\r\n", confirm);
+                if (confirm == 'y' || confirm == 'Y') {
+                    formatSD();
+                } else {
+                    printf("Cancelled\r\n");
+                }
+            }
+            printMenu();
+            break;
+
+        case '6':
+            if (isRecording) {
+                printf("Stop recording first!\r\n");
+            } else if (!sdMounted) {
+                printf("Already ejected\r\n");
+            } else {
+                extern char USERPath[];
+                f_mount(NULL, USERPath, 0);
+                USER_disk_deinit();
+                sdMounted = 0;
+                printf("SD card ejected - safe to remove\r\n");
+            }
+            printMenu();
+            break;
+
+        case '7':
+        {
+            if (sdMounted) {
+                printf("Already mounted\r\n");
+            } else {
+                extern FATFS USERFatFS;
+                extern char USERPath[];
+                printf("Mounting... ");
+                if (f_mount(&USERFatFS, USERPath, 1) == FR_OK) {
+                    sdMounted = 1;
+                    printf("OK\r\n");
+                } else {
+                    printf("Not readable, formatting...\r\n");
+                    if (formatSD()) {
+                        printf("SD card ready\r\n");
+                    } else {
+                        printf("No card detected\r\n");
+                    }
+                }
+            }
+            printMenu();
+            break;
+        }
+
+        case 'r':
+        case 'R':
+            if (isRecording) {
+                stopRecording();
+            } else {
+                startRecording();
+            }
+            printMenu();
+            break;
+
+        case '\r':
+        case '\n':
+            break;
+        }
+    }
+
+    /* Background recording: write DMA buffers to SD */
+    if (isRecording) {
+        int32_t *src = NULL;
+
+        if (halfComplete) {
+            halfComplete = 0;
+            src = &audioBuffer[0];
+        } else if (fullComplete) {
+            fullComplete = 0;
+            src = &audioBuffer[AUDIO_BUF_SIZE / 2];
+        }
+
+        if (src) {
+            /* Sinc4 FOSR=64: more bit growth than Sinc3, use >> 8 (tune later) */
+            for (int i = 0; i < AUDIO_BUF_SIZE / 2; i++) {
+                pcmBuffer[i] = (int16_t)(src[i] >> 8);
+            }
+
+            UINT bw;
+            FRESULT fres = f_write(&wavFile, pcmBuffer, sizeof(pcmBuffer), &bw);
+            if (fres != FR_OK) {
+                printf("f_write FAILED: %d at %lu bytes\r\n", fres, (unsigned long)totalDataBytes);
+                f_close(&wavFile);
+                isRecording = 0;
+            }
+            totalDataBytes += bw;
+
+            /* Sync every ~1 second */
+            if ((totalDataBytes % (SAMPLE_RATE * 2)) < sizeof(pcmBuffer)) {
+                f_sync(&wavFile);
+            }
+        }
+    }
   }
   /* USER CODE END 3 */
 }
@@ -157,7 +557,7 @@ void SystemClock_Config(void)
 
   /** Configure the main internal regulator output voltage
   */
-  if (HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE4) != HAL_OK)
+  if (HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1) != HAL_OK)
   {
     Error_Handler();
   }
@@ -168,7 +568,16 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.MSIState = RCC_MSI_ON;
   RCC_OscInitStruct.MSICalibrationValue = RCC_MSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_4;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_MSI;
+  RCC_OscInitStruct.PLL.PLLMBOOST = RCC_PLLMBOOST_DIV1;
+  RCC_OscInitStruct.PLL.PLLM = 1;
+  RCC_OscInitStruct.PLL.PLLN = 80;
+  RCC_OscInitStruct.PLL.PLLP = 2;
+  RCC_OscInitStruct.PLL.PLLQ = 2;
+  RCC_OscInitStruct.PLL.PLLR = 2;
+  RCC_OscInitStruct.PLL.PLLRGE = RCC_PLLVCIRANGE_0;
+  RCC_OscInitStruct.PLL.PLLFRACN = 0;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -179,13 +588,13 @@ void SystemClock_Config(void)
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2
                               |RCC_CLOCKTYPE_PCLK3;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_MSI;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.APB3CLKDivider = RCC_HCLK_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_4) != HAL_OK)
   {
     Error_Handler();
   }
@@ -295,12 +704,70 @@ static void MX_LPUART1_UART_Init(void)
 }
 
 /**
+  * @brief SPI1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_SPI1_Init(void)
+{
+
+  /* USER CODE BEGIN SPI1_Init 0 */
+
+  /* USER CODE END SPI1_Init 0 */
+
+  SPI_AutonomousModeConfTypeDef HAL_SPI_AutonomousMode_Cfg_Struct = {0};
+
+  /* USER CODE BEGIN SPI1_Init 1 */
+
+  /* USER CODE END SPI1_Init 1 */
+  /* SPI1 parameter configuration*/
+  hspi1.Instance = SPI1;
+  hspi1.Init.Mode = SPI_MODE_MASTER;
+  hspi1.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
+  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi1.Init.NSS = SPI_NSS_SOFT;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_32;
+  hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi1.Init.CRCPolynomial = 0x7;
+  hspi1.Init.NSSPMode = SPI_NSS_PULSE_ENABLE;
+  hspi1.Init.NSSPolarity = SPI_NSS_POLARITY_LOW;
+  hspi1.Init.FifoThreshold = SPI_FIFO_THRESHOLD_01DATA;
+  hspi1.Init.MasterSSIdleness = SPI_MASTER_SS_IDLENESS_00CYCLE;
+  hspi1.Init.MasterInterDataIdleness = SPI_MASTER_INTERDATA_IDLENESS_00CYCLE;
+  hspi1.Init.MasterReceiverAutoSusp = SPI_MASTER_RX_AUTOSUSP_DISABLE;
+  hspi1.Init.MasterKeepIOState = SPI_MASTER_KEEP_IO_STATE_DISABLE;
+  hspi1.Init.IOSwap = SPI_IO_SWAP_DISABLE;
+  hspi1.Init.ReadyMasterManagement = SPI_RDY_MASTER_MANAGEMENT_INTERNALLY;
+  hspi1.Init.ReadyPolarity = SPI_RDY_POLARITY_HIGH;
+  if (HAL_SPI_Init(&hspi1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  HAL_SPI_AutonomousMode_Cfg_Struct.TriggerState = SPI_AUTO_MODE_DISABLE;
+  HAL_SPI_AutonomousMode_Cfg_Struct.TriggerSelection = SPI_GRP1_GPDMA_CH0_TCF_TRG;
+  HAL_SPI_AutonomousMode_Cfg_Struct.TriggerPolarity = SPI_TRIG_POLARITY_RISING;
+  if (HAL_SPIEx_SetConfigAutonomousMode(&hspi1, &HAL_SPI_AutonomousMode_Cfg_Struct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN SPI1_Init 2 */
+
+  /* USER CODE END SPI1_Init 2 */
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
   */
 static void MX_GPIO_Init(void)
 {
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
   /* USER CODE BEGIN MX_GPIO_Init_1 */
 
   /* USER CODE END MX_GPIO_Init_1 */
@@ -310,13 +777,32 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(SD_CS_GPIO_Port, SD_CS_Pin, GPIO_PIN_SET);
+
+  /*Configure GPIO pin : SD_CS_Pin */
+  GPIO_InitStruct.Pin = SD_CS_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(SD_CS_GPIO_Port, &GPIO_InitStruct);
+
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
+/* ADF1 DMA callbacks - Phase 2 */
+void HAL_MDF_AcqHalfCpltCallback(MDF_HandleTypeDef *hmdf)
+{
+    halfComplete = 1;
+}
 
+void HAL_MDF_AcqCpltCallback(MDF_HandleTypeDef *hmdf)
+{
+    fullComplete = 1;
+}
 /* USER CODE END 4 */
 
 /**
