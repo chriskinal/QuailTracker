@@ -73,6 +73,7 @@ static uint8_t sdMounted = 0;
 static uint8_t audioStarted = 0;
 static uint32_t totalDataBytes = 0;
 static uint32_t fileCounter = 0;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -90,7 +91,7 @@ static void MX_ADF1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-#define FW_VERSION "0.2.0"
+#define FW_VERSION "0.2.1"
 
 /* Direct UART RX - non-blocking, clears errors (VCP = USART1 on Nucleo-U575ZI-Q) */
 static int getChar(void)
@@ -346,20 +347,22 @@ int main(void)
 
   /* Start ADF1 DMA acquisition — uses CubeMX-generated AdfHandle0 + AdfFilterConfig0 */
   {
-    /* Fix CubeMX default: decimation ratio must be 64 for 48kHz sample rate */
+    /* CubeMX DecimationRatio=2 is wrong, override to 64 for 48kHz.
+     * Gain=6 → 2^6=64x (36dB) boost. Full scale at ~94 dB SPL. */
     AdfFilterConfig0.DecimationRatio = 64;
+    AdfFilterConfig0.Gain = 6;
 
     MDF_DmaConfigTypeDef dmaConfig = {0};
     dmaConfig.Address = (uint32_t)audioBuffer;
     dmaConfig.DataLength = AUDIO_BUF_SIZE * 4;
-    dmaConfig.MsbOnly = ENABLE;
+    dmaConfig.MsbOnly = DISABLE;
 
     printf("ADF1: ");
     if (HAL_MDF_AcqStart_DMA(&AdfHandle0, &AdfFilterConfig0, &dmaConfig) != HAL_OK) {
         printf("FAILED\r\n");
     } else {
         audioStarted = 1;
-        printf("OK (48kHz, Sinc4)\r\n");
+        printf("OK (48kHz, Sinc4, gain=%d)\r\n", (int)AdfFilterConfig0.Gain);
     }
   }
 
@@ -515,9 +518,10 @@ int main(void)
         }
 
         if (src) {
-            /* Sinc4 FOSR=64: more bit growth than Sinc3, use >> 8 (tune later) */
+            /* MDF DFLTDR is left-justified: 25-bit Sinc4 output in bits [31:7].
+             * >> 16 extracts bits [31:16] = top 16 bits (same as MsbOnly). */
             for (int i = 0; i < AUDIO_BUF_SIZE / 2; i++) {
-                pcmBuffer[i] = (int16_t)(src[i] >> 8);
+                pcmBuffer[i] = (int16_t)(src[i] >> 16);
             }
 
             UINT bw;
@@ -636,7 +640,7 @@ static void MX_ADF1_Init(void)
     AdfHandle0 structure initialization and HAL_MDF_Init function call
   */
   AdfHandle0.Instance = ADF1_Filter0;
-  AdfHandle0.Init.CommonParam.ProcClockDivider = 26;
+  AdfHandle0.Init.CommonParam.ProcClockDivider = 52; /* 160MHz/52=3.077MHz, was 26 (CubeMX) */
   AdfHandle0.Init.CommonParam.OutputClock.Activation = ENABLE;
   AdfHandle0.Init.CommonParam.OutputClock.Pins = MDF_OUTPUT_CLOCK_0;
   AdfHandle0.Init.CommonParam.OutputClock.Divider = 1;
