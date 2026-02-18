@@ -45,6 +45,11 @@
 /* Private variables ---------------------------------------------------------*/
 
 COM_InitTypeDef BspCOMInit;
+MDF_HandleTypeDef AdfHandle0;
+MDF_FilterConfigTypeDef AdfFilterConfig0;
+DMA_NodeTypeDef Node_GPDMA1_Channel0;
+DMA_QListTypeDef List_GPDMA1_Channel0;
+DMA_HandleTypeDef handle_GPDMA1_Channel0;
 
 UART_HandleTypeDef hlpuart1;
 
@@ -74,9 +79,11 @@ static uint32_t fileCounter = 0;
 void SystemClock_Config(void);
 static void SystemPower_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_GPDMA1_Init(void);
 static void MX_ICACHE_Init(void);
-static void MX_LPUART1_UART_Init(void);
 static void MX_SPI1_Init(void);
+static void MX_LPUART1_UART_Init(void);
+static void MX_ADF1_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -299,9 +306,11 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_GPDMA1_Init();
   MX_ICACHE_Init();
-  MX_LPUART1_UART_Init();
   MX_SPI1_Init();
+  MX_LPUART1_UART_Init();
+  MX_ADF1_Init();
   /* USER CODE BEGIN 2 */
   setvbuf(stdout, NULL, _IONBF, 0);
   /* USER CODE END 2 */
@@ -335,27 +344,10 @@ int main(void)
          (unsigned long)(HAL_RCC_GetSysClockFreq() / 1000000UL));
   printf("================================================\r\n");
 
-#ifdef HAL_MDF_MODULE_ENABLED
-  /* Phase 2: Start ADF1 DMA acquisition
-   * CubeMX generates hadf1 handle and MX_ADF1_Init().
-   * Uncomment below after CubeMX ADF1 configuration is done.
-   */
-#if 0 /* Enable after CubeMX Phase 2 */
+  /* Start ADF1 DMA acquisition — uses CubeMX-generated AdfHandle0 + AdfFilterConfig0 */
   {
-    extern MDF_HandleTypeDef hadf1;
-    MDF_FilterConfigTypeDef filterConfig = {0};
-    filterConfig.DataSource = MDF_DATA_SOURCE_BSMX;
-    filterConfig.Delay = 0;
-    filterConfig.CicMode = MDF_ONE_FILTER_SINC4;
-    filterConfig.DecimationRatio = 64;
-    filterConfig.Gain = 0;
-    filterConfig.ReshapeFilter.Activation = DISABLE;
-    filterConfig.HighPassFilter.Activation = DISABLE;
-    filterConfig.Integrator.Activation = DISABLE;
-    filterConfig.SoundActivity.Activation = DISABLE;
-    filterConfig.AcquisitionMode = MDF_MODE_ASYNC_CONT;
-    filterConfig.FifoThreshold = MDF_FIFO_THRESHOLD_NOT_EMPTY;
-    filterConfig.DiscardSamples = 0;
+    /* Fix CubeMX default: decimation ratio must be 64 for 48kHz sample rate */
+    AdfFilterConfig0.DecimationRatio = 64;
 
     MDF_DmaConfigTypeDef dmaConfig = {0};
     dmaConfig.Address = (uint32_t)audioBuffer;
@@ -363,15 +355,13 @@ int main(void)
     dmaConfig.MsbOnly = ENABLE;
 
     printf("ADF1: ");
-    if (HAL_MDF_AcqStart_DMA(&hadf1, &filterConfig, &dmaConfig) != HAL_OK) {
+    if (HAL_MDF_AcqStart_DMA(&AdfHandle0, &AdfFilterConfig0, &dmaConfig) != HAL_OK) {
         printf("FAILED\r\n");
     } else {
         audioStarted = 1;
         printf("OK (48kHz, Sinc4)\r\n");
     }
   }
-#endif
-#endif /* HAL_MDF_MODULE_ENABLED */
 
   /* Init FatFS (normally CubeMX adds this to init sequence; manual until Phase 1) */
   MX_FATFS_Init();
@@ -627,6 +617,91 @@ static void SystemPower_Config(void)
 }
 
 /**
+  * @brief ADF1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_ADF1_Init(void)
+{
+
+  /* USER CODE BEGIN ADF1_Init 0 */
+
+  /* USER CODE END ADF1_Init 0 */
+
+  /* USER CODE BEGIN ADF1_Init 1 */
+
+  /* USER CODE END ADF1_Init 1 */
+
+  /**
+    AdfHandle0 structure initialization and HAL_MDF_Init function call
+  */
+  AdfHandle0.Instance = ADF1_Filter0;
+  AdfHandle0.Init.CommonParam.ProcClockDivider = 26;
+  AdfHandle0.Init.CommonParam.OutputClock.Activation = ENABLE;
+  AdfHandle0.Init.CommonParam.OutputClock.Pins = MDF_OUTPUT_CLOCK_0;
+  AdfHandle0.Init.CommonParam.OutputClock.Divider = 1;
+  AdfHandle0.Init.CommonParam.OutputClock.Trigger.Activation = DISABLE;
+  AdfHandle0.Init.SerialInterface.Activation = ENABLE;
+  AdfHandle0.Init.SerialInterface.Mode = MDF_SITF_LF_MASTER_SPI_MODE;
+  AdfHandle0.Init.SerialInterface.ClockSource = MDF_SITF_CCK0_SOURCE;
+  AdfHandle0.Init.SerialInterface.Threshold = 4;
+  AdfHandle0.Init.FilterBistream = MDF_BITSTREAM0_FALLING;
+  if (HAL_MDF_Init(&AdfHandle0) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /**
+    AdfFilterConfig0 structure initialization
+
+    WARNING : only structure is filled, no specific init function call for filter
+  */
+  AdfFilterConfig0.DataSource = MDF_DATA_SOURCE_BSMX;
+  AdfFilterConfig0.Delay = 0;
+  AdfFilterConfig0.CicMode = MDF_ONE_FILTER_SINC4;
+  AdfFilterConfig0.DecimationRatio = 2;
+  AdfFilterConfig0.Gain = 0;
+  AdfFilterConfig0.ReshapeFilter.Activation = DISABLE;
+  AdfFilterConfig0.HighPassFilter.Activation = DISABLE;
+  AdfFilterConfig0.SoundActivity.Activation = DISABLE;
+  AdfFilterConfig0.AcquisitionMode = MDF_MODE_ASYNC_CONT;
+  AdfFilterConfig0.FifoThreshold = MDF_FIFO_THRESHOLD_NOT_EMPTY;
+  AdfFilterConfig0.DiscardSamples = 0;
+  /* USER CODE BEGIN ADF1_Init 2 */
+
+  /* USER CODE END ADF1_Init 2 */
+
+}
+
+/**
+  * @brief GPDMA1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_GPDMA1_Init(void)
+{
+
+  /* USER CODE BEGIN GPDMA1_Init 0 */
+
+  /* USER CODE END GPDMA1_Init 0 */
+
+  /* Peripheral clock enable */
+  __HAL_RCC_GPDMA1_CLK_ENABLE();
+
+  /* GPDMA1 interrupt Init */
+    HAL_NVIC_SetPriority(GPDMA1_Channel0_IRQn, 0, 0);
+    HAL_NVIC_EnableIRQ(GPDMA1_Channel0_IRQn);
+
+  /* USER CODE BEGIN GPDMA1_Init 1 */
+
+  /* USER CODE END GPDMA1_Init 1 */
+  /* USER CODE BEGIN GPDMA1_Init 2 */
+
+  /* USER CODE END GPDMA1_Init 2 */
+
+}
+
+/**
   * @brief ICACHE Initialization Function
   * @param None
   * @retval None
@@ -778,6 +853,7 @@ static void MX_GPIO_Init(void)
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOE_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
