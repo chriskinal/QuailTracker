@@ -26,6 +26,14 @@ stm32/**/.pio/
 *.list
 *.map
 
+# STM32CubeIDE project files
+stm32/**/.cproject
+stm32/**/.project
+stm32/**/.mxproject
+stm32/**/.osx.project
+stm32/**/.settings/
+stm32/**/*/com.st.stm32cube.ide.mcu.sfrview.prefs
+
 # Audio recordings
 *.wav
 
@@ -36,4 +44,3 @@ obj/
 *.suo
 *.cache
 *.nupkg
-stm32/QuailTracker/*/com.st.stm32cube.ide.mcu.sfrview.prefs
