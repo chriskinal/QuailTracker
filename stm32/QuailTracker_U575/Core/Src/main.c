@@ -76,6 +76,22 @@ uint8_t audioStarted = 0;
 uint32_t totalDataBytes = 0;
 uint32_t fileCounter = 0;
 
+/* PPS time sync state (shared with app_freertos.c GPS task) */
+volatile uint32_t ppsCount = 0;
+volatile uint32_t ppsTick = 0;      /* HAL tick at last PPS edge */
+uint32_t ppsUtcTime = 0;            /* HHMMSS latched from NMEA after PPS */
+uint32_t ppsUtcDate = 0;            /* DDMMYY latched from NMEA after PPS */
+volatile uint8_t ppsSynced = 0;     /* 1 when PPS + valid NMEA time available */
+float ppsLatitude = 0.0f;
+float ppsLongitude = 0.0f;
+
+/* Recording metadata — latched at start, used for GUANO at stop */
+static uint32_t recStartTime = 0;
+static uint32_t recStartDate = 0;
+static float    recStartLat = 0.0f;
+static float    recStartLon = 0.0f;
+static uint8_t  recHasGps = 0;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -94,7 +110,7 @@ static void MX_ADF1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-#define FW_VERSION "0.3.1"
+#define FW_VERSION "0.3.3"
 
 /* Command IDs for audio task queue */
 #define CMD_START_REC 1
@@ -149,6 +165,74 @@ void WAV_WriteHeader(FIL *fp, uint32_t sampleRate, uint32_t dataSize)
 
     UINT bw;
     f_write(fp, hdr, 44, &bw);
+}
+
+void writeGuanoChunk(FIL *fp, uint32_t audioDataBytes)
+{
+    char buf[256];
+    int len = 0;
+
+    /* Required: GUANO version (must be first) */
+    len += snprintf(buf + len, sizeof(buf) - len, "GUANO|Version: 1.0\n");
+
+    /* GPS-dependent fields */
+    if (recHasGps) {
+        /* Timestamp: ISO 8601 UTC */
+        uint32_t dd = recStartDate / 10000;
+        uint32_t mm = (recStartDate / 100) % 100;
+        uint32_t yy = recStartDate % 100;
+        uint32_t hh = recStartTime / 10000;
+        uint32_t mn = (recStartTime / 100) % 100;
+        uint32_t ss = recStartTime % 100;
+        len += snprintf(buf + len, sizeof(buf) - len,
+                        "Timestamp: 20%02lu-%02lu-%02luT%02lu:%02lu:%02luZ\n",
+                        (unsigned long)yy, (unsigned long)mm, (unsigned long)dd,
+                        (unsigned long)hh, (unsigned long)mn, (unsigned long)ss);
+
+        /* Loc Position: lat lon (decimal degrees, negative for S/W) */
+        float lat = recStartLat, lon = recStartLon;
+        int latNeg = (lat < 0); if (latNeg) lat = -lat;
+        int lonNeg = (lon < 0); if (lonNeg) lon = -lon;
+        int32_t lat_d = (int32_t)lat, lon_d = (int32_t)lon;
+        int32_t lat_f = (int32_t)((lat - (float)lat_d) * 1000000.0f);
+        int32_t lon_f = (int32_t)((lon - (float)lon_d) * 1000000.0f);
+        len += snprintf(buf + len, sizeof(buf) - len,
+                        "Loc Position: %s%ld.%06ld %s%ld.%06ld\n",
+                        latNeg ? "-" : "", (long)lat_d, (long)lat_f,
+                        lonNeg ? "-" : "", (long)lon_d, (long)lon_f);
+    }
+
+    /* Device info */
+    len += snprintf(buf + len, sizeof(buf) - len, "Make: QuailTracker\n");
+    len += snprintf(buf + len, sizeof(buf) - len, "Model: STM32U575-ARU\n");
+    len += snprintf(buf + len, sizeof(buf) - len,
+                    "Firmware Version: " FW_VERSION "\n");
+    len += snprintf(buf + len, sizeof(buf) - len,
+                    "Samplerate: %lu\n", (unsigned long)SAMPLE_RATE);
+
+    /* Duration from audio byte count (16-bit mono) */
+    uint32_t totalSamples = audioDataBytes / 2;
+    uint32_t durSec = totalSamples / SAMPLE_RATE;
+    uint32_t durFrac = ((totalSamples % SAMPLE_RATE) * 1000) / SAMPLE_RATE;
+    len += snprintf(buf + len, sizeof(buf) - len,
+                    "Length: %lu.%03lu\n",
+                    (unsigned long)durSec, (unsigned long)durFrac);
+
+    /* Write RIFF sub-chunk: "guan" + size + data [+ pad] */
+    uint8_t chunkHdr[8];
+    memcpy(chunkHdr, "guan", 4);
+    uint32_t chunkSize = (uint32_t)len;
+    memcpy(&chunkHdr[4], &chunkSize, 4);
+
+    UINT bw;
+    f_write(fp, chunkHdr, 8, &bw);
+    f_write(fp, buf, len, &bw);
+
+    /* RIFF chunks must be word-aligned (even byte boundary) */
+    if (len & 1) {
+        uint8_t pad = 0;
+        f_write(fp, &pad, 1, &bw);
+    }
 }
 
 void printMenu(void)
@@ -218,8 +302,32 @@ void startRecording(void)
         return;
     }
 
-    char fname[20];
-    snprintf(fname, sizeof(fname), "rec_%03lu.wav", (unsigned long)fileCounter);
+    char fname[32];
+    if (ppsSynced && ppsUtcDate != 0) {
+        /* ppsUtcDate = DDMMYY, ppsUtcTime = HHMMSS */
+        uint32_t dd = ppsUtcDate / 10000;
+        uint32_t mm = (ppsUtcDate / 100) % 100;
+        uint32_t yy = ppsUtcDate % 100;
+        uint32_t hh = ppsUtcTime / 10000;
+        uint32_t mn = (ppsUtcTime / 100) % 100;
+        uint32_t ss = ppsUtcTime % 100;
+        snprintf(fname, sizeof(fname), "20%02lu%02lu%02lu_%02lu%02lu%02lu.wav",
+                 (unsigned long)yy, (unsigned long)mm, (unsigned long)dd,
+                 (unsigned long)hh, (unsigned long)mn, (unsigned long)ss);
+    } else {
+        snprintf(fname, sizeof(fname), "rec_%03lu.wav", (unsigned long)fileCounter);
+    }
+
+    /* Latch GPS state for GUANO metadata */
+    if (ppsSynced && ppsUtcDate != 0) {
+        recStartTime = ppsUtcTime;
+        recStartDate = ppsUtcDate;
+        recStartLat  = ppsLatitude;
+        recStartLon  = ppsLongitude;
+        recHasGps = 1;
+    } else {
+        recHasGps = 0;
+    }
 
     FRESULT fres = f_open(&wavFile, fname, FA_WRITE | FA_CREATE_ALWAYS);
     if (fres != FR_OK) {
@@ -247,9 +355,19 @@ void stopRecording(void)
 
     isRecording = 0;
 
-    /* Rewrite WAV header with actual data size */
+    /* Append GUANO metadata chunk after audio data */
+    writeGuanoChunk(&wavFile, totalDataBytes);
+
+    /* Rewrite WAV header with actual audio data size */
     f_lseek(&wavFile, 0);
     WAV_WriteHeader(&wavFile, SAMPLE_RATE, totalDataBytes);
+
+    /* Fix RIFF container size to include GUANO chunk */
+    uint32_t riffSize = f_size(&wavFile) - 8;
+    f_lseek(&wavFile, 4);
+    UINT bw;
+    f_write(&wavFile, &riffSize, 4, &bw);
+
     f_close(&wavFile);
 
     uint32_t seconds = totalDataBytes / (SAMPLE_RATE * 2);
@@ -775,7 +893,13 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(SD_CS_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
-
+  /* PA8 — GPS PPS input, rising-edge EXTI */
+  GPIO_InitStruct.Pin = GPIO_PIN_8;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  HAL_NVIC_SetPriority(EXTI8_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(EXTI8_IRQn);
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
@@ -791,6 +915,14 @@ void HAL_MDF_AcqCpltCallback(MDF_HandleTypeDef *hmdf)
 {
     fullComplete = 1;
     osSemaphoreRelease(audioDmaSemHandle);
+}
+
+void HAL_GPIO_EXTI_Rising_Callback(uint16_t GPIO_Pin)
+{
+    if (GPIO_Pin == GPIO_PIN_8) {
+        ppsTick = HAL_GetTick();
+        ppsCount++;
+    }
 }
 /* USER CODE END 4 */
 

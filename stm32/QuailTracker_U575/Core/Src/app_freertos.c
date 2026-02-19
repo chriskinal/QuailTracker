@@ -82,6 +82,15 @@ extern void startRecording(void);
 extern void stopRecording(void);
 extern int formatSD(void);
 
+/* PPS time sync state from main.c */
+extern volatile uint32_t ppsCount;
+extern volatile uint32_t ppsTick;
+extern uint32_t ppsUtcTime;
+extern uint32_t ppsUtcDate;
+extern volatile uint8_t ppsSynced;
+extern float ppsLatitude;
+extern float ppsLongitude;
+
 /* GPS state */
 static gps_data_t gpsData;
 static volatile uint8_t gpsRawOutput;
@@ -460,6 +469,16 @@ static void nmea_parse_rmc(const char *line)
     }
 
     f = nmea_field(line, 9);  gpsData.utc_date = nmea_parse_int(f);
+
+    /* Latch PPS-synced time: RMC arrives ~300ms after PPS edge,
+     * so its timestamp corresponds to the most recent PPS pulse */
+    if (gpsData.valid && ppsCount > 0) {
+        ppsUtcTime = gpsData.utc_time;
+        ppsUtcDate = gpsData.utc_date;
+        ppsLatitude = gpsData.latitude;
+        ppsLongitude = gpsData.longitude;
+        ppsSynced = 1;
+    }
 }
 
 static void nmea_parse_gga(const char *line)
@@ -530,6 +549,22 @@ static void printGpsStatus(void)
                (unsigned long)(gpsData.utc_date / 10000),
                (unsigned long)((gpsData.utc_date / 100) % 100),
                (unsigned long)(gpsData.utc_date % 100));
+    }
+    printf("PPS:\r\n");
+    printf("  Count:    %lu\r\n", (unsigned long)ppsCount);
+    printf("  Synced:   %s\r\n", ppsSynced ? "Yes" : "No");
+    if (ppsCount > 0) {
+        printf("  Last PPS: %lu ms ago\r\n",
+               (unsigned long)(HAL_GetTick() - ppsTick));
+    }
+    if (ppsSynced) {
+        printf("  UTC:      20%02lu/%02lu/%02lu %02lu:%02lu:%02lu\r\n",
+               (unsigned long)(ppsUtcDate % 100),
+               (unsigned long)((ppsUtcDate / 100) % 100),
+               (unsigned long)(ppsUtcDate / 10000),
+               (unsigned long)(ppsUtcTime / 10000),
+               (unsigned long)((ppsUtcTime / 100) % 100),
+               (unsigned long)(ppsUtcTime % 100));
     }
     printf("Raw output: %s\r\n", gpsRawOutput ? "ON" : "OFF");
     printf("==================\r\n");
