@@ -103,6 +103,9 @@ volatile uint8_t ppsSynced = 0;     /* 1 when PPS + valid NMEA time available */
 float ppsLatitude = 0.0f;
 float ppsLongitude = 0.0f;
 
+/* Current recording filename (shared with app_freertos.c for BLE status) */
+char recFilename[32] = "";
+
 /* Recording metadata — latched at start, used for GUANO at stop */
 static uint32_t recStartTime = 0;
 static uint32_t recStartDate = 0;
@@ -129,7 +132,7 @@ static void MX_ADF1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-#define FW_VERSION "0.4.5"
+#define FW_VERSION "0.5.0"
 
 /* Command IDs for audio task queue */
 #define CMD_START_REC 1
@@ -446,9 +449,13 @@ void startRecording(void)
         recHasGps = 0;
     }
 
+    strncpy(recFilename, fname, sizeof(recFilename) - 1);
+    recFilename[sizeof(recFilename) - 1] = '\0';
+
     FRESULT fres = f_open(&wavFile, fname, FA_WRITE | FA_CREATE_ALWAYS);
     if (fres != FR_OK) {
         printf("f_open FAILED: %d\r\n", fres);
+        recFilename[0] = '\0';
         return;
     }
 
@@ -481,6 +488,7 @@ void stopRecording(void)
     }
 
     isRecording = 0;
+    recFilename[0] = '\0';
 
     if (recFormat == REC_FMT_WAV) {
         /* Append GUANO metadata chunk after audio data */
