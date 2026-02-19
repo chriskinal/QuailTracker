@@ -119,7 +119,7 @@ static void MX_ADF1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-#define FW_VERSION "0.4.1"
+#define FW_VERSION "0.4.2"
 
 /* Command IDs for audio task queue */
 #define CMD_START_REC 1
@@ -244,6 +244,83 @@ void writeGuanoChunk(FIL *fp, uint32_t audioDataBytes)
     }
 }
 
+/* Write FLAC VORBIS_COMMENT metadata block with GUANO-style fields.
+ * All metadata known at recording start (everything except duration). */
+void writeFlacVorbisComment(FIL *fp)
+{
+    uint8_t buf[320];
+    uint32_t pos = 4;  /* skip block header — fill in last */
+
+    /* Vendor string (little-endian length + UTF-8 string) */
+    const char *vendor = "QuailTracker " FW_VERSION;
+    uint32_t vlen = strlen(vendor);
+    buf[pos++] = (uint8_t)(vlen);
+    buf[pos++] = (uint8_t)(vlen >> 8);
+    buf[pos++] = 0;
+    buf[pos++] = 0;
+    memcpy(&buf[pos], vendor, vlen);
+    pos += vlen;
+
+    /* Build comment strings */
+    char tags[6][80];
+    int ntags = 0;
+
+    if (recHasGps) {
+        uint32_t dd = recStartDate / 10000;
+        uint32_t mm = (recStartDate / 100) % 100;
+        uint32_t yy = recStartDate % 100;
+        uint32_t hh = recStartTime / 10000;
+        uint32_t mn = (recStartTime / 100) % 100;
+        uint32_t ss = recStartTime % 100;
+        snprintf(tags[ntags++], 80,
+                 "DATE=20%02lu-%02lu-%02luT%02lu:%02lu:%02luZ",
+                 (unsigned long)yy, (unsigned long)mm, (unsigned long)dd,
+                 (unsigned long)hh, (unsigned long)mn, (unsigned long)ss);
+
+        float lat = recStartLat, lon = recStartLon;
+        int latNeg = (lat < 0); if (latNeg) lat = -lat;
+        int lonNeg = (lon < 0); if (lonNeg) lon = -lon;
+        int32_t lat_d = (int32_t)lat, lon_d = (int32_t)lon;
+        int32_t lat_f = (int32_t)((lat - (float)lat_d) * 1000000.0f);
+        int32_t lon_f = (int32_t)((lon - (float)lon_d) * 1000000.0f);
+        snprintf(tags[ntags++], 80,
+                 "LOCATION=%s%ld.%06ld %s%ld.%06ld",
+                 latNeg ? "-" : "", (long)lat_d, (long)lat_f,
+                 lonNeg ? "-" : "", (long)lon_d, (long)lon_f);
+    }
+
+    snprintf(tags[ntags++], 80, "ARTIST=QuailTracker STM32U575-ARU");
+    snprintf(tags[ntags++], 80, "ENCODER=QuailTracker " FW_VERSION);
+    snprintf(tags[ntags++], 80, "SAMPLERATE=%lu", (unsigned long)SAMPLE_RATE);
+
+    /* Comment count (little-endian) */
+    buf[pos++] = (uint8_t)(ntags);
+    buf[pos++] = (uint8_t)(ntags >> 8);
+    buf[pos++] = 0;
+    buf[pos++] = 0;
+
+    /* Each comment: LE uint32 length + UTF-8 string */
+    for (int i = 0; i < ntags; i++) {
+        uint32_t clen = strlen(tags[i]);
+        buf[pos++] = (uint8_t)(clen);
+        buf[pos++] = (uint8_t)(clen >> 8);
+        buf[pos++] = 0;
+        buf[pos++] = 0;
+        memcpy(&buf[pos], tags[i], clen);
+        pos += clen;
+    }
+
+    /* Block header: is_last=1, type=4 (VORBIS_COMMENT), length */
+    uint32_t dataLen = pos - 4;
+    buf[0] = 0x84;
+    buf[1] = (uint8_t)(dataLen >> 16);
+    buf[2] = (uint8_t)(dataLen >> 8);
+    buf[3] = (uint8_t)(dataLen);
+
+    UINT bw;
+    f_write(fp, buf, pos, &bw);
+}
+
 void printMenu(void)
 {
     printf("\r\n===== MENU =====\r\n");
@@ -353,8 +430,10 @@ void startRecording(void)
         flac_enc_init(&flacEncoder);
         uint8_t hdr[FLAC_HEADER_SIZE];
         flac_enc_write_header(&flacEncoder, hdr);
+        hdr[4] &= 0x7F;  /* STREAMINFO is NOT last — Vorbis comment follows */
         UINT bw;
         f_write(&wavFile, hdr, FLAC_HEADER_SIZE, &bw);
+        writeFlacVorbisComment(&wavFile);
     }
     f_sync(&wavFile);
 
@@ -405,6 +484,7 @@ void stopRecording(void)
         /* Rewrite STREAMINFO at file offset 0 with final values */
         uint8_t hdr[FLAC_HEADER_SIZE];
         flac_enc_finalize_header(&flacEncoder, hdr);
+        hdr[4] &= 0x7F;  /* NOT last — Vorbis comment block follows */
         f_lseek(&wavFile, 0);
         UINT bw;
         f_write(&wavFile, hdr, FLAC_HEADER_SIZE, &bw);
