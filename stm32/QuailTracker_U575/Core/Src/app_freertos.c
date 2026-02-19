@@ -26,6 +26,7 @@
 #include <string.h>
 #include "fatfs.h"
 #include "user_diskio.h"
+#include "flac_encoder.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -71,6 +72,7 @@ extern uint8_t sdMounted;
 extern uint8_t audioStarted;
 extern uint32_t totalDataBytes;
 extern uint32_t fileCounter;
+extern flac_enc_t flacEncoder;
 
 /* Functions from main.c */
 extern int getChar(void);
@@ -226,21 +228,26 @@ void StartAudioTask(void *argument)
           pcmBuffer[i] = (int16_t)(src[i] >> 16);
         }
 
-        osMutexAcquire(fileMtxHandle, osWaitForever);
-        UINT bw;
-        FRESULT fres = f_write(&wavFile, pcmBuffer, AUDIO_BUF_SIZE / 2 * sizeof(int16_t), &bw);
-        if (fres != FR_OK) {
-          printf("f_write FAILED: %d at %lu bytes\r\n", fres, (unsigned long)totalDataBytes);
-          f_close(&wavFile);
-          isRecording = 0;
-        }
-        totalDataBytes += bw;
+        /* Feed 512 samples to FLAC encoder. Returns >0 when a full 4096-sample
+         * block has been encoded (every 8 DMA half-callbacks). */
+        uint32_t encoded = flac_enc_process(&flacEncoder, pcmBuffer, AUDIO_BUF_SIZE / 2);
+        if (encoded > 0) {
+          osMutexAcquire(fileMtxHandle, osWaitForever);
+          UINT bw;
+          FRESULT fres = f_write(&wavFile, flacEncoder.outBuf, encoded, &bw);
+          if (fres != FR_OK) {
+            printf("f_write FAILED: %d at %lu bytes\r\n", fres, (unsigned long)totalDataBytes);
+            f_close(&wavFile);
+            isRecording = 0;
+          }
+          totalDataBytes += bw;
 
-        /* Sync every ~1 second */
-        if ((totalDataBytes % (SAMPLE_RATE * 2)) < (AUDIO_BUF_SIZE / 2 * sizeof(int16_t))) {
-          f_sync(&wavFile);
+          /* Sync every ~8 frames (~680ms, similar to previous ~1s interval) */
+          if ((flacEncoder.frameNumber % 8) == 0) {
+            f_sync(&wavFile);
+          }
+          osMutexRelease(fileMtxHandle);
         }
-        osMutexRelease(fileMtxHandle);
       }
     }
   }
