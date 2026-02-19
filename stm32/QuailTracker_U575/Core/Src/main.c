@@ -72,6 +72,11 @@ int16_t pcmBuffer[AUDIO_BUF_SIZE / 2];
 /* FLAC encoder instance (shared with app_freertos.c audio task) */
 flac_enc_t flacEncoder;
 
+/* Recording format: 0=FLAC, 1=WAV */
+#define REC_FMT_FLAC 0
+#define REC_FMT_WAV  1
+uint8_t recFormat = REC_FMT_FLAC;
+
 /* Recording state (shared with app_freertos.c tasks) */
 FIL wavFile;
 uint8_t isRecording = 0;
@@ -114,7 +119,7 @@ static void MX_ADF1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-#define FW_VERSION "0.4.0"
+#define FW_VERSION "0.4.1"
 
 /* Command IDs for audio task queue */
 #define CMD_START_REC 1
@@ -250,6 +255,7 @@ void printMenu(void)
     printf("6. Eject SD Card\r\n");
     printf("7. Mount SD Card\r\n");
     printf("8. GPS Status\r\n");
+    printf("F. Toggle Format (%s)\r\n", recFormat == REC_FMT_WAV ? "WAV" : "FLAC");
     printf("G. Toggle GPS Raw Output\r\n");
     printf("R. Toggle Recording\r\n");
     printf("================\r\n");
@@ -306,6 +312,7 @@ void startRecording(void)
         return;
     }
 
+    const char *ext = (recFormat == REC_FMT_WAV) ? "wav" : "flac";
     char fname[32];
     if (ppsSynced && ppsUtcDate != 0) {
         /* ppsUtcDate = DDMMYY, ppsUtcTime = HHMMSS */
@@ -315,11 +322,11 @@ void startRecording(void)
         uint32_t hh = ppsUtcTime / 10000;
         uint32_t mn = (ppsUtcTime / 100) % 100;
         uint32_t ss = ppsUtcTime % 100;
-        snprintf(fname, sizeof(fname), "20%02lu%02lu%02lu_%02lu%02lu%02lu.flac",
+        snprintf(fname, sizeof(fname), "20%02lu%02lu%02lu_%02lu%02lu%02lu.%s",
                  (unsigned long)yy, (unsigned long)mm, (unsigned long)dd,
-                 (unsigned long)hh, (unsigned long)mn, (unsigned long)ss);
+                 (unsigned long)hh, (unsigned long)mn, (unsigned long)ss, ext);
     } else {
-        snprintf(fname, sizeof(fname), "rec_%03lu.flac", (unsigned long)fileCounter);
+        snprintf(fname, sizeof(fname), "rec_%03lu.%s", (unsigned long)fileCounter, ext);
     }
 
     /* Latch GPS state for GUANO metadata */
@@ -339,9 +346,11 @@ void startRecording(void)
         return;
     }
 
-    /* Write placeholder FLAC STREAMINFO (will be finalized on stop) */
-    flac_enc_init(&flacEncoder);
-    {
+    /* Write placeholder header (will be finalized on stop) */
+    if (recFormat == REC_FMT_WAV) {
+        WAV_WriteHeader(&wavFile, SAMPLE_RATE, 0);
+    } else {
+        flac_enc_init(&flacEncoder);
         uint8_t hdr[FLAC_HEADER_SIZE];
         flac_enc_write_header(&flacEncoder, hdr);
         UINT bw;
@@ -365,31 +374,50 @@ void stopRecording(void)
 
     isRecording = 0;
 
-    /* Flush any remaining partial FLAC block */
-    uint32_t flushBytes = flac_enc_flush(&flacEncoder);
-    if (flushBytes > 0) {
-        UINT bw;
-        f_write(&wavFile, flacEncoder.outBuf, flushBytes, &bw);
-        totalDataBytes += bw;
-    }
+    if (recFormat == REC_FMT_WAV) {
+        /* Append GUANO metadata chunk after audio data */
+        writeGuanoChunk(&wavFile, totalDataBytes);
 
-    /* Rewrite STREAMINFO at file offset 0 with final values */
-    {
+        /* Rewrite WAV header with actual audio data size */
+        f_lseek(&wavFile, 0);
+        WAV_WriteHeader(&wavFile, SAMPLE_RATE, totalDataBytes);
+
+        /* Fix RIFF container size to include GUANO chunk */
+        uint32_t riffSize = f_size(&wavFile) - 8;
+        f_lseek(&wavFile, 4);
+        UINT bw;
+        f_write(&wavFile, &riffSize, 4, &bw);
+
+        f_close(&wavFile);
+
+        uint32_t seconds = totalDataBytes / (SAMPLE_RATE * 2);
+        printf("Recording stopped: %lu bytes (%lus)\r\n",
+            (unsigned long)totalDataBytes, (unsigned long)seconds);
+    } else {
+        /* Flush any remaining partial FLAC block */
+        uint32_t flushBytes = flac_enc_flush(&flacEncoder);
+        if (flushBytes > 0) {
+            UINT bw;
+            f_write(&wavFile, flacEncoder.outBuf, flushBytes, &bw);
+            totalDataBytes += bw;
+        }
+
+        /* Rewrite STREAMINFO at file offset 0 with final values */
         uint8_t hdr[FLAC_HEADER_SIZE];
         flac_enc_finalize_header(&flacEncoder, hdr);
         f_lseek(&wavFile, 0);
         UINT bw;
         f_write(&wavFile, hdr, FLAC_HEADER_SIZE, &bw);
+
+        f_close(&wavFile);
+
+        uint32_t seconds = (uint32_t)(flacEncoder.totalSamples / SAMPLE_RATE);
+        uint32_t rawSize = (uint32_t)(flacEncoder.totalSamples * 2);
+        uint32_t ratio = rawSize > 0 ? (totalDataBytes * 100) / rawSize : 0;
+        printf("Recording stopped: %lu bytes (%lus, %lu%% of raw)\r\n",
+            (unsigned long)totalDataBytes, (unsigned long)seconds,
+            (unsigned long)ratio);
     }
-
-    f_close(&wavFile);
-
-    uint32_t seconds = (uint32_t)(flacEncoder.totalSamples / SAMPLE_RATE);
-    uint32_t rawSize = (uint32_t)(flacEncoder.totalSamples * 2);
-    uint32_t ratio = rawSize > 0 ? (totalDataBytes * 100) / rawSize : 0;
-    printf("Recording stopped: %lu bytes (%lus, %lu%% of raw)\r\n",
-        (unsigned long)totalDataBytes, (unsigned long)seconds,
-        (unsigned long)ratio);
 }
 
 int formatSD(void)
