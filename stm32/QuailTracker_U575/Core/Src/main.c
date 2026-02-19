@@ -353,6 +353,7 @@ void printStatus(void)
     printf("  DMA Buffer: %d x 32-bit\r\n", AUDIO_BUF_SIZE);
 
     printf("Recording:\r\n");
+    printf("  Format: %s\r\n", recFormat == REC_FMT_WAV ? "WAV" : "FLAC");
     printf("  Active: %s\r\n", isRecording ? "Yes" : "No");
     if (isRecording) {
         uint32_t seconds = totalDataBytes / (SAMPLE_RATE * 2);
