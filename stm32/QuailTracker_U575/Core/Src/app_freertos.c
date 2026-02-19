@@ -23,13 +23,22 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include <string.h>
 #include "fatfs.h"
 #include "user_diskio.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+typedef struct {
+    uint8_t  fix;        /* 0=no fix, 1=GPS, 2=DGPS */
+    uint8_t  satellites;
+    float    latitude;   /* decimal degrees, + = N */
+    float    longitude;  /* decimal degrees, + = E */
+    uint32_t utc_time;   /* HHMMSS as integer */
+    uint32_t utc_date;   /* DDMMYY as integer */
+    uint8_t  valid;      /* RMC status: 1=A, 0=V */
+} gps_data_t;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -65,12 +74,17 @@ extern uint32_t fileCounter;
 
 /* Functions from main.c */
 extern int getChar(void);
+extern int getCharGps(void);
 extern void WAV_WriteHeader(FIL *fp, uint32_t sampleRate, uint32_t dataSize);
 extern void printMenu(void);
 extern void printStatus(void);
 extern void startRecording(void);
 extern void stopRecording(void);
 extern int formatSD(void);
+
+/* GPS state */
+static gps_data_t gpsData;
+static volatile uint8_t gpsRawOutput;
 /* USER CODE END Variables */
 /* Definitions for audioTask */
 osThreadId_t audioTaskHandle;
@@ -104,7 +118,8 @@ const osSemaphoreAttr_t audioDmaSem_attributes = {
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
-
+static void StartGpsTask(void *argument);
+static void printGpsStatus(void);
 /* USER CODE END FunctionPrototypes */
 
 /**
@@ -146,7 +161,14 @@ void MX_FREERTOS_Init(void) {
   cliTaskHandle = osThreadNew(StartCliTask, NULL, &cliTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
+  {
+    const osThreadAttr_t gpsTask_attributes = {
+      .name = "gpsTask",
+      .priority = (osPriority_t) osPriorityNormal,
+      .stack_size = 512 * 4
+    };
+    osThreadNew(StartGpsTask, NULL, &gpsTask_attributes);
+  }
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -342,6 +364,18 @@ void StartCliTask(void *argument)
         break;
       }
 
+      case '8':
+        printGpsStatus();
+        printMenu();
+        break;
+
+      case 'g':
+      case 'G':
+        gpsRawOutput = !gpsRawOutput;
+        printf("GPS raw output: %s\r\n", gpsRawOutput ? "ON" : "OFF");
+        printMenu();
+        break;
+
       case 'r':
       case 'R':
       {
@@ -365,6 +399,165 @@ void StartCliTask(void *argument)
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
+
+/* ========================= GPS / NMEA ========================= */
+
+/* Advance to the n-th comma-separated field in an NMEA sentence */
+static const char *nmea_field(const char *s, int n)
+{
+    for (int i = 0; i < n; i++) {
+        s = strchr(s, ',');
+        if (!s) return "";
+        s++;
+    }
+    return s;
+}
+
+/* Parse DDDMM.MMMM → decimal degrees (no strtod/atof needed) */
+static float nmea_parse_coord(const char *s)
+{
+    int32_t whole = 0, frac = 0, frac_div = 1;
+    while (*s >= '0' && *s <= '9') { whole = whole * 10 + (*s++ - '0'); }
+    if (*s == '.') {
+        s++;
+        while (*s >= '0' && *s <= '9') {
+            frac = frac * 10 + (*s++ - '0');
+            frac_div *= 10;
+        }
+    }
+    int deg = whole / 100;
+    float minutes = (float)(whole % 100) + (float)frac / (float)frac_div;
+    return (float)deg + minutes / 60.0f;
+}
+
+static uint32_t nmea_parse_int(const char *s)
+{
+    uint32_t v = 0;
+    while (*s >= '0' && *s <= '9') { v = v * 10 + (*s++ - '0'); }
+    return v;
+}
+
+static void nmea_parse_rmc(const char *line)
+{
+    /* $G?RMC,time,status,lat,N/S,lon,E/W,spd,crs,date,... */
+    const char *f;
+
+    f = nmea_field(line, 1);  gpsData.utc_time = nmea_parse_int(f);
+    f = nmea_field(line, 2);  gpsData.valid = (*f == 'A') ? 1 : 0;
+
+    f = nmea_field(line, 3);
+    if (*f) {
+        gpsData.latitude = nmea_parse_coord(f);
+        f = nmea_field(line, 4);
+        if (*f == 'S') gpsData.latitude = -gpsData.latitude;
+    }
+
+    f = nmea_field(line, 5);
+    if (*f) {
+        gpsData.longitude = nmea_parse_coord(f);
+        f = nmea_field(line, 6);
+        if (*f == 'W') gpsData.longitude = -gpsData.longitude;
+    }
+
+    f = nmea_field(line, 9);  gpsData.utc_date = nmea_parse_int(f);
+}
+
+static void nmea_parse_gga(const char *line)
+{
+    /* $G?GGA,time,lat,N/S,lon,E/W,fix,sats,hdop,alt,... */
+    const char *f;
+
+    f = nmea_field(line, 1);  gpsData.utc_time = nmea_parse_int(f);
+
+    f = nmea_field(line, 2);
+    if (*f) {
+        gpsData.latitude = nmea_parse_coord(f);
+        f = nmea_field(line, 3);
+        if (*f == 'S') gpsData.latitude = -gpsData.latitude;
+    }
+
+    f = nmea_field(line, 4);
+    if (*f) {
+        gpsData.longitude = nmea_parse_coord(f);
+        f = nmea_field(line, 5);
+        if (*f == 'W') gpsData.longitude = -gpsData.longitude;
+    }
+
+    f = nmea_field(line, 6);  gpsData.fix = (uint8_t)nmea_parse_int(f);
+    f = nmea_field(line, 7);  gpsData.satellites = (uint8_t)nmea_parse_int(f);
+}
+
+static void nmea_process_line(const char *line)
+{
+    if (line[0] != '$' || line[1] != 'G') return;
+
+    if (strncmp(line + 3, "RMC,", 4) == 0)
+        nmea_parse_rmc(line);
+    else if (strncmp(line + 3, "GGA,", 4) == 0)
+        nmea_parse_gga(line);
+
+    if (gpsRawOutput)
+        printf("%s\r\n", line);
+}
+
+static void printGpsStatus(void)
+{
+    printf("\r\n=== GPS Status ===\r\n");
+    printf("Fix:        %s\r\n",
+           gpsData.fix ? (gpsData.fix == 2 ? "DGPS" : "GPS") : "No fix");
+    printf("Valid:      %s\r\n", gpsData.valid ? "Yes" : "No");
+    printf("Satellites: %d\r\n", gpsData.satellites);
+    if (gpsData.valid) {
+        /* Integer-only coordinate printing (newlib-nano safe) */
+        float lat = gpsData.latitude, lon = gpsData.longitude;
+        char ls = ' ', os = ' ';
+        if (lat < 0) { ls = '-'; lat = -lat; }
+        if (lon < 0) { os = '-'; lon = -lon; }
+        int32_t lat_d = (int32_t)lat, lon_d = (int32_t)lon;
+        int32_t lat_f = (int32_t)((lat - (float)lat_d) * 1000000.0f);
+        int32_t lon_f = (int32_t)((lon - (float)lon_d) * 1000000.0f);
+        printf("Latitude:  %c%ld.%06ld\r\n", ls, (long)lat_d, (long)lat_f);
+        printf("Longitude: %c%ld.%06ld\r\n", os, (long)lon_d, (long)lon_f);
+    }
+    if (gpsData.utc_time) {
+        printf("UTC Time:   %02lu:%02lu:%02lu\r\n",
+               (unsigned long)(gpsData.utc_time / 10000),
+               (unsigned long)((gpsData.utc_time / 100) % 100),
+               (unsigned long)(gpsData.utc_time % 100));
+    }
+    if (gpsData.utc_date) {
+        printf("UTC Date:   %02lu/%02lu/%02lu\r\n",
+               (unsigned long)(gpsData.utc_date / 10000),
+               (unsigned long)((gpsData.utc_date / 100) % 100),
+               (unsigned long)(gpsData.utc_date % 100));
+    }
+    printf("Raw output: %s\r\n", gpsRawOutput ? "ON" : "OFF");
+    printf("==================\r\n");
+}
+
+static void StartGpsTask(void *argument)
+{
+    char buf[128];
+    int pos = 0;
+
+    printf("GPS: Listening on LPUART1 (9600 baud)\r\n");
+
+    for (;;) {
+        int c = getCharGps();
+        if (c >= 0) {
+            if (c == '\n') {
+                if (pos > 0 && buf[pos - 1] == '\r') pos--;
+                buf[pos] = '\0';
+                if (pos > 0) nmea_process_line(buf);
+                pos = 0;
+            } else if (pos < (int)sizeof(buf) - 1) {
+                buf[pos++] = (char)c;
+            }
+        } else {
+            osDelay(1);
+        }
+    }
+}
 
 /* USER CODE END Application */
 

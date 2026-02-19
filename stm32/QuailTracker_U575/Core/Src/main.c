@@ -94,7 +94,7 @@ static void MX_ADF1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-#define FW_VERSION "0.3.0"
+#define FW_VERSION "0.3.1"
 
 /* Command IDs for audio task queue */
 #define CMD_START_REC 1
@@ -106,6 +106,16 @@ int getChar(void)
     USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
     if (USART1->ISR & USART_ISR_RXNE_RXFNE) {
         return (int)(USART1->RDR & 0xFF);
+    }
+    return -1;
+}
+
+/* Direct LPUART1 RX - non-blocking, clears errors (GPS on Nucleo-U575ZI-Q) */
+int getCharGps(void)
+{
+    LPUART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
+    if (LPUART1->ISR & USART_ISR_RXNE_RXFNE) {
+        return (int)(LPUART1->RDR & 0xFF);
     }
     return -1;
 }
@@ -151,6 +161,8 @@ void printMenu(void)
     printf("5. Format SD Card\r\n");
     printf("6. Eject SD Card\r\n");
     printf("7. Mount SD Card\r\n");
+    printf("8. GPS Status\r\n");
+    printf("G. Toggle GPS Raw Output\r\n");
     printf("R. Toggle Recording\r\n");
     printf("================\r\n");
     printf("[%s] > ", isRecording ? "REC" : "IDLE");
@@ -665,7 +677,14 @@ static void MX_LPUART1_UART_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN LPUART1_Init 2 */
-
+  /* Override for L76K GPS (9600 baud).
+   * LPUART BRR is 20-bit: at 160MHz/DIV1, 9600 needs BRR=4,266,667 (overflow!).
+   * DIV8 → 20MHz effective clock → BRR=533,333 (fits). */
+  hlpuart1.Init.BaudRate = 9600;
+  hlpuart1.Init.ClockPrescaler = UART_PRESCALER_DIV8;
+  if (HAL_UART_Init(&hlpuart1) != HAL_OK) {
+      printf("LPUART1 9600 init FAILED!\r\n");
+  }
   /* USER CODE END LPUART1_Init 2 */
 
 }
