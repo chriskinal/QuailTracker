@@ -65,7 +65,7 @@ The Seeed L76K XIAO footprint doesn't expose PPS or VBKP on standard header pins
 Solder bodge wires directly on the L76K module:
 
 - **PPS**: L76K PPS pad → XIAO header pin 3 → main board GPS_PPS net → PA8
-- **VBKP**: L76K VBKP pad → XIAO 3V3 pin (pin 10) — keeps RTC/hot-start alive when GPS_VCC is off
+- **VBKP**: L76K VBKP pad → bodge wire to module header pin 4 (unused) → main board 3V3 rail (always-on, NOT switched GPS_VCC) — keeps RTC/hot-start alive when GPS power is off
 
 ### GPS Power Switch — How It Works
 
