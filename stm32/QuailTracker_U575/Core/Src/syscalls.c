@@ -29,11 +29,16 @@
 #include <time.h>
 #include <sys/time.h>
 #include <sys/times.h>
+#include "cmsis_os2.h"
 
 
 /* Variables */
 extern int __io_putchar(int ch) __attribute__((weak));
 extern int __io_getchar(void) __attribute__((weak));
+
+/* Printf mutex — serializes _write across FreeRTOS tasks.
+ * NULL before RTOS init (single-threaded, no lock needed). */
+extern osMutexId_t printMutex;
 
 
 char *__env[1] = { 0 };
@@ -82,10 +87,12 @@ __attribute__((weak)) int _write(int file, char *ptr, int len)
   (void)file;
   int DataIdx;
 
+  if (printMutex) osMutexAcquire(printMutex, osWaitForever);
   for (DataIdx = 0; DataIdx < len; DataIdx++)
   {
     __io_putchar(*ptr++);
   }
+  if (printMutex) osMutexRelease(printMutex);
   return len;
 }
 

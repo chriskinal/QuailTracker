@@ -22,6 +22,7 @@
 #include "stm32u5xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "cmsis_os2.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -88,7 +89,7 @@ void NMI_Handler(void)
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
-
+  GPIOG->BSRR = GPIO_PIN_2; /* RED LED on (PG2) */
   /* USER CODE END HardFault_IRQn 0 */
   while (1)
   {
@@ -103,7 +104,7 @@ void HardFault_Handler(void)
 void MemManage_Handler(void)
 {
   /* USER CODE BEGIN MemoryManagement_IRQn 0 */
-
+  GPIOG->BSRR = GPIO_PIN_2; /* RED LED on (PG2) */
   /* USER CODE END MemoryManagement_IRQn 0 */
   while (1)
   {
@@ -118,7 +119,7 @@ void MemManage_Handler(void)
 void BusFault_Handler(void)
 {
   /* USER CODE BEGIN BusFault_IRQn 0 */
-
+  GPIOG->BSRR = GPIO_PIN_2; /* RED LED on (PG2) */
   /* USER CODE END BusFault_IRQn 0 */
   while (1)
   {
@@ -133,7 +134,7 @@ void BusFault_Handler(void)
 void UsageFault_Handler(void)
 {
   /* USER CODE BEGIN UsageFault_IRQn 0 */
-
+  GPIOG->BSRR = GPIO_PIN_2; /* RED LED on (PG2) */
   /* USER CODE END UsageFault_IRQn 0 */
   while (1)
   {
@@ -208,5 +209,35 @@ void TIM17_IRQHandler(void)
 void EXTI8_IRQHandler(void)
 {
     HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_8);
+}
+
+void USART1_IRQHandler(void)
+{
+    if (USART1->ISR & USART_ISR_RXNE_RXFNE) {
+        uint8_t ch = (uint8_t)(USART1->RDR & 0xFF);
+        extern osMessageQueueId_t cliRxQueue;
+        osMessageQueuePut(cliRxQueue, &ch, 0, 0);
+    }
+    USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
+}
+
+void LPUART1_IRQHandler(void)
+{
+    if (LPUART1->ISR & USART_ISR_RXNE_RXFNE) {
+        uint8_t ch = (uint8_t)(LPUART1->RDR & 0xFF);
+        extern osMessageQueueId_t gpsRxQueue;
+        osMessageQueuePut(gpsRxQueue, &ch, 0, 0);
+    }
+    LPUART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
+}
+
+void USART3_IRQHandler(void)
+{
+    if (USART3->ISR & USART_ISR_RXNE_RXFNE) {
+        uint8_t ch = (uint8_t)(USART3->RDR & 0xFF);
+        extern osMessageQueueId_t bleRxQueue;
+        osMessageQueuePut(bleRxQueue, &ch, 0, 0);
+    }
+    USART3->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
 }
 /* USER CODE END 1 */

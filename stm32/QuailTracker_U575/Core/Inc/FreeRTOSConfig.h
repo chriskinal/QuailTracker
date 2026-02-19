@@ -171,7 +171,10 @@ header file. */
 #define SysTick_Handler xPortSysTickHandler
 
 /* USER CODE BEGIN Defines */
-/* Section where parameter definitions can be added (for instance, to override default ones in FreeRTOS.h) */
+/* Each FreeRTOS task gets its own newlib _reent struct (~400 bytes/task).
+ * Without this, concurrent printf from multiple tasks corrupts shared
+ * newlib state, causing hangs. */
+#define configUSE_NEWLIB_REENTRANT 1
 /* USER CODE END Defines */
 
 #endif /* __FREERTOS_CONFIG_H */

@@ -55,6 +55,7 @@ DMA_QListTypeDef List_GPDMA1_Channel0;
 DMA_HandleTypeDef handle_GPDMA1_Channel0;
 
 UART_HandleTypeDef hlpuart1;
+UART_HandleTypeDef husart3;
 
 SPI_HandleTypeDef hspi1;
 
@@ -76,6 +77,14 @@ flac_enc_t flacEncoder;
 #define REC_FMT_FLAC 0
 #define REC_FMT_WAV  1
 uint8_t recFormat = REC_FMT_FLAC;
+
+/* UART RX queues — fed by RXNE interrupts, consumed by tasks */
+osMessageQueueId_t cliRxQueue;    /* USART1 — VCP CLI */
+osMessageQueueId_t gpsRxQueue;    /* LPUART1 — GPS */
+osMessageQueueId_t bleRxQueue;    /* USART3 — BLE */
+
+/* Printf mutex — serializes _write() across FreeRTOS tasks */
+osMutexId_t printMutex;
 
 /* Recording state (shared with app_freertos.c tasks) */
 FIL wavFile;
@@ -112,6 +121,7 @@ static void MX_GPDMA1_Init(void);
 static void MX_ICACHE_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_LPUART1_UART_Init(void);
+static void MX_USART3_UART_Init(void);
 static void MX_ADF1_Init(void);
 /* USER CODE BEGIN PFP */
 
@@ -119,30 +129,41 @@ static void MX_ADF1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-#define FW_VERSION "0.4.2"
+#define FW_VERSION "0.4.5"
 
 /* Command IDs for audio task queue */
 #define CMD_START_REC 1
 #define CMD_STOP_REC  2
 
-/* Direct UART RX - non-blocking, clears errors (VCP = USART1 on Nucleo-U575ZI-Q) */
-int getChar(void)
+/* Blocking char read with timeout (ms). Returns byte or -1 on timeout. */
+int getChar(uint32_t timeoutMs)
 {
-    USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
-    if (USART1->ISR & USART_ISR_RXNE_RXFNE) {
-        return (int)(USART1->RDR & 0xFF);
-    }
+    uint8_t ch;
+    if (osMessageQueueGet(cliRxQueue, &ch, NULL, timeoutMs) == osOK)
+        return (int)ch;
     return -1;
 }
 
-/* Direct LPUART1 RX - non-blocking, clears errors (GPS on Nucleo-U575ZI-Q) */
-int getCharGps(void)
+int getCharGps(uint32_t timeoutMs)
 {
-    LPUART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
-    if (LPUART1->ISR & USART_ISR_RXNE_RXFNE) {
-        return (int)(LPUART1->RDR & 0xFF);
-    }
+    uint8_t ch;
+    if (osMessageQueueGet(gpsRxQueue, &ch, NULL, timeoutMs) == osOK)
+        return (int)ch;
     return -1;
+}
+
+int getCharBle(uint32_t timeoutMs)
+{
+    uint8_t ch;
+    if (osMessageQueueGet(bleRxQueue, &ch, NULL, timeoutMs) == osOK)
+        return (int)ch;
+    return -1;
+}
+
+/* Send string to BLE module via USART3 */
+void bleSend(const char *s)
+{
+    HAL_UART_Transmit(&husart3, (const uint8_t *)s, strlen(s), 100);
 }
 
 void WAV_WriteHeader(FIL *fp, uint32_t sampleRate, uint32_t dataSize)
@@ -332,6 +353,7 @@ void printMenu(void)
     printf("6. Eject SD Card\r\n");
     printf("7. Mount SD Card\r\n");
     printf("8. GPS Status\r\n");
+    printf("9. BLE Status\r\n");
     printf("F. Toggle Format (%s)\r\n", recFormat == REC_FMT_WAV ? "WAV" : "FLAC");
     printf("G. Toggle GPS Raw Output\r\n");
     printf("R. Toggle Recording\r\n");
@@ -366,15 +388,21 @@ void printStatus(void)
     if (sdMounted) {
         FATFS *fs;
         DWORD fre_clust;
-        osMutexAcquire(fileMtxHandle, osWaitForever);
-        if (f_getfree("", &fre_clust, &fs) == FR_OK) {
-            DWORD tot_sect = (fs->n_fatent - 2) * fs->csize;
-            DWORD fre_sect = fre_clust * fs->csize;
-            printf("  Total: %lu KB\r\n", (unsigned long)(tot_sect / 2));
-            printf("  Free:  %lu KB\r\n", (unsigned long)(fre_sect / 2));
+        if (osMutexAcquire(fileMtxHandle, 200) == osOK) {
+            if (f_getfree("", &fre_clust, &fs) == FR_OK) {
+                DWORD tot_sect = (fs->n_fatent - 2) * fs->csize;
+                DWORD fre_sect = fre_clust * fs->csize;
+                printf("  Total: %lu KB\r\n", (unsigned long)(tot_sect / 2));
+                printf("  Free:  %lu KB\r\n", (unsigned long)(fre_sect / 2));
+            }
+            osMutexRelease(fileMtxHandle);
+        } else {
+            printf("  (busy)\r\n");
         }
-        osMutexRelease(fileMtxHandle);
     }
+
+    extern void printBleStatusBrief(void);
+    printBleStatusBrief();
 
     printf("============================\r\n");
 }
@@ -576,6 +604,7 @@ int main(void)
   MX_ICACHE_Init();
   MX_SPI1_Init();
   MX_LPUART1_UART_Init();
+  MX_USART3_UART_Init();
   MX_ADF1_Init();
   /* USER CODE BEGIN 2 */
   setvbuf(stdout, NULL, _IONBF, 0);
@@ -640,10 +669,35 @@ int main(void)
           printf("SD Card: No card detected\r\n");
       }
   }
+  /* Create UART RX queues (must exist before RXNE interrupts are enabled) */
+  cliRxQueue = osMessageQueueNew(64, sizeof(uint8_t), NULL);
+  gpsRxQueue = osMessageQueueNew(128, sizeof(uint8_t), NULL);
+  bleRxQueue = osMessageQueueNew(128, sizeof(uint8_t), NULL);
+
+  /* Enable RXNE interrupts — ISRs push bytes into queues above.
+   * Priority 6 >= configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY (5), safe for FreeRTOS API. */
+  __HAL_UART_ENABLE_IT(&hlpuart1, UART_IT_RXNE);
+  HAL_NVIC_SetPriority(LPUART1_IRQn, 6, 0);
+  HAL_NVIC_EnableIRQ(LPUART1_IRQn);
+
+  __HAL_UART_ENABLE_IT(&husart3, UART_IT_RXNE);
+  HAL_NVIC_SetPriority(USART3_IRQn, 6, 0);
+  HAL_NVIC_EnableIRQ(USART3_IRQn);
+
+  /* USART1 RXNE: enabled here but the CubeMX-generated BSP_COM_Init below
+   * osKernelInitialize() will re-init USART1 and clear it. StartCliTask
+   * re-enables RXNE after the scheduler starts. */
+  HAL_NVIC_SetPriority(USART1_IRQn, 6, 0);
+  HAL_NVIC_EnableIRQ(USART1_IRQn);
   /* USER CODE END 2 */
 
   /* Init scheduler */
   osKernelInitialize();
+
+  /* Printf mutex must be created after osKernelInitialize so FreeRTOS heap exists.
+   * Before this point, _write() sees printMutex==NULL and skips locking (safe: single-threaded). */
+  printMutex = osMutexNew(NULL);
+
   /* Call init function for freertos objects (in app_freertos.c) */
   MX_FREERTOS_Init();
 
@@ -931,6 +985,31 @@ static void MX_LPUART1_UART_Init(void)
   }
   /* USER CODE END LPUART1_Init 2 */
 
+}
+
+/**
+  * @brief USART3 Initialization Function — BLE module (HM-19)
+  *        Nucleo: PC10/PC11 (PD8/PD9 conflict with VCP solder bridges)
+  *        Production: PD8/PD9
+  * @retval None
+  */
+static void MX_USART3_UART_Init(void)
+{
+  husart3.Instance = USART3;
+  husart3.Init.BaudRate = 9600;
+  husart3.Init.WordLength = UART_WORDLENGTH_8B;
+  husart3.Init.StopBits = UART_STOPBITS_1;
+  husart3.Init.Parity = UART_PARITY_NONE;
+  husart3.Init.Mode = UART_MODE_TX_RX;
+  husart3.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  husart3.Init.OverSampling = UART_OVERSAMPLING_16;
+  husart3.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  husart3.Init.ClockPrescaler = UART_PRESCALER_DIV1;
+  husart3.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&husart3) != HAL_OK)
+  {
+    Error_Handler();
+  }
 }
 
 /**

@@ -77,9 +77,14 @@ extern uint8_t recFormat;
 #define REC_FMT_WAV  1
 extern flac_enc_t flacEncoder;
 
+/* Queues from main.c */
+extern osMessageQueueId_t bleRxQueue;
+
 /* Functions from main.c */
-extern int getChar(void);
-extern int getCharGps(void);
+extern int getChar(uint32_t timeoutMs);
+extern int getCharGps(uint32_t timeoutMs);
+extern int getCharBle(uint32_t timeoutMs);
+extern void bleSend(const char *s);
 extern void WAV_WriteHeader(FIL *fp, uint32_t sampleRate, uint32_t dataSize);
 extern void printMenu(void);
 extern void printStatus(void);
@@ -99,6 +104,18 @@ extern float ppsLongitude;
 /* GPS state */
 static gps_data_t gpsData;
 static volatile uint8_t gpsRawOutput;
+
+/* BLE state */
+static char bleName[32];
+static char bleAddr[20];
+static uint8_t bleReady;
+static volatile uint8_t bleConnected;
+static char bleLastResponse[64];
+
+/* BLE live probe — CLI task sets request, BLE task executes and stores result */
+static volatile uint8_t bleLiveProbeReq;
+static volatile uint8_t bleLiveProbeReady;
+static char bleLiveProbeResp[64];
 /* USER CODE END Variables */
 /* Definitions for audioTask */
 osThreadId_t audioTaskHandle;
@@ -133,7 +150,10 @@ const osSemaphoreAttr_t audioDmaSem_attributes = {
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 static void StartGpsTask(void *argument);
+static void StartBleTask(void *argument);
 static void printGpsStatus(void);
+static void printBleStatus(void);
+void printBleStatusBrief(void);
 /* USER CODE END FunctionPrototypes */
 
 /**
@@ -182,6 +202,14 @@ void MX_FREERTOS_Init(void) {
       .stack_size = 512 * 4
     };
     osThreadNew(StartGpsTask, NULL, &gpsTask_attributes);
+  }
+  {
+    const osThreadAttr_t bleTask_attributes = {
+      .name = "bleTask",
+      .priority = (osPriority_t) osPriorityNormal,
+      .stack_size = 512 * 4
+    };
+    osThreadNew(StartBleTask, NULL, &bleTask_attributes);
   }
   /* USER CODE END RTOS_THREADS */
 
@@ -285,11 +313,15 @@ void StartAudioTask(void *argument)
 void StartCliTask(void *argument)
 {
   /* USER CODE BEGIN cliTask */
+  /* Re-enable USART1 RXNE — the CubeMX-generated BSP_COM_Init after
+   * osKernelInitialize() re-inits USART1 and clears our earlier enable. */
+  USART1->CR1 |= USART_CR1_RXNEIE_RXFNEIE;
+
   printMenu();
 
   for (;;)
   {
-    int c = getChar();
+    int c = getChar(10);  /* block up to 10ms — replaces poll + osDelay(10) */
     if (c >= 0) {
       switch (c) {
       case '1':
@@ -342,9 +374,8 @@ void StartCliTask(void *argument)
           printf("Format SD card? ALL DATA WILL BE ERASED. (y/n) > ");
           int confirm = -1;
           while (confirm < 0) {
-            confirm = getChar();
+            confirm = getChar(osWaitForever);
             if (confirm == '\r' || confirm == '\n') confirm = -1;
-            if (confirm < 0) osDelay(10);
           }
           printf("%c\r\n", confirm);
           if (confirm == 'y' || confirm == 'Y') {
@@ -406,6 +437,11 @@ void StartCliTask(void *argument)
         printMenu();
         break;
 
+      case '9':
+        printBleStatus();
+        printMenu();
+        break;
+
       case 'f':
       case 'F':
         if (isRecording) {
@@ -439,8 +475,6 @@ void StartCliTask(void *argument)
         break;
       }
     }
-
-    osDelay(10); /* yield CPU, ~100Hz poll rate */
   }
   /* USER CODE END cliTask */
 }
@@ -617,7 +651,7 @@ static void StartGpsTask(void *argument)
     printf("GPS: Listening on LPUART1 (9600 baud)\r\n");
 
     for (;;) {
-        int c = getCharGps();
+        int c = getCharGps(osWaitForever);
         if (c >= 0) {
             if (c == '\n') {
                 if (pos > 0 && buf[pos - 1] == '\r') pos--;
@@ -627,8 +661,165 @@ static void StartGpsTask(void *argument)
             } else if (pos < (int)sizeof(buf) - 1) {
                 buf[pos++] = (char)c;
             }
-        } else {
-            osDelay(1);
+        }
+    }
+}
+
+/* ========================= BLE / HM-19 ========================= */
+
+/* Send AT command and wait for response (blocking, with timeout) */
+static int bleSendCmd(const char *cmd, char *resp, int respSize, int timeoutMs)
+{
+    bleSend(cmd);
+    int pos = 0;
+    uint32_t start = HAL_GetTick();
+
+    while (1) {
+        uint32_t elapsed = HAL_GetTick() - start;
+        if (elapsed >= (uint32_t)timeoutMs) break;
+        uint32_t remaining = (uint32_t)timeoutMs - elapsed;
+        int c = getCharBle(remaining);
+        if (c >= 0) {
+            if (c == '\n' || c == '\r') {
+                if (pos > 0) {
+                    resp[pos] = '\0';
+                    return pos;
+                }
+            } else if (pos < respSize - 1) {
+                resp[pos++] = (char)c;
+            }
+        }
+    }
+    /* Some HM-19 responses don't end with newline (e.g. "OK") */
+    if (pos > 0) {
+        resp[pos] = '\0';
+        return pos;
+    }
+    return 0;
+}
+
+static void printBleStatus(void)
+{
+    printf("\r\n=== BLE Status ===\r\n");
+    printf("Module:    %s\r\n", bleReady ? "HM-19 (CC2640)" : "Not detected");
+    if (bleReady) {
+        printf("Name:      %s\r\n", bleName);
+        printf("Address:   %s\r\n", bleAddr);
+        printf("Connected: %s\r\n", bleConnected ? "Yes" : "No");
+
+        /* Request BLE task to run AT probe (avoids queue contention) */
+        bleLiveProbeReady = 0;
+        bleLiveProbeReq = 1;
+        uint32_t start = HAL_GetTick();
+        while (!bleLiveProbeReady && (HAL_GetTick() - start < 2000))
+            osDelay(50);
+
+        if (bleLiveProbeReady)
+            printf("AT test:   %s\r\n", bleLiveProbeResp);
+        else
+            printf("AT test:   Timeout\r\n");
+    }
+    printf("==================\r\n");
+}
+
+/* Brief BLE status for main status display (no live AT probe) */
+void printBleStatusBrief(void)
+{
+    printf("BLE:\r\n");
+    printf("  Module: %s\r\n", bleReady ? "HM-19 (CC2640)" : "Not detected");
+    if (bleReady) {
+        printf("  Name:   %s\r\n", bleName);
+        printf("  Addr:   %s\r\n", bleAddr);
+        printf("  Link:   %s\r\n", bleConnected ? "Connected" : "Idle");
+    }
+}
+
+static void StartBleTask(void *argument)
+{
+    char resp[64];
+
+    printf("BLE: Probing HM-19 on USART3 (PC10/PC11, 9600 baud)\r\n");
+
+    /* Wait for module to power up */
+    osDelay(500);
+
+    /* Flush any bytes received during power-up (noise, banners, etc.) */
+    {
+        uint8_t discard;
+        while (osMessageQueueGet(bleRxQueue, &discard, NULL, 0) == osOK) {}
+    }
+
+    /* Probe with AT (HM-19 expects bare commands, no \r\n) */
+    if (bleSendCmd("AT", resp, sizeof(resp), 1000) > 0) {
+        printf("BLE: AT -> %s\r\n", resp);
+        bleReady = 1;
+    } else {
+        printf("BLE: No response from module\r\n");
+        bleReady = 0;
+    }
+
+    if (bleReady) {
+        /* Get module name */
+        if (bleSendCmd("AT+NAME?", resp, sizeof(resp), 1000) > 0) {
+            /* Response format: OK+NAME:xxx or +NAME=xxx depending on firmware */
+            const char *name = resp;
+            const char *p = strchr(resp, ':');
+            if (!p) p = strchr(resp, '=');
+            if (p) name = p + 1;
+            strncpy(bleName, name, sizeof(bleName) - 1);
+            bleName[sizeof(bleName) - 1] = '\0';
+            printf("BLE: Name = %s\r\n", bleName);
+        }
+
+        /* Get MAC address */
+        if (bleSendCmd("AT+ADDR?", resp, sizeof(resp), 1000) > 0) {
+            const char *addr = resp;
+            const char *p = strchr(resp, ':');
+            if (!p) p = strchr(resp, '=');
+            if (p) addr = p + 1;
+            strncpy(bleAddr, addr, sizeof(bleAddr) - 1);
+            bleAddr[sizeof(bleAddr) - 1] = '\0';
+            printf("BLE: Addr = %s\r\n", bleAddr);
+        }
+    }
+
+    /* Main loop: read incoming BLE data (transparent mode) */
+    char buf[128];
+    int pos = 0;
+    for (;;) {
+        /* Handle live AT probe requests from CLI task */
+        if (bleLiveProbeReq) {
+            bleLiveProbeReq = 0;
+            if (bleSendCmd("AT", bleLiveProbeResp, sizeof(bleLiveProbeResp), 500) == 0)
+                strcpy(bleLiveProbeResp, "No response");
+            bleLiveProbeReady = 1;
+            continue;
+        }
+
+        int c = getCharBle(100);  /* short timeout to check probe requests */
+        if (c >= 0) {
+            if (c == '\n') {
+                if (pos > 0 && buf[pos - 1] == '\r') pos--;
+                buf[pos] = '\0';
+                if (pos > 0) {
+                    /* Check for connection state notifications */
+                    if (strncmp(buf, "OK+CONN", 7) == 0) {
+                        bleConnected = 1;
+                        printf("BLE: Connected\r\n");
+                    } else if (strncmp(buf, "OK+LOST", 7) == 0) {
+                        bleConnected = 0;
+                        printf("BLE: Disconnected\r\n");
+                    } else {
+                        /* Print received data */
+                        printf("BLE RX: %s\r\n", buf);
+                    }
+                    strncpy(bleLastResponse, buf, sizeof(bleLastResponse) - 1);
+                    bleLastResponse[sizeof(bleLastResponse) - 1] = '\0';
+                }
+                pos = 0;
+            } else if (pos < (int)sizeof(buf) - 1) {
+                buf[pos++] = (char)c;
+            }
         }
     }
 }
