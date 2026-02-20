@@ -132,7 +132,7 @@ static void MX_ADF1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-#define FW_VERSION "0.5.0"
+#define FW_VERSION "0.6.0"
 
 /* Command IDs for audio task queue */
 #define CMD_START_REC 1
