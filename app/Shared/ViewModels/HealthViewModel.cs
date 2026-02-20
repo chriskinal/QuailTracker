@@ -57,19 +57,9 @@ public partial class HealthViewModel : ObservableObject
     [ObservableProperty] private int _sdUsagePercent = 0;
     [ObservableProperty] private string _sdColor = "#808080";
 
-    // Recording
-    [ObservableProperty] private bool _isRecording = false;
-    [ObservableProperty] private string _recordingStatus = "Idle";
-    [ObservableProperty] private string _recordingColor = "#4CAF50";
-    [ObservableProperty] private string _recordButtonText = "Start Recording";
-    [ObservableProperty] private string _currentFile = "--";
-    [ObservableProperty] private string _fileSize = "0 KB";
-    [ObservableProperty] private string _bufferStatus = "0 / 0";
-    [ObservableProperty] private string _overflows = "0";
-
-    // Audio Level
-    [ObservableProperty] private int _audioLevel = 0;
-    [ObservableProperty] private string _peakLevel = "0 dB";
+    // BLE Connection
+    [ObservableProperty] private string _bleStatus = "Disconnected";
+    [ObservableProperty] private string _bleDeviceName = "--";
 
     // Last Update
     [ObservableProperty] private string _lastUpdated = "Never";
@@ -78,6 +68,22 @@ public partial class HealthViewModel : ObservableObject
     {
         _bluetoothService = bluetoothService;
         _bluetoothService.StatusReceived += OnStatusReceived;
+        _bluetoothService.ConnectionStateChanged += OnConnectionStateChanged;
+    }
+
+    private void OnConnectionStateChanged(object? sender, ConnectionState state)
+    {
+        BleStatus = state switch
+        {
+            ConnectionState.Disconnected => "Disconnected",
+            ConnectionState.Scanning => "Scanning...",
+            ConnectionState.Connecting => "Connecting...",
+            ConnectionState.Connected => "Connected",
+            _ => "Unknown"
+        };
+        BleDeviceName = state == ConnectionState.Connected
+            ? _bluetoothService.ConnectedDeviceName ?? "QuailTracker"
+            : "--";
     }
 
     private void OnStatusReceived(object? sender, DeviceStatus status)
@@ -137,20 +143,6 @@ public partial class HealthViewModel : ObservableObject
             SdColor = "#F44336";
         }
 
-        // Recording
-        IsRecording = status.IsRecording;
-        RecordingStatus = status.IsRecording ? "Recording" : "Idle";
-        RecordingColor = status.IsRecording ? "#F44336" : "#4CAF50";
-        RecordButtonText = status.IsRecording ? "Stop Recording" : "Start Recording";
-        CurrentFile = status.CurrentFilename ?? "--";
-        FileSize = FormatFileSize(status.CurrentFileSize);
-        BufferStatus = $"{status.BufferUsed} / {status.BufferCapacity}";
-        Overflows = status.BufferOverflows.ToString();
-
-        // Audio
-        AudioLevel = Math.Clamp(status.PeakLevel * 100 / 32768, 0, 100);
-        PeakLevel = $"{20 * Math.Log10(Math.Max(1, status.PeakLevel) / 32768.0):F0} dB";
-
         // Timestamp
         LastUpdated = status.LastUpdated.ToString("HH:mm:ss");
     }
@@ -159,26 +151,5 @@ public partial class HealthViewModel : ObservableObject
     private async Task RefreshAsync()
     {
         await _bluetoothService.RequestStatusAsync();
-    }
-
-    [RelayCommand]
-    private async Task ToggleRecordingAsync()
-    {
-        if (IsRecording)
-        {
-            await _bluetoothService.SendCommandAsync("STOP");
-        }
-        else
-        {
-            await _bluetoothService.SendCommandAsync("START");
-        }
-    }
-
-    private static string FormatFileSize(long bytes)
-    {
-        if (bytes < 1024) return $"{bytes} B";
-        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
-        if (bytes < 1024 * 1024 * 1024) return $"{bytes / (1024.0 * 1024.0):F1} MB";
-        return $"{bytes / (1024.0 * 1024.0 * 1024.0):F2} GB";
     }
 }

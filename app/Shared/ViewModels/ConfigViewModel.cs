@@ -37,13 +37,6 @@ public partial class ConfigViewModel : ObservableObject
     [ObservableProperty] private int _selectedHighPassIndex = 1; // 8 Hz
     [ObservableProperty] private int _selectedSampleRateIndex = 0; // 48kHz
 
-    // Schedule
-    [ObservableProperty] private int _selectedScheduleModeIndex = 0; // Manual
-    [ObservableProperty] private int _sunriseOffset = -30;
-    [ObservableProperty] private int _sunsetOffset = 30;
-    [ObservableProperty] private TimeSpan _manualStartTime = new(6, 0, 0);
-    [ObservableProperty] private TimeSpan _manualEndTime = new(9, 0, 0);
-
     // Triggering
     [ObservableProperty] private bool _amplitudeTriggerEnabled = false;
     [ObservableProperty] private int _amplitudeThreshold = -40;
@@ -62,7 +55,6 @@ public partial class ConfigViewModel : ObservableObject
     public string[] GainOptions { get; } = ["Low", "Low-Medium", "Medium", "Medium-High", "High"];
     public string[] HighPassOptions { get; } = ["Disabled", "8 Hz", "48 Hz"];
     public string[] SampleRateOptions { get; } = ["48 kHz", "44.1 kHz", "32 kHz", "16 kHz"];
-    public string[] ScheduleModeOptions { get; } = ["Manual", "Sunrise/Sunset", "Continuous"];
 
     public ConfigViewModel(IBluetoothService bluetoothService)
     {
@@ -93,12 +85,6 @@ public partial class ConfigViewModel : ObservableObject
             16000 => 3,
             _ => 0
         };
-
-        SelectedScheduleModeIndex = (int)config.ScheduleMode;
-        SunriseOffset = config.SunriseOffsetMinutes;
-        SunsetOffset = config.SunsetOffsetMinutes;
-        ManualStartTime = config.ManualStartTime.ToTimeSpan();
-        ManualEndTime = config.ManualEndTime.ToTimeSpan();
 
         AmplitudeTriggerEnabled = config.AmplitudeTriggerEnabled;
         AmplitudeThreshold = config.AmplitudeThresholdDb;
@@ -137,11 +123,6 @@ public partial class ConfigViewModel : ObservableObject
                 3 => 16000,
                 _ => 48000
             },
-            ScheduleMode = (ScheduleMode)SelectedScheduleModeIndex,
-            SunriseOffsetMinutes = SunriseOffset,
-            SunsetOffsetMinutes = SunsetOffset,
-            ManualStartTime = TimeOnly.FromTimeSpan(ManualStartTime),
-            ManualEndTime = TimeOnly.FromTimeSpan(ManualEndTime),
             AmplitudeTriggerEnabled = AmplitudeTriggerEnabled,
             AmplitudeThresholdDb = AmplitudeThreshold,
             PreTriggerSeconds = PreTriggerSeconds,
@@ -170,11 +151,6 @@ public partial class ConfigViewModel : ObservableObject
         SelectedGainIndex = 2;
         SelectedHighPassIndex = 1;
         SelectedSampleRateIndex = 0;
-        SelectedScheduleModeIndex = 0;
-        SunriseOffset = -30;
-        SunsetOffset = 30;
-        ManualStartTime = new TimeSpan(6, 0, 0);
-        ManualEndTime = new TimeSpan(9, 0, 0);
         AmplitudeTriggerEnabled = false;
         AmplitudeThreshold = -40;
         PreTriggerSeconds = 2;

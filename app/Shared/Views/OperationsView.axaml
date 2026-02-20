@@ -1,0 +1,99 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:QuailTracker.Shared.ViewModels"
+             x:Class="QuailTracker.Shared.Views.OperationsView"
+             x:DataType="vm:OperationsViewModel">
+
+    <ScrollViewer Padding="16">
+        <StackPanel Spacing="16">
+
+            <!-- Recording Card -->
+            <Border Classes="CardPanel">
+                <StackPanel Spacing="8">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Text="Recording" Classes="SectionHeader" />
+                        <Border Grid.Column="1" CornerRadius="4" Padding="8,4"
+                                Background="{Binding RecordingColor}">
+                            <TextBlock Text="{Binding RecordingStatus}" Foreground="White" FontSize="12" />
+                        </Border>
+                    </Grid>
+                    <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto">
+                        <StackPanel>
+                            <TextBlock Text="File" Classes="DataLabel" />
+                            <TextBlock Text="{Binding CurrentFile}" FontSize="14" TextTrimming="CharacterEllipsis" Foreground="White" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="Size" Classes="DataLabel" />
+                            <TextBlock Text="{Binding FileSize}" FontSize="14" Foreground="White" />
+                        </StackPanel>
+                        <StackPanel Grid.Row="1" Margin="0,8,0,0">
+                            <TextBlock Text="Buffer" Classes="DataLabel" />
+                            <TextBlock Text="{Binding BufferStatus}" FontSize="14" Foreground="White" />
+                        </StackPanel>
+                        <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,8,0,0">
+                            <TextBlock Text="Overflows" Classes="DataLabel" />
+                            <TextBlock Text="{Binding Overflows}" FontSize="14" Foreground="White" />
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- Record Button -->
+                    <Button HorizontalAlignment="Stretch"
+                            Margin="0,8,0,0"
+                            Padding="16,12"
+                            Command="{Binding ToggleRecordingCommand}"
+                            Background="{Binding RecordingColor}">
+                        <TextBlock Text="{Binding RecordButtonText}"
+                                   Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                    </Button>
+                </StackPanel>
+            </Border>
+
+            <!-- Audio Level Card -->
+            <Border Classes="CardPanel">
+                <StackPanel Spacing="8">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Text="Audio Level" Classes="SectionHeader" />
+                        <TextBlock Grid.Column="1" Text="{Binding PeakLevel}" Classes="DataLabel" />
+                    </Grid>
+                    <ProgressBar Value="{Binding AudioLevel}" Maximum="100"
+                                 Height="16" CornerRadius="4"
+                                 Foreground="#4CAF50" />
+                </StackPanel>
+            </Border>
+
+            <!-- SD Card Actions Card -->
+            <Border Classes="CardPanel">
+                <StackPanel Spacing="8">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Text="SD Card" Classes="SectionHeader" />
+                        <Border Grid.Column="1" CornerRadius="4" Padding="8,4"
+                                Background="#808080">
+                            <TextBlock Text="{Binding SdStatus}" Foreground="White" FontSize="12" />
+                        </Border>
+                    </Grid>
+                    <Grid ColumnDefinitions="*,8,*,8,*">
+                        <Button Grid.Column="0"
+                                HorizontalAlignment="Stretch"
+                                Classes="ToolbarButton"
+                                Command="{Binding MountSdCommand}">
+                            <TextBlock Text="Mount" HorizontalAlignment="Center" />
+                        </Button>
+                        <Button Grid.Column="2"
+                                HorizontalAlignment="Stretch"
+                                Classes="ToolbarButton"
+                                Command="{Binding EjectSdCommand}">
+                            <TextBlock Text="Eject" HorizontalAlignment="Center" />
+                        </Button>
+                        <Button Grid.Column="4"
+                                HorizontalAlignment="Stretch"
+                                Classes="DangerButton"
+                                Command="{Binding FormatSdCommand}">
+                            <TextBlock Text="Format" HorizontalAlignment="Center" />
+                        </Button>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

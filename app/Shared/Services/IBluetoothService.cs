@@ -89,6 +89,19 @@ public interface IBluetoothService
     /// </summary>
     /// <param name="command">Command string (e.g., "START", "STOP")</param>
     Task SendCommandAsync(string command);
+
+    /// <summary>
+    /// Send only schedule-related configuration to the device.
+    /// </summary>
+    /// <param name="config">Configuration containing schedule fields</param>
+    /// <returns>True if successful</returns>
+    Task<bool> SendScheduleAsync(DeviceConfig config);
+
+    /// <summary>
+    /// Send an SD card command (EJECT, MOUNT, FORMAT).
+    /// </summary>
+    /// <param name="operation">Operation string</param>
+    Task SendSdCommandAsync(string operation);
 }
 
 /// <summary>

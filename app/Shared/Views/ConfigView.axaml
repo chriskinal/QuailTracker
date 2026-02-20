@@ -47,54 +47,6 @@
                 </StackPanel>
             </Border>
 
-            <!-- Recording Schedule -->
-            <Border Classes="CardPanel">
-                <StackPanel Spacing="12">
-                    <TextBlock Text="Recording Schedule" Classes="SectionHeader" />
-
-                    <StackPanel Spacing="4">
-                        <TextBlock Text="Schedule Mode" Classes="DataLabel" />
-                        <ComboBox ItemsSource="{Binding ScheduleModeOptions}"
-                                  SelectedIndex="{Binding SelectedScheduleModeIndex}"
-                                  HorizontalAlignment="Stretch" />
-                    </StackPanel>
-
-                    <!-- Sunrise/Sunset Options -->
-                    <StackPanel Spacing="12"
-                                IsVisible="{Binding SelectedScheduleModeIndex, Converter={x:Static ObjectConverters.Equal}, ConverterParameter=1}">
-                        <Grid ColumnDefinitions="*,12,*">
-                            <StackPanel Spacing="4">
-                                <TextBlock Text="Before Sunrise (min)" Classes="DataLabel" />
-                                <NumericUpDown Value="{Binding SunriseOffset}"
-                                               Minimum="-120" Maximum="0"
-                                               Increment="5" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="2" Spacing="4">
-                                <TextBlock Text="After Sunset (min)" Classes="DataLabel" />
-                                <NumericUpDown Value="{Binding SunsetOffset}"
-                                               Minimum="0" Maximum="120"
-                                               Increment="5" />
-                            </StackPanel>
-                        </Grid>
-                    </StackPanel>
-
-                    <!-- Manual Time Options -->
-                    <StackPanel Spacing="12"
-                                IsVisible="{Binding SelectedScheduleModeIndex, Converter={x:Static ObjectConverters.Equal}, ConverterParameter=0}">
-                        <Grid ColumnDefinitions="*,12,*">
-                            <StackPanel Spacing="4">
-                                <TextBlock Text="Start Time" Classes="DataLabel" />
-                                <TimePicker SelectedTime="{Binding ManualStartTime}" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="2" Spacing="4">
-                                <TextBlock Text="End Time" Classes="DataLabel" />
-                                <TimePicker SelectedTime="{Binding ManualEndTime}" />
-                            </StackPanel>
-                        </Grid>
-                    </StackPanel>
-                </StackPanel>
-            </Border>
-
             <!-- Amplitude Triggering -->
             <Border Classes="CardPanel">
                 <StackPanel Spacing="12">

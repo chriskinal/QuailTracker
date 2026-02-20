@@ -46,6 +46,12 @@ public partial class MainWindowViewModel : ObservableObject
     private HealthViewModel _healthViewModel;
 
     [ObservableProperty]
+    private OperationsViewModel _operationsViewModel;
+
+    [ObservableProperty]
+    private ScheduleViewModel _scheduleViewModel;
+
+    [ObservableProperty]
     private ConfigViewModel _configViewModel;
 
     public MainWindowViewModel() : this(new MockBluetoothService())
@@ -56,6 +62,8 @@ public partial class MainWindowViewModel : ObservableObject
     {
         _bluetoothService = bluetoothService;
         _healthViewModel = new HealthViewModel(bluetoothService);
+        _operationsViewModel = new OperationsViewModel(bluetoothService);
+        _scheduleViewModel = new ScheduleViewModel(bluetoothService);
         _configViewModel = new ConfigViewModel(bluetoothService);
 
         // Subscribe to connection state changes

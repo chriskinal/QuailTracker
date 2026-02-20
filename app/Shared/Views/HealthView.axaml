@@ -24,6 +24,23 @@
                 </StackPanel>
             </Border>
 
+            <!-- BLE Connection Card -->
+            <Border Classes="CardPanel">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="BLE Connection" Classes="SectionHeader" />
+                    <Grid ColumnDefinitions="*,*">
+                        <StackPanel>
+                            <TextBlock Text="Status" Classes="DataLabel" />
+                            <TextBlock Text="{Binding BleStatus}" FontSize="16" Foreground="White" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="Device" Classes="DataLabel" />
+                            <TextBlock Text="{Binding BleDeviceName}" FontSize="16" Foreground="White" />
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
             <!-- Battery Card -->
             <Border Classes="CardPanel">
                 <StackPanel Spacing="8">
@@ -108,58 +125,6 @@
                                    Margin="8,0,0,0" Foreground="White" />
                     </Grid>
                     <TextBlock Text="{Binding SdUsage}" Classes="DataLabel" />
-                </StackPanel>
-            </Border>
-
-            <!-- Recording Card -->
-            <Border Classes="CardPanel">
-                <StackPanel Spacing="8">
-                    <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Text="Recording" Classes="SectionHeader" />
-                        <Border Grid.Column="1" CornerRadius="4" Padding="8,4"
-                                Background="{Binding RecordingColor}">
-                            <TextBlock Text="{Binding RecordingStatus}" Foreground="White" FontSize="12" />
-                        </Border>
-                    </Grid>
-                    <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto">
-                        <StackPanel>
-                            <TextBlock Text="File" Classes="DataLabel" />
-                            <TextBlock Text="{Binding CurrentFile}" FontSize="14" TextTrimming="CharacterEllipsis" Foreground="White" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="1">
-                            <TextBlock Text="Size" Classes="DataLabel" />
-                            <TextBlock Text="{Binding FileSize}" FontSize="14" Foreground="White" />
-                        </StackPanel>
-                        <StackPanel Grid.Row="1" Margin="0,8,0,0">
-                            <TextBlock Text="Buffer" Classes="DataLabel" />
-                            <TextBlock Text="{Binding BufferStatus}" FontSize="14" Foreground="White" />
-                        </StackPanel>
-                        <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,8,0,0">
-                            <TextBlock Text="Overflows" Classes="DataLabel" />
-                            <TextBlock Text="{Binding Overflows}" FontSize="14" Foreground="White" />
-                        </StackPanel>
-                    </Grid>
-
-                    <!-- Audio Level -->
-                    <StackPanel Margin="0,8,0,0">
-                        <Grid ColumnDefinitions="*,Auto">
-                            <TextBlock Text="Audio Level" Classes="DataLabel" />
-                            <TextBlock Grid.Column="1" Text="{Binding PeakLevel}" Classes="DataLabel" />
-                        </Grid>
-                        <ProgressBar Value="{Binding AudioLevel}" Maximum="100"
-                                     Height="16" CornerRadius="4"
-                                     Foreground="#4CAF50" Margin="0,4,0,0" />
-                    </StackPanel>
-
-                    <!-- Record Button -->
-                    <Button HorizontalAlignment="Stretch"
-                            Margin="0,8,0,0"
-                            Padding="16,12"
-                            Command="{Binding ToggleRecordingCommand}"
-                            Background="{Binding RecordingColor}">
-                        <TextBlock Text="{Binding RecordButtonText}"
-                                   Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Center" />
-                    </Button>
                 </StackPanel>
             </Border>
 

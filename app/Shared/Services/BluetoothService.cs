@@ -217,9 +217,6 @@ public class BluetoothService : IBluetoothService
             $"$SET,STATION,{config.StationId}",
             $"$SET,GAIN,{(int)config.Gain}",
             $"$SET,HPF,{(int)config.HighPassFilter}",
-            $"$SET,SCHED,{(int)config.ScheduleMode}",
-            $"$SET,SUNOFF,{config.SunriseOffsetMinutes},{config.SunsetOffsetMinutes}",
-            $"$SET,MANUAL,{config.ManualStartTime:HHmm},{config.ManualEndTime:HHmm}",
             $"$SET,TRIG,{(config.AmplitudeTriggerEnabled ? 1 : 0)}",
             $"$SET,TRIGDB,{config.AmplitudeThresholdDb}",
             $"$SET,TRIGPRE,{config.PreTriggerSeconds}",
@@ -243,6 +240,48 @@ public class BluetoothService : IBluetoothService
         }
 
         return true;
+    }
+
+    public async Task<bool> SendScheduleAsync(DeviceConfig config)
+    {
+        if (CurrentState != ConnectionState.Connected) return false;
+
+        var commands = new[]
+        {
+            $"$SET,SCHED,{(int)config.ScheduleMode}",
+            $"$SET,SUNOFF,{config.SunriseOffsetMinutes},{config.SunsetOffsetMinutes}",
+            $"$SET,MANUAL,{config.ManualStartTime:HHmm},{config.ManualEndTime:HHmm}",
+        };
+
+        foreach (var cmd in commands)
+        {
+            try
+            {
+                var response = await SendRawAsync(cmd);
+                if (response.StartsWith("$ERR", StringComparison.Ordinal))
+                    return false;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    public async Task SendSdCommandAsync(string operation)
+    {
+        if (CurrentState != ConnectionState.Connected) return;
+
+        try
+        {
+            await SendRawAsync($"$SD,{operation}");
+        }
+        catch
+        {
+            // Timeout — non-fatal
+        }
     }
 
     public async Task SendCommandAsync(string command)

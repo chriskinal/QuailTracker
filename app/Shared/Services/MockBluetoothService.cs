@@ -137,6 +137,30 @@ public class MockBluetoothService : IBluetoothService
         return true;
     }
 
+    public async Task<bool> SendScheduleAsync(DeviceConfig config)
+    {
+        if (CurrentState != ConnectionState.Connected) return false;
+
+        await Task.Delay(300);
+        _currentConfig = _currentConfig with
+        {
+            ScheduleMode = config.ScheduleMode,
+            SunriseOffsetMinutes = config.SunriseOffsetMinutes,
+            SunsetOffsetMinutes = config.SunsetOffsetMinutes,
+            ManualStartTime = config.ManualStartTime,
+            ManualEndTime = config.ManualEndTime,
+        };
+        return true;
+    }
+
+    public async Task SendSdCommandAsync(string operation)
+    {
+        if (CurrentState != ConnectionState.Connected) return;
+        await Task.Delay(200);
+        // Mock: just trigger a status refresh
+        await RequestStatusAsync();
+    }
+
     public async Task SendCommandAsync(string command)
     {
         if (CurrentState != ConnectionState.Connected) return;
