@@ -20,6 +20,7 @@ using Avalonia;
 using Avalonia.iOS;
 using Foundation;
 using QuailTracker.Shared;
+using QuailTracker.Shared.Services;
 using UIKit;
 
 namespace QuailTracker.iOS;
@@ -37,6 +38,7 @@ public class AppDelegate : AvaloniaAppDelegate<App>
 {
     protected override AppBuilder CustomizeAppBuilder(AppBuilder builder)
     {
+        App.BluetoothServiceOverride = new BluetoothService();
         return base.CustomizeAppBuilder(builder)
             .WithInterFont();
     }

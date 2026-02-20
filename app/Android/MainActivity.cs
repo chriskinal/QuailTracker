@@ -21,6 +21,7 @@ using Android.Content.PM;
 using Avalonia;
 using Avalonia.Android;
 using QuailTracker.Shared;
+using QuailTracker.Shared.Services;
 
 namespace QuailTracker.Android;
 
@@ -34,6 +35,7 @@ public class MainActivity : AvaloniaMainActivity<App>
 {
     protected override AppBuilder CustomizeAppBuilder(AppBuilder builder)
     {
+        App.BluetoothServiceOverride = new BluetoothService();
         return base.CustomizeAppBuilder(builder)
             .WithInterFont();
     }

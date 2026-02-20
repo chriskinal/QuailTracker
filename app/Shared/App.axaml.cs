@@ -16,9 +16,11 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+using System;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using QuailTracker.Shared.Services;
 using QuailTracker.Shared.ViewModels;
 using QuailTracker.Shared.Views;
 
@@ -26,6 +28,8 @@ namespace QuailTracker.Shared;
 
 public partial class App : Application
 {
+    public static IBluetoothService? BluetoothServiceOverride { get; set; }
+
     public override void Initialize()
     {
         AvaloniaXamlLoader.Load(this);
@@ -33,7 +37,8 @@ public partial class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
-        var viewModel = new MainWindowViewModel();
+        var btService = BluetoothServiceOverride ?? CreateBluetoothService();
+        var viewModel = new MainWindowViewModel(btService);
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
@@ -51,5 +56,22 @@ public partial class App : Application
         }
 
         base.OnFrameworkInitializationCompleted();
+    }
+
+    private static IBluetoothService CreateBluetoothService()
+    {
+        try
+        {
+            // Try real BLE — works on Android, iOS, and macOS (Core Bluetooth)
+            var _ = Plugin.BLE.CrossBluetoothLE.Current;
+            System.Console.WriteLine($"[BLE] Using real BluetoothService (state: {_.State})");
+            return new BluetoothService();
+        }
+        catch (Exception ex)
+        {
+            // BLE not available on this platform — fall back to mock
+            System.Console.WriteLine($"[BLE] Plugin.BLE not available: {ex.Message} — using MockBluetoothService");
+            return new MockBluetoothService();
+        }
     }
 }

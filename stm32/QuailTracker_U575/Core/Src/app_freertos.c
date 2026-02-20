@@ -89,7 +89,7 @@ typedef struct {
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define FW_VERSION "0.6.0"
+#define FW_VERSION "0.6.1"
 
 #define OTA_PAGE_SIZE     8192
 #define OTA_BANK2_BASE    0x08100000
@@ -1054,6 +1054,9 @@ static int configSave(void)
     }
 
     HAL_FLASH_Lock();
+
+    /* Invalidate ICACHE so readback comes from flash, not stale cache */
+    HAL_ICACHE_Invalidate();
 
     /* Verify readback */
     if (memcmp((const void *)CONFIG_FLASH_ADDR, &cfg, sizeof(cfg)) != 0) {
