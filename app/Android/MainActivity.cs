@@ -16,8 +16,10 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+using Android;
 using Android.App;
 using Android.Content.PM;
+using Android.OS;
 using Avalonia;
 using Avalonia.Android;
 using QuailTracker.Shared;
@@ -33,10 +35,37 @@ namespace QuailTracker.Android;
     ConfigurationChanges = ConfigChanges.Orientation | ConfigChanges.ScreenSize | ConfigChanges.UiMode)]
 public class MainActivity : AvaloniaMainActivity<App>
 {
+    protected override void OnCreate(Bundle? savedInstanceState)
+    {
+        base.OnCreate(savedInstanceState);
+        RequestBlePermissions();
+    }
+
     protected override AppBuilder CustomizeAppBuilder(AppBuilder builder)
     {
         App.BluetoothServiceOverride = new BluetoothService();
         return base.CustomizeAppBuilder(builder)
             .WithInterFont();
+    }
+
+    private void RequestBlePermissions()
+    {
+        if (Build.VERSION.SdkInt < BuildVersionCodes.S)
+        {
+            // Pre-Android 12: location permission needed for BLE scan
+            RequestPermissions([
+                Manifest.Permission.AccessFineLocation,
+                Manifest.Permission.AccessCoarseLocation,
+            ], 1);
+        }
+        else
+        {
+            // Android 12+: dedicated BLE permissions
+            RequestPermissions([
+                Manifest.Permission.BluetoothScan,
+                Manifest.Permission.BluetoothConnect,
+                Manifest.Permission.AccessFineLocation,
+            ], 1);
+        }
     }
 }
