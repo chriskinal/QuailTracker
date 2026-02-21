@@ -133,13 +133,7 @@
                         <TextBlock Text="Location Survey" Classes="SectionHeader" />
                         <Border Grid.Column="1" CornerRadius="4" Padding="8,4"
                                 Background="{Binding SurveyColor}">
-                            <TextBlock Foreground="White" FontSize="12">
-                                <TextBlock.Text>
-                                    <MultiBinding StringFormat="{}{0} fixes">
-                                        <Binding Path="SurveyCount" />
-                                    </MultiBinding>
-                                </TextBlock.Text>
-                            </TextBlock>
+                            <TextBlock Text="{Binding SurveyBadge}" Foreground="White" FontSize="12" />
                         </Border>
                     </Grid>
                     <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto">
@@ -166,9 +160,13 @@
                     <Grid ColumnDefinitions="*,8,*">
                         <Button Grid.Column="0"
                                 HorizontalAlignment="Stretch"
-                                Classes="ToolbarButton"
+                                Padding="16,12"
+                                CornerRadius="6"
+                                BorderThickness="0"
+                                Background="{Binding SurveyButtonColor}"
                                 Command="{Binding ToggleSurveyCommand}">
                             <TextBlock Text="{Binding SurveyButtonText}"
+                                       Foreground="White" FontWeight="SemiBold"
                                        HorizontalAlignment="Center" />
                         </Button>
                         <Button Grid.Column="2"

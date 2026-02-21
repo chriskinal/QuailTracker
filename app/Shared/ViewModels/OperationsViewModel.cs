@@ -68,7 +68,9 @@ public partial class OperationsViewModel : ObservableObject
     [ObservableProperty] private string _surveyCount = "0";
     [ObservableProperty] private bool _surveyActive = false;
     [ObservableProperty] private string _surveyButtonText = "Start Survey";
+    [ObservableProperty] private string _surveyButtonColor = "#DD34495E";
     [ObservableProperty] private string _surveyColor = "#808080";
+    [ObservableProperty] private string _surveyBadge = "0 fixes";
     [ObservableProperty] private bool _canStartSurvey = false;
     private int _gpsSatCount = 0;
 
@@ -125,19 +127,34 @@ public partial class OperationsViewModel : ObservableObject
         SurveyActive = status.SurveyActive;
         SurveyCount = status.SurveyCount.ToString();
         SurveyButtonText = status.SurveyActive ? "Stop Survey" : "Start Survey";
+        SurveyButtonColor = status.SurveyActive ? "#FF9800" : "#DD34495E";
         CanStartSurvey = status.GpsSatellites >= 4 && !status.IsRecording;
+
+        if (status.SurveyActive)
+        {
+            SurveyBadge = "Surveying...";
+            SurveyColor = "#FF9800";
+        }
+        else if (status.SurveyCount > 0)
+        {
+            SurveyBadge = $"{status.SurveyCount} fixes";
+            SurveyColor = "#4CAF50";
+        }
+        else
+        {
+            SurveyBadge = "No data";
+            SurveyColor = "#808080";
+        }
 
         if (status.SurveyCount > 0)
         {
             SurveyPosition = $"{status.SurveyLatitude:F6}, {status.SurveyLongitude:F6}";
             SurveyAltitude = $"{status.SurveyAltitude:F1} m";
-            SurveyColor = "#4CAF50";
         }
         else
         {
             SurveyPosition = "---, ---";
             SurveyAltitude = "--";
-            SurveyColor = "#808080";
         }
     }
 
