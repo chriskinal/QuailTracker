@@ -130,6 +130,7 @@ extern uint8_t recFormat;
 #define REC_FMT_FLAC 0
 #define REC_FMT_WAV  1
 extern flac_enc_t flacEncoder;
+extern char deviceStationId[16];
 
 /* Live audio peak level (updated by audioTask, read by bleTask for $STATUS) */
 static volatile int16_t audioPeakLevel = 0;
@@ -1038,6 +1039,7 @@ static void configLoad(void)
         cfg.version == CONFIG_VERSION &&
         cfg.crc32 == configComputeCrc(&cfg)) {
         printf("Config: Loaded from flash (station=%s)\r\n", cfg.stationId);
+        strncpy(deviceStationId, cfg.stationId, sizeof(deviceStationId));
         return;
     }
 
@@ -1045,6 +1047,7 @@ static void configLoad(void)
     configSetDefaults(&cfg);
     cfg.crc32 = configComputeCrc(&cfg);
     configSave();
+    strncpy(deviceStationId, cfg.stationId, sizeof(deviceStationId));
 }
 
 static int configSave(void)
@@ -1323,6 +1326,7 @@ static void bleHandleSet(const char *args)
     if (strcmp(key, "STATION") == 0) {
         if (strlen(val) > 15) { bleSendLine("$ERR,BADARG"); return; }
         strncpy(cfg.stationId, val, sizeof(cfg.stationId));
+        strncpy(deviceStationId, cfg.stationId, sizeof(deviceStationId));
     } else if (strcmp(key, "GAIN") == 0) {
         int v = val[0] - '0';
         if (v < 0 || v > 4) { bleSendLine("$ERR,BADARG"); return; }

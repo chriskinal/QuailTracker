@@ -103,8 +103,15 @@ volatile uint8_t ppsSynced = 0;     /* 1 when PPS + valid NMEA time available */
 float ppsLatitude = 0.0f;
 float ppsLongitude = 0.0f;
 
+/* Station ID (copied from config by app_freertos.c, used for FLAC metadata) */
+char deviceStationId[16] = "QT001";
+
 /* Current recording filename (shared with app_freertos.c for BLE status) */
 char recFilename[32] = "";
+
+/* Audio DMA callback tracking for PPS-sample correlation */
+volatile uint32_t dmaCallbackCount = 0;
+volatile uint32_t dmaCallbackTick = 0;
 
 /* Recording metadata — latched at start, used for GUANO at stop */
 static uint32_t recStartTime = 0;
@@ -112,6 +119,12 @@ static uint32_t recStartDate = 0;
 static float    recStartLat = 0.0f;
 static float    recStartLon = 0.0f;
 static uint8_t  recHasGps = 0;
+
+/* PPS-sample correlation for TDOA */
+static uint64_t recStartAbsSample = 0;   /* absolute sample when recording started */
+static uint64_t recPpsFirstSample = 0;   /* recording-relative sample at first PPS */
+static uint64_t recPpsLastSample = 0;    /* recording-relative sample at last PPS */
+static uint32_t recPpsEdgesInRec = 0;    /* PPS edges observed during recording */
 
 /* USER CODE END PV */
 
@@ -202,7 +215,7 @@ void WAV_WriteHeader(FIL *fp, uint32_t sampleRate, uint32_t dataSize)
 
 void writeGuanoChunk(FIL *fp, uint32_t audioDataBytes)
 {
-    char buf[256];
+    char buf[512];
     int len = 0;
 
     /* Required: GUANO version (must be first) */
@@ -251,6 +264,29 @@ void writeGuanoChunk(FIL *fp, uint32_t audioDataBytes)
                     "Length: %lu.%03lu\n",
                     (unsigned long)durSec, (unsigned long)durFrac);
 
+    /* Station ID */
+    len += snprintf(buf + len, sizeof(buf) - len,
+                    "QuailTracker|Station ID: %s\n", deviceStationId);
+
+    /* PPS-sample correlation for TDOA */
+    if (recPpsEdgesInRec > 0) {
+        len += snprintf(buf + len, sizeof(buf) - len,
+                        "QuailTracker|PPS Sync Sample: %lu\n",
+                        (unsigned long)recPpsFirstSample);
+        len += snprintf(buf + len, sizeof(buf) - len,
+                        "QuailTracker|PPS Edges: %lu\n",
+                        (unsigned long)recPpsEdgesInRec);
+        if (recPpsEdgesInRec >= 2) {
+            uint32_t intervals = recPpsEdgesInRec - 1;
+            uint64_t delta = recPpsLastSample - recPpsFirstSample;
+            uint32_t whole = (uint32_t)(delta / intervals);
+            uint32_t frac = (uint32_t)((delta % intervals) * 1000 / intervals);
+            len += snprintf(buf + len, sizeof(buf) - len,
+                            "QuailTracker|PPS Sample Rate: %lu.%03lu\n",
+                            (unsigned long)whole, (unsigned long)frac);
+        }
+    }
+
     /* Write RIFF sub-chunk: "guan" + size + data [+ pad] */
     uint8_t chunkHdr[8];
     memcpy(chunkHdr, "guan", 4);
@@ -268,11 +304,31 @@ void writeGuanoChunk(FIL *fp, uint32_t audioDataBytes)
     }
 }
 
-/* Write FLAC VORBIS_COMMENT metadata block with GUANO-style fields.
- * All metadata known at recording start (everything except duration). */
+/* Fixed total size for 2nd FLAC metadata block (PADDING at start, VORBIS_COMMENT at stop).
+ * Must not change between start and stop so audio frame offsets stay valid. */
+#define FLAC_META2_SIZE 512
+
+/* Write FLAC PADDING metadata block (placeholder, replaced at stop with VORBIS_COMMENT) */
+void writeFlacPaddingBlock(FIL *fp)
+{
+    uint8_t buf[FLAC_META2_SIZE];
+    memset(buf, 0, sizeof(buf));
+    uint32_t dataLen = FLAC_META2_SIZE - 4;
+    buf[0] = 0x81; /* is_last=1, type=1 (PADDING) */
+    buf[1] = (uint8_t)(dataLen >> 16);
+    buf[2] = (uint8_t)(dataLen >> 8);
+    buf[3] = (uint8_t)(dataLen);
+    UINT bw;
+    f_write(fp, buf, FLAC_META2_SIZE, &bw);
+}
+
+/* Write FLAC VORBIS_COMMENT metadata block with all metadata including PPS/TDOA.
+ * Output is always exactly FLAC_META2_SIZE bytes (zero-padded).
+ * Called at recording stop, when PPS-sample data is available. */
 void writeFlacVorbisComment(FIL *fp)
 {
-    uint8_t buf[320];
+    uint8_t buf[FLAC_META2_SIZE];
+    memset(buf, 0, sizeof(buf));
     uint32_t pos = 4;  /* skip block header — fill in last */
 
     /* Vendor string (little-endian length + UTF-8 string) */
@@ -286,7 +342,7 @@ void writeFlacVorbisComment(FIL *fp)
     pos += vlen;
 
     /* Build comment strings */
-    char tags[6][80];
+    char tags[10][80];
     int ntags = 0;
 
     if (recHasGps) {
@@ -313,9 +369,46 @@ void writeFlacVorbisComment(FIL *fp)
                  lonNeg ? "-" : "", (long)lon_d, (long)lon_f);
     }
 
+    snprintf(tags[ntags++], 80, "STATION_ID=%s", deviceStationId);
     snprintf(tags[ntags++], 80, "ARTIST=QuailTracker STM32U575-ARU");
     snprintf(tags[ntags++], 80, "ENCODER=QuailTracker " FW_VERSION);
     snprintf(tags[ntags++], 80, "SAMPLERATE=%lu", (unsigned long)SAMPLE_RATE);
+
+    /* PPS-sample correlation for TDOA */
+    if (recPpsEdgesInRec > 0) {
+        /* UTC time of first PPS edge = recStartTime + 1 second
+         * (recStartTime is the UTC of the PPS edge BEFORE recording started;
+         *  the first PPS during recording is the next whole second) */
+        if (recHasGps) {
+            uint32_t dd = recStartDate / 10000;
+            uint32_t mm = (recStartDate / 100) % 100;
+            uint32_t yy = recStartDate % 100;
+            uint32_t hh = recStartTime / 10000;
+            uint32_t mn = (recStartTime / 100) % 100;
+            uint32_t ss = (recStartTime % 100) + 1;
+            if (ss >= 60) { ss = 0; mn++; }
+            if (mn >= 60) { mn = 0; hh++; }
+            if (hh >= 24) { hh = 0; } /* date rollover not handled — rare edge case */
+            snprintf(tags[ntags++], 80,
+                     "PPS_SYNC_UTC=20%02lu-%02lu-%02luT%02lu:%02lu:%02luZ",
+                     (unsigned long)yy, (unsigned long)mm, (unsigned long)dd,
+                     (unsigned long)hh, (unsigned long)mn, (unsigned long)ss);
+        }
+        snprintf(tags[ntags++], 80,
+                 "PPS_SYNC_SAMPLE=%lu", (unsigned long)recPpsFirstSample);
+        snprintf(tags[ntags++], 80,
+                 "PPS_EDGES=%lu", (unsigned long)recPpsEdgesInRec);
+        if (recPpsEdgesInRec >= 2) {
+            /* Measured samples per second from PPS interval counting */
+            uint32_t intervals = recPpsEdgesInRec - 1;
+            uint64_t totalSamples = recPpsLastSample - recPpsFirstSample;
+            uint32_t whole = (uint32_t)(totalSamples / intervals);
+            uint32_t frac = (uint32_t)((totalSamples % intervals) * 1000 / intervals);
+            snprintf(tags[ntags++], 80,
+                     "PPS_SAMPLE_RATE=%lu.%03lu",
+                     (unsigned long)whole, (unsigned long)frac);
+        }
+    }
 
     /* Comment count (little-endian) */
     buf[pos++] = (uint8_t)(ntags);
@@ -334,15 +427,15 @@ void writeFlacVorbisComment(FIL *fp)
         pos += clen;
     }
 
-    /* Block header: is_last=1, type=4 (VORBIS_COMMENT), length */
-    uint32_t dataLen = pos - 4;
+    /* Block header: is_last=1, type=4 (VORBIS_COMMENT), length = total - 4 */
+    uint32_t dataLen = FLAC_META2_SIZE - 4;
     buf[0] = 0x84;
     buf[1] = (uint8_t)(dataLen >> 16);
     buf[2] = (uint8_t)(dataLen >> 8);
     buf[3] = (uint8_t)(dataLen);
 
     UINT bw;
-    f_write(fp, buf, pos, &bw);
+    f_write(fp, buf, FLAC_META2_SIZE, &bw);
 }
 
 void printMenu(void)
@@ -449,6 +542,14 @@ void startRecording(void)
         recHasGps = 0;
     }
 
+    /* Latch absolute sample position for PPS-sample correlation (TDOA) */
+    uint32_t elapsed = HAL_GetTick() - dmaCallbackTick;
+    if (elapsed > 11) elapsed = 11;
+    recStartAbsSample = (uint64_t)dmaCallbackCount * 512 + elapsed * 48;
+    recPpsEdgesInRec = 0;
+    recPpsFirstSample = 0;
+    recPpsLastSample = 0;
+
     strncpy(recFilename, fname, sizeof(recFilename) - 1);
     recFilename[sizeof(recFilename) - 1] = '\0';
 
@@ -466,10 +567,10 @@ void startRecording(void)
         flac_enc_init(&flacEncoder);
         uint8_t hdr[FLAC_HEADER_SIZE];
         flac_enc_write_header(&flacEncoder, hdr);
-        hdr[4] &= 0x7F;  /* STREAMINFO is NOT last — Vorbis comment follows */
+        hdr[4] &= 0x7F;  /* STREAMINFO is NOT last — PADDING/VORBIS_COMMENT follows */
         UINT bw;
         f_write(&wavFile, hdr, FLAC_HEADER_SIZE, &bw);
-        writeFlacVorbisComment(&wavFile);
+        writeFlacPaddingBlock(&wavFile); /* placeholder, replaced at stop */
     }
     f_sync(&wavFile);
 
@@ -518,13 +619,14 @@ void stopRecording(void)
             totalDataBytes += bw;
         }
 
-        /* Rewrite STREAMINFO at file offset 0 with final values */
+        /* Rewrite STREAMINFO + VORBIS_COMMENT at file offset 0 */
+        f_lseek(&wavFile, 0);
         uint8_t hdr[FLAC_HEADER_SIZE];
         flac_enc_finalize_header(&flacEncoder, hdr);
         hdr[4] &= 0x7F;  /* NOT last — Vorbis comment block follows */
-        f_lseek(&wavFile, 0);
         UINT bw;
         f_write(&wavFile, hdr, FLAC_HEADER_SIZE, &bw);
+        writeFlacVorbisComment(&wavFile); /* replaces PADDING with real metadata */
 
         f_close(&wavFile);
 
@@ -534,6 +636,21 @@ void stopRecording(void)
         printf("Recording stopped: %lu bytes (%lus, %lu%% of raw)\r\n",
             (unsigned long)totalDataBytes, (unsigned long)seconds,
             (unsigned long)ratio);
+    }
+
+    /* Report PPS-sample correlation */
+    if (recPpsEdgesInRec >= 2) {
+        uint32_t intervals = recPpsEdgesInRec - 1;
+        uint64_t delta = recPpsLastSample - recPpsFirstSample;
+        uint32_t whole = (uint32_t)(delta / intervals);
+        uint32_t frac = (uint32_t)((delta % intervals) * 1000 / intervals);
+        printf("PPS: %lu edges, measured rate %lu.%03lu Hz\r\n",
+            (unsigned long)recPpsEdgesInRec,
+            (unsigned long)whole, (unsigned long)frac);
+    } else if (recPpsEdgesInRec == 1) {
+        printf("PPS: 1 edge (need 2+ for rate measurement)\r\n");
+    } else {
+        printf("PPS: no edges during recording\r\n");
     }
 }
 
@@ -1120,12 +1237,16 @@ static void MX_GPIO_Init(void)
 /* ADF1 DMA callbacks — signal audio task via semaphore */
 void HAL_MDF_AcqHalfCpltCallback(MDF_HandleTypeDef *hmdf)
 {
+    dmaCallbackCount++;
+    dmaCallbackTick = HAL_GetTick();
     halfComplete = 1;
     osSemaphoreRelease(audioDmaSemHandle);
 }
 
 void HAL_MDF_AcqCpltCallback(MDF_HandleTypeDef *hmdf)
 {
+    dmaCallbackCount++;
+    dmaCallbackTick = HAL_GetTick();
     fullComplete = 1;
     osSemaphoreRelease(audioDmaSemHandle);
 }
@@ -1133,8 +1254,26 @@ void HAL_MDF_AcqCpltCallback(MDF_HandleTypeDef *hmdf)
 void HAL_GPIO_EXTI_Rising_Callback(uint16_t GPIO_Pin)
 {
     if (GPIO_Pin == GPIO_PIN_8) {
-        ppsTick = HAL_GetTick();
+        uint32_t tick = HAL_GetTick();
+        ppsTick = tick;
         ppsCount++;
+
+        /* Estimate absolute sample position at this PPS edge:
+         * dmaCallbackCount * 512 = samples at last DMA callback
+         * (tick - dmaCallbackTick) * 48 = ~samples since last callback
+         * Gives ~±1ms (±48 sample) accuracy per edge */
+        uint32_t elapsed = tick - dmaCallbackTick;
+        if (elapsed > 11) elapsed = 11; /* clamp to one callback period */
+        uint64_t absSample = (uint64_t)dmaCallbackCount * 512 + elapsed * 48;
+
+        /* Track PPS edges during recording for TDOA */
+        if (isRecording) {
+            uint64_t recSample = absSample - recStartAbsSample;
+            if (recPpsEdgesInRec == 0)
+                recPpsFirstSample = recSample;
+            recPpsLastSample = recSample;
+            recPpsEdgesInRec++;
+        }
     }
 }
 /* USER CODE END 4 */
