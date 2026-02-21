@@ -44,7 +44,7 @@ typedef struct {
 
 /* ---- Flash-persisted device configuration ---- */
 #define CONFIG_MAGIC      0x51544346   /* "QTCF" */
-#define CONFIG_VERSION    1
+#define CONFIG_VERSION    2
 #define CONFIG_FLASH_ADDR 0x081FE000   /* Bank 2, page 127 (last 8KB page of 2MB) */
 
 typedef struct __attribute__((packed, aligned(16))) {
@@ -54,18 +54,21 @@ typedef struct __attribute__((packed, aligned(16))) {
     uint8_t  gain;            /* 0-4 */
     uint8_t  hpf;             /* 0=off, 1=8Hz, 2=48Hz */
     uint8_t  recFormat;       /* 0=FLAC, 1=WAV */
-    uint8_t  schedMode;       /* 0=manual, 1=sunrise/sunset, 2=continuous */
-    int16_t  sunRiseOffset;   /* minutes */
-    int16_t  sunSetOffset;    /* minutes */
-    uint16_t manualStart;     /* HHMM */
-    uint16_t manualEnd;       /* HHMM */
+    uint8_t  sunriseEnabled;  /* 0/1 */
+    uint16_t sunriseBefore;   /* minutes before sunrise */
+    uint16_t sunriseAfter;    /* minutes after sunrise */
+    uint8_t  sunsetEnabled;   /* 0/1 */
+    uint16_t sunsetBefore;    /* minutes before sunset */
+    uint16_t sunsetAfter;     /* minutes after sunset */
+    uint8_t  numWindows;      /* 0-8 freeform windows */
+    uint16_t windows[16];     /* pairs of HHMM start,end (max 8 windows) */
     uint8_t  trigEnabled;     /* 0/1 */
     int8_t   trigDb;          /* -60..0 */
     uint8_t  trigPre;         /* 0-30 seconds */
     uint8_t  trigPost;        /* 0-60 seconds */
     uint8_t  lowBatPct;       /* 0-100 */
     uint8_t  autoStop;        /* 0/1 */
-    uint8_t  _pad[128 - 39 - 4]; /* pad to 128 bytes: 39 pre-pad + 85 pad + 4 crc */
+    uint8_t  _pad[128 - 73 - 4]; /* pad to 128 bytes: 73 pre-pad + 51 pad + 4 crc */
     uint32_t crc32;           /* CRC-32 over bytes 0..123 */
 } device_config_t;
 
@@ -89,7 +92,7 @@ typedef struct {
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define FW_VERSION "0.6.1"
+#define FW_VERSION "0.7.0"
 
 #define OTA_PAGE_SIZE     8192
 #define OTA_BANK2_BASE    0x08100000
@@ -127,6 +130,13 @@ extern uint8_t recFormat;
 #define REC_FMT_FLAC 0
 #define REC_FMT_WAV  1
 extern flac_enc_t flacEncoder;
+
+/* Live audio peak level (updated by audioTask, read by bleTask for $STATUS) */
+static volatile int16_t audioPeakLevel = 0;
+
+/* BLE status streaming: 0 = off, otherwise push interval in ms */
+static uint32_t streamInterval = 0;
+static uint32_t lastStreamTick = 0;
 
 /* Queues from main.c */
 extern osMessageQueueId_t bleRxQueue;
@@ -224,7 +234,8 @@ static int configSave(void);
 /* BLE protocol */
 static void bleSendLine(const char *fmt, ...);
 static void bleHandleCommand(const char *cmd);
-static void bleHandleStatus(void);
+static void bleHandleStatusEx(const char *tag);
+static inline void bleHandleStatus(void) { bleHandleStatusEx("$STATUS"); }
 static void bleHandleConfig(void);
 static void bleHandleSd(const char *arg);
 static void bleHandleSet(const char *args);
@@ -318,25 +329,31 @@ void StartAudioTask(void *argument)
       else if (cmd == CMD_STOP_REC) stopRecording();
     }
 
-    /* Process audio data if recording */
-    if (isRecording) {
-      int32_t *src = NULL;
+    /* Always consume DMA flags and track peak level (even when not recording) */
+    int32_t *src = NULL;
 
-      if (halfComplete) {
-        halfComplete = 0;
-        src = &audioBuffer[0];
-      } else if (fullComplete) {
-        fullComplete = 0;
-        src = &audioBuffer[AUDIO_BUF_SIZE / 2];
+    if (halfComplete) {
+      halfComplete = 0;
+      src = &audioBuffer[0];
+    } else if (fullComplete) {
+      fullComplete = 0;
+      src = &audioBuffer[AUDIO_BUF_SIZE / 2];
+    }
+
+    if (src) {
+      /* MDF DFLTDR is left-justified: 25-bit Sinc4 output in bits [31:7].
+       * >> 16 extracts bits [31:16] = top 16 bits. */
+      int16_t blockPeak = 0;
+      for (int i = 0; i < AUDIO_BUF_SIZE / 2; i++) {
+        int16_t s = (int16_t)(src[i] >> 16);
+        pcmBuffer[i] = s;
+        int16_t a = s < 0 ? -s : s;
+        if (a > blockPeak) blockPeak = a;
       }
+      /* Update global peak (max of current peak and this block) */
+      if (blockPeak > audioPeakLevel) audioPeakLevel = blockPeak;
 
-      if (src) {
-        /* MDF DFLTDR is left-justified: 25-bit Sinc4 output in bits [31:7].
-         * >> 16 extracts bits [31:16] = top 16 bits. */
-        for (int i = 0; i < AUDIO_BUF_SIZE / 2; i++) {
-          pcmBuffer[i] = (int16_t)(src[i] >> 16);
-        }
-
+      if (isRecording) {
         if (recFormat == REC_FMT_WAV) {
           /* Raw PCM write */
           osMutexAcquire(fileMtxHandle, osWaitForever);
@@ -910,6 +927,7 @@ static void StartBleTask(void *argument)
                         printf("BLE: Connected\r\n");
                     } else if (strncmp(buf, "OK+LOST", 7) == 0) {
                         bleConnected = 0;
+                        streamInterval = 0;  /* stop streaming on disconnect */
                         printf("BLE: Disconnected\r\n");
                     }
                     /* else: ignore unknown lines */
@@ -920,6 +938,13 @@ static void StartBleTask(void *argument)
             } else if (pos < (int)sizeof(buf) - 1) {
                 buf[pos++] = (char)c;
             }
+        }
+
+        /* Push status if streaming is enabled and interval has elapsed */
+        if (streamInterval > 0 && bleConnected &&
+            (HAL_GetTick() - lastStreamTick) >= streamInterval) {
+            lastStreamTick = HAL_GetTick();
+            bleHandleStatusEx("$STREAM");
         }
     }
 }
@@ -935,11 +960,14 @@ static void configSetDefaults(device_config_t *c)
     c->gain = 2;
     c->hpf = 0;
     c->recFormat = REC_FMT_FLAC;
-    c->schedMode = 0;
-    c->sunRiseOffset = -30;
-    c->sunSetOffset = 30;
-    c->manualStart = 600;
-    c->manualEnd = 900;
+    c->sunriseEnabled = 1;
+    c->sunriseBefore = 30;
+    c->sunriseAfter = 60;
+    c->sunsetEnabled = 1;
+    c->sunsetBefore = 30;
+    c->sunsetAfter = 30;
+    c->numWindows = 0;
+    memset(c->windows, 0, sizeof(c->windows));
     c->trigEnabled = 0;
     c->trigDb = -40;
     c->trigPre = 2;
@@ -1086,11 +1114,11 @@ static void bleSendLine(const char *fmt, ...)
     }
 }
 
-static void bleHandleStatus(void)
+static void bleHandleStatusEx(const char *tag)
 {
     extern MDF_FilterConfigTypeDef AdfFilterConfig0;
 
-    bleSendLine("$STATUS");
+    bleSendLine("%s", tag);
     bleSendLine("id=%s", cfg.stationId);
     bleSendLine("fw=" FW_VERSION);
 
@@ -1124,8 +1152,23 @@ static void bleHandleStatus(void)
         bleSendLine("gps_time=");
     }
 
+    /* GPS extended */
+    bleSendLine("gps_fix=%d", gpsData.fix);
+
+    /* GPS date: reformat DDMMYY → YYYY-MM-DD */
+    if (gpsData.utc_date != 0) {
+        uint32_t dd = gpsData.utc_date / 10000;
+        uint32_t mm = (gpsData.utc_date / 100) % 100;
+        uint32_t yy = gpsData.utc_date % 100;
+        bleSendLine("gps_date=20%02lu-%02lu-%02lu",
+                    (unsigned long)yy, (unsigned long)mm, (unsigned long)dd);
+    } else {
+        bleSendLine("gps_date=");
+    }
+
     /* PPS */
     bleSendLine("pps=%d", ppsSynced ? 1 : 0);
+    bleSendLine("pps_count=%lu", (unsigned long)ppsCount);
     bleSendLine("pps_ms=%lu", (unsigned long)(HAL_GetTick() - ppsTick));
 
     /* Temperature/humidity — not yet implemented */
@@ -1166,10 +1209,18 @@ static void bleHandleStatus(void)
                 (unsigned long)(isRecording ? totalDataBytes / (SAMPLE_RATE * 2) : 0));
     bleSendLine("rec_ovf=0");
 
-    /* Audio buffer stats */
-    bleSendLine("aud_peak=0");
+    /* Audio buffer stats — read and reset peak */
+    int16_t peak = audioPeakLevel;
+    audioPeakLevel = 0;
+    bleSendLine("aud_peak=%d", (int)peak);
     bleSendLine("aud_buf=0");
     bleSendLine("aud_cap=%d", AUDIO_BUF_SIZE / 2);
+
+    /* BLE module info */
+    bleSendLine("ble_ready=%d", bleReady ? 1 : 0);
+    bleSendLine("ble_name=%s", bleName);
+    bleSendLine("ble_addr=%s", bleAddr);
+    bleSendLine("ble_conn=%d", bleConnected ? 1 : 0);
 
     bleSendLine("$END");
 }
@@ -1182,11 +1233,22 @@ static void bleHandleConfig(void)
     bleSendLine("hpf=%d", cfg.hpf);
     bleSendLine("rate=%lu", (unsigned long)SAMPLE_RATE);
     bleSendLine("fmt=%s", cfg.recFormat == REC_FMT_WAV ? "WAV" : "FLAC");
-    bleSendLine("sched=%d", cfg.schedMode);
-    bleSendLine("sun_rise=%d", (int)cfg.sunRiseOffset);
-    bleSendLine("sun_set=%d", (int)cfg.sunSetOffset);
-    bleSendLine("man_start=%04u", (unsigned)cfg.manualStart);
-    bleSendLine("man_end=%04u", (unsigned)cfg.manualEnd);
+    bleSendLine("sunrise=%d", cfg.sunriseEnabled);
+    bleSendLine("sunrise_before=%d", (int)cfg.sunriseBefore);
+    bleSendLine("sunrise_after=%d", (int)cfg.sunriseAfter);
+    bleSendLine("sunset=%d", cfg.sunsetEnabled);
+    bleSendLine("sunset_before=%d", (int)cfg.sunsetBefore);
+    bleSendLine("sunset_after=%d", (int)cfg.sunsetAfter);
+    bleSendLine("nwin=%d", cfg.numWindows);
+    if (cfg.numWindows > 0) {
+        char winBuf[128];
+        int pos = 0;
+        for (int i = 0; i < cfg.numWindows * 2 && i < 16; i++) {
+            if (i > 0) winBuf[pos++] = ',';
+            pos += snprintf(winBuf + pos, sizeof(winBuf) - pos, "%04u", cfg.windows[i]);
+        }
+        bleSendLine("win=%s", winBuf);
+    }
     bleSendLine("trig=%d", cfg.trigEnabled);
     bleSendLine("trig_db=%d", (int)cfg.trigDb);
     bleSendLine("trig_pre=%d", cfg.trigPre);
@@ -1265,9 +1327,11 @@ static void bleHandleSet(const char *args)
         int v = val[0] - '0';
         if (v < 0 || v > 4) { bleSendLine("$ERR,BADARG"); return; }
         cfg.gain = (uint8_t)v;
-        /* Apply to ADF filter immediately */
-        extern MDF_FilterConfigTypeDef AdfFilterConfig0;
-        AdfFilterConfig0.Gain = (int32_t)v * 6;
+        /* Apply to ADF filter immediately via HAL (writes hardware register) */
+        extern MDF_HandleTypeDef AdfHandle0;
+        int32_t newGain = (int32_t)v * 6;
+        HAL_MDF_SetGain(&AdfHandle0, newGain);
+        printf("BLE: ADF gain set to %ld\r\n", (long)newGain);
     } else if (strcmp(key, "HPF") == 0) {
         int v = val[0] - '0';
         if (v < 0 || v > 2) { bleSendLine("$ERR,BADARG"); return; }
@@ -1283,22 +1347,35 @@ static void bleHandleSet(const char *args)
         } else {
             bleSendLine("$ERR,BADARG"); return;
         }
-    } else if (strcmp(key, "SCHED") == 0) {
-        int v = val[0] - '0';
-        if (v < 0 || v > 2) { bleSendLine("$ERR,BADARG"); return; }
-        cfg.schedMode = (uint8_t)v;
-    } else if (strcmp(key, "SUNOFF") == 0) {
-        /* Value format: rise_min,set_min e.g. "-30,30" */
+    } else if (strcmp(key, "SUNRISE") == 0) {
+        /* Value format: enabled,before,after e.g. "1,30,60" */
         const char *c2 = strchr(val, ',');
         if (!c2) { bleSendLine("$ERR,BADARG"); return; }
-        cfg.sunRiseOffset = (int16_t)atoi(val);
-        cfg.sunSetOffset = (int16_t)atoi(c2 + 1);
-    } else if (strcmp(key, "MANUAL") == 0) {
-        /* Value format: HHMM,HHMM e.g. "0600,0900" */
+        const char *c3 = strchr(c2 + 1, ',');
+        if (!c3) { bleSendLine("$ERR,BADARG"); return; }
+        cfg.sunriseEnabled = (uint8_t)(val[0] - '0');
+        cfg.sunriseBefore = (uint16_t)atoi(c2 + 1);
+        cfg.sunriseAfter = (uint16_t)atoi(c3 + 1);
+    } else if (strcmp(key, "SUNSET") == 0) {
+        /* Value format: enabled,before,after e.g. "1,30,30" */
         const char *c2 = strchr(val, ',');
         if (!c2) { bleSendLine("$ERR,BADARG"); return; }
-        cfg.manualStart = (uint16_t)atoi(val);
-        cfg.manualEnd = (uint16_t)atoi(c2 + 1);
+        const char *c3 = strchr(c2 + 1, ',');
+        if (!c3) { bleSendLine("$ERR,BADARG"); return; }
+        cfg.sunsetEnabled = (uint8_t)(val[0] - '0');
+        cfg.sunsetBefore = (uint16_t)atoi(c2 + 1);
+        cfg.sunsetAfter = (uint16_t)atoi(c3 + 1);
+    } else if (strcmp(key, "WINDOWS") == 0) {
+        /* Value format: N,HHMM,HHMM,... e.g. "2,0600,0900,1700,2030" */
+        int n = val[0] - '0';
+        if (n < 0 || n > 8) { bleSendLine("$ERR,BADARG"); return; }
+        cfg.numWindows = (uint8_t)n;
+        const char *p = strchr(val, ',');
+        for (int i = 0; i < n * 2 && p; i++) {
+            p++; /* skip comma */
+            cfg.windows[i] = (uint16_t)atoi(p);
+            p = strchr(p, ',');
+        }
     } else if (strcmp(key, "TRIG") == 0) {
         int v = val[0] - '0';
         if (v < 0 || v > 1) { bleSendLine("$ERR,BADARG"); return; }
@@ -1323,6 +1400,15 @@ static void bleHandleSet(const char *args)
         int v = val[0] - '0';
         if (v < 0 || v > 1) { bleSendLine("$ERR,BADARG"); return; }
         cfg.autoStop = (uint8_t)v;
+    } else if (strcmp(key, "STREAM") == 0) {
+        /* Runtime-only: set status push interval in ms (0=off, 100-30000) */
+        int v = atoi(val);
+        if (v != 0 && (v < 100 || v > 30000)) { bleSendLine("$ERR,BADARG"); return; }
+        streamInterval = (uint32_t)v;
+        lastStreamTick = HAL_GetTick();
+        printf("BLE: Stream interval = %d ms\r\n", v);
+        bleSendLine("$OK");
+        return; /* no flash save needed */
     } else {
         bleSendLine("$ERR,BADARG");
         return;

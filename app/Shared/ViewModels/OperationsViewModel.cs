@@ -39,13 +39,28 @@ public partial class OperationsViewModel : ObservableObject
     [ObservableProperty] private string _bufferStatus = "0 / 0";
     [ObservableProperty] private string _overflows = "0";
 
-    // Audio Level
-    [ObservableProperty] private int _audioLevel = 0;
-    [ObservableProperty] private string _peakLevel = "0 dB";
-
     // SD Card
     [ObservableProperty] private string _sdStatus = "Not Mounted";
+    [ObservableProperty] private string _sdColor = "#808080";
     [ObservableProperty] private bool _isSdMounted = false;
+
+    // GPS Detail
+    [ObservableProperty] private string _gpsFixType = "No Fix";
+    [ObservableProperty] private string _gpsSatellites = "0";
+    [ObservableProperty] private string _gpsPosition = "---, ---";
+    [ObservableProperty] private string _gpsDate = "--";
+    [ObservableProperty] private string _gpsTime = "--:--:--";
+    [ObservableProperty] private string _ppsStatus = "No Signal";
+    [ObservableProperty] private string _ppsCount = "0";
+    [ObservableProperty] private string _ppsAge = "--";
+    [ObservableProperty] private string _gpsColor = "#808080";
+
+    // BLE Module Detail
+    [ObservableProperty] private string _bleModule = "Not detected";
+    [ObservableProperty] private string _bleName = "--";
+    [ObservableProperty] private string _bleAddr = "--";
+    [ObservableProperty] private string _bleLink = "Disconnected";
+    [ObservableProperty] private string _bleColor = "#808080";
 
     public OperationsViewModel(IBluetoothService bluetoothService)
     {
@@ -65,13 +80,41 @@ public partial class OperationsViewModel : ObservableObject
         BufferStatus = $"{status.BufferUsed} / {status.BufferCapacity}";
         Overflows = status.BufferOverflows.ToString();
 
-        // Audio
-        AudioLevel = Math.Clamp(status.PeakLevel * 100 / 32768, 0, 100);
-        PeakLevel = $"{20 * Math.Log10(Math.Max(1, status.PeakLevel) / 32768.0):F0} dB";
-
         // SD Card
         SdStatus = status.SdCardMounted ? "Mounted" : "Not Mounted";
+        SdColor = status.SdCardMounted ? "#4CAF50" : "#F44336";
         IsSdMounted = status.SdCardMounted;
+
+        // GPS Detail
+        GpsFixType = status.GpsFixType switch
+        {
+            2 => "DGPS",
+            1 => "GPS",
+            _ => "No Fix"
+        };
+        GpsSatellites = status.GpsSatellites.ToString();
+        GpsPosition = status.GpsValid
+            ? $"{status.Latitude:F6}, {status.Longitude:F6}"
+            : "---, ---";
+        GpsDate = status.GpsDate is { Length: > 0 } d ? d : "--";
+        GpsTime = status.GpsTime?.ToString("HH:mm:ss UTC") ?? "--:--:--";
+        PpsStatus = status.PpsValid ? "Synced" : "No Signal";
+        PpsCount = status.PpsCount.ToString();
+        PpsAge = status.PpsCount > 0 ? $"{status.PpsAgeMs} ms" : "--";
+        GpsColor = status.GpsValid ? "#4CAF50" : "#F44336";
+
+        // BLE Module
+        BleModule = status.BleModuleReady ? "HM-19" : "Not detected";
+        BleName = status.BleModuleName is { Length: > 0 } n ? n : "--";
+        BleAddr = status.BleModuleAddr is { Length: > 0 } a ? a : "--";
+        BleLink = status.BleConnected ? "Connected" : "Idle";
+        BleColor = status.BleModuleReady ? "#4CAF50" : "#F44336";
+    }
+
+    [RelayCommand]
+    private async Task RefreshAsync()
+    {
+        await _bluetoothService.RequestStatusAsync();
     }
 
     [RelayCommand]

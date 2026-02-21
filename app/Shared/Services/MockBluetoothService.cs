@@ -17,6 +17,7 @@
  */
 
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using QuailTracker.Shared.Models;
 
@@ -89,11 +90,15 @@ public class MockBluetoothService : IBluetoothService
             BatteryLevel = BatteryLevel.Ok,
 
             GpsValid = true,
+            GpsFixType = 1,
             GpsSatellites = 8 + _random.Next(-3, 4),
             Latitude = 32.2226 + _random.NextDouble() * 0.001,
             Longitude = -110.9747 + _random.NextDouble() * 0.001,
             Altitude = 728f + (float)(_random.NextDouble() * 10),
+            GpsDate = DateTime.UtcNow.ToString("yyyy-MM-dd"),
             PpsValid = true,
+            PpsCount = 12345 + _random.Next(0, 100),
+            PpsAgeMs = _random.Next(50, 1200),
             GpsTime = DateTime.UtcNow,
 
             Temperature = 24.5f + (float)(_random.NextDouble() * 3),
@@ -113,6 +118,11 @@ public class MockBluetoothService : IBluetoothService
             PeakLevel = _random.Next(1000, 20000),
             BufferUsed = _random.Next(1000, 40000),
             BufferCapacity = 48000,
+
+            BleModuleReady = true,
+            BleModuleName = "QuailTracker-QT001",
+            BleModuleAddr = "AA:BB:CC:DD:EE:FF",
+            BleConnected = true,
 
             LastUpdated = DateTime.Now
         };
@@ -144,11 +154,13 @@ public class MockBluetoothService : IBluetoothService
         await Task.Delay(300);
         _currentConfig = _currentConfig with
         {
-            ScheduleMode = config.ScheduleMode,
-            SunriseOffsetMinutes = config.SunriseOffsetMinutes,
-            SunsetOffsetMinutes = config.SunsetOffsetMinutes,
-            ManualStartTime = config.ManualStartTime,
-            ManualEndTime = config.ManualEndTime,
+            SunriseEnabled = config.SunriseEnabled,
+            SunriseBeforeMinutes = config.SunriseBeforeMinutes,
+            SunriseAfterMinutes = config.SunriseAfterMinutes,
+            SunsetEnabled = config.SunsetEnabled,
+            SunsetBeforeMinutes = config.SunsetBeforeMinutes,
+            SunsetAfterMinutes = config.SunsetAfterMinutes,
+            FreeformWindows = config.FreeformWindows,
         };
         return true;
     }
@@ -159,6 +171,39 @@ public class MockBluetoothService : IBluetoothService
         await Task.Delay(200);
         // Mock: just trigger a status refresh
         await RequestStatusAsync();
+    }
+
+    private CancellationTokenSource? _streamCts;
+
+    public async Task SetStreamAsync(int intervalMs)
+    {
+        _streamCts?.Cancel();
+        _streamCts = null;
+
+        if (intervalMs > 0 && CurrentState == ConnectionState.Connected)
+        {
+            _streamCts = new CancellationTokenSource();
+            _ = MockStreamLoop(intervalMs, _streamCts.Token);
+        }
+
+        await Task.CompletedTask;
+    }
+
+    private async Task MockStreamLoop(int intervalMs, CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(intervalMs, ct);
+                if (CurrentState == ConnectionState.Connected)
+                    await RequestStatusAsync();
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+        }
     }
 
     public async Task SendCommandAsync(string command)
@@ -174,6 +219,9 @@ public class MockBluetoothService : IBluetoothService
                 break;
             case "STOP":
                 _isRecording = false;
+                break;
+            case "TOGGLE":
+                _isRecording = !_isRecording;
                 break;
         }
 

@@ -217,6 +217,7 @@ public class BluetoothService : IBluetoothService
             $"$SET,STATION,{config.StationId}",
             $"$SET,GAIN,{(int)config.Gain}",
             $"$SET,HPF,{(int)config.HighPassFilter}",
+            $"$SET,FORMAT,{config.Format}",
             $"$SET,TRIG,{(config.AmplitudeTriggerEnabled ? 1 : 0)}",
             $"$SET,TRIGDB,{config.AmplitudeThresholdDb}",
             $"$SET,TRIGPRE,{config.PreTriggerSeconds}",
@@ -246,12 +247,21 @@ public class BluetoothService : IBluetoothService
     {
         if (CurrentState != ConnectionState.Connected) return false;
 
-        var commands = new[]
+        var commands = new List<string>
         {
-            $"$SET,SCHED,{(int)config.ScheduleMode}",
-            $"$SET,SUNOFF,{config.SunriseOffsetMinutes},{config.SunsetOffsetMinutes}",
-            $"$SET,MANUAL,{config.ManualStartTime:HHmm},{config.ManualEndTime:HHmm}",
+            $"$SET,SUNRISE,{(config.SunriseEnabled ? 1 : 0)},{config.SunriseBeforeMinutes},{config.SunriseAfterMinutes}",
+            $"$SET,SUNSET,{(config.SunsetEnabled ? 1 : 0)},{config.SunsetBeforeMinutes},{config.SunsetAfterMinutes}",
         };
+
+        // Build WINDOWS command
+        var wins = config.FreeformWindows ?? [];
+        var winParts = new List<string> { wins.Length.ToString() };
+        foreach (var w in wins)
+        {
+            winParts.Add(w.Start.ToString("HHmm"));
+            winParts.Add(w.End.ToString("HHmm"));
+        }
+        commands.Add($"$SET,WINDOWS,{string.Join(",", winParts)}");
 
         foreach (var cmd in commands)
         {
@@ -277,6 +287,20 @@ public class BluetoothService : IBluetoothService
         try
         {
             await SendRawAsync($"$SD,{operation}");
+        }
+        catch
+        {
+            // Timeout — non-fatal
+        }
+    }
+
+    public async Task SetStreamAsync(int intervalMs)
+    {
+        if (CurrentState != ConnectionState.Connected) return;
+
+        try
+        {
+            await SendRawAsync($"$SET,STREAM,{intervalMs}");
         }
         catch
         {
@@ -383,7 +407,7 @@ public class BluetoothService : IBluetoothService
         if (line.StartsWith("OK+", StringComparison.Ordinal))
             return;
 
-        // Multi-line mode: accumulating $STATUS or $CONFIG block
+        // Multi-line mode: accumulating $STATUS/$CONFIG/$STREAM block
         if (_multiLines != null)
         {
             if (line == "$END")
@@ -393,11 +417,13 @@ public class BluetoothService : IBluetoothService
                 _multiLines = null;
                 _multiLineType = null;
 
-                if (type == "$STATUS")
+                if (type is "$STATUS" or "$STREAM")
                 {
                     var status = ParseStatus(lines);
                     StatusReceived?.Invoke(this, status);
-                    _responseTcs?.TrySetResult("$STATUS");
+                    // Only complete TCS for solicited $STATUS, not unsolicited $STREAM
+                    if (type == "$STATUS")
+                        _responseTcs?.TrySetResult("$STATUS");
                 }
                 else if (type == "$CONFIG")
                 {
@@ -414,7 +440,7 @@ public class BluetoothService : IBluetoothService
         }
 
         // Start of multi-line block
-        if (line == "$STATUS" || line == "$CONFIG")
+        if (line is "$STATUS" or "$CONFIG" or "$STREAM")
         {
             _multiLineType = line;
             _multiLines = new List<string>();
@@ -527,11 +553,15 @@ public class BluetoothService : IBluetoothService
             BatteryLevel = (BatteryLevel)GetInt(d, "bat_lvl"),
 
             GpsValid = GetBool(d, "gps_valid"),
+            GpsFixType = GetInt(d, "gps_fix"),
             GpsSatellites = GetInt(d, "gps_sats"),
             Latitude = GetLong(d, "gps_lat") / 1e7,
             Longitude = GetLong(d, "gps_lon") / 1e7,
             Altitude = GetFloat(d, "gps_alt"),
+            GpsDate = Get(d, "gps_date"),
             PpsValid = GetBool(d, "pps"),
+            PpsCount = GetLong(d, "pps_count"),
+            PpsAgeMs = GetLong(d, "pps_ms"),
             GpsTime = gpsTime,
 
             Temperature = GetFloat(d, "temp"),
@@ -551,6 +581,11 @@ public class BluetoothService : IBluetoothService
             BufferUsed = GetInt(d, "aud_buf"),
             BufferCapacity = GetInt(d, "aud_cap"),
 
+            BleModuleReady = GetBool(d, "ble_ready"),
+            BleModuleName = Get(d, "ble_name"),
+            BleModuleAddr = Get(d, "ble_addr"),
+            BleConnected = GetBool(d, "ble_conn"),
+
             LastUpdated = DateTime.Now,
         };
     }
@@ -565,11 +600,14 @@ public class BluetoothService : IBluetoothService
             Gain = (GainLevel)GetInt(d, "gain"),
             HighPassFilter = (HighPassFilter)GetInt(d, "hpf"),
             SampleRate = GetInt(d, "rate", 48000),
-            ScheduleMode = (ScheduleMode)GetInt(d, "sched"),
-            SunriseOffsetMinutes = GetInt(d, "sun_rise"),
-            SunsetOffsetMinutes = GetInt(d, "sun_set"),
-            ManualStartTime = ParseHhmm(Get(d, "man_start", "0600")),
-            ManualEndTime = ParseHhmm(Get(d, "man_end", "0900")),
+            Format = Get(d, "fmt") == "WAV" ? RecordingFormat.WAV : RecordingFormat.FLAC,
+            SunriseEnabled = GetBool(d, "sunrise"),
+            SunriseBeforeMinutes = GetInt(d, "sunrise_before", 30),
+            SunriseAfterMinutes = GetInt(d, "sunrise_after", 60),
+            SunsetEnabled = GetBool(d, "sunset"),
+            SunsetBeforeMinutes = GetInt(d, "sunset_before", 30),
+            SunsetAfterMinutes = GetInt(d, "sunset_after", 30),
+            FreeformWindows = ParseWindows(d),
             AmplitudeTriggerEnabled = GetBool(d, "trig"),
             AmplitudeThresholdDb = GetInt(d, "trig_db", -40),
             PreTriggerSeconds = GetInt(d, "trig_pre", 2),
@@ -588,5 +626,24 @@ public class BluetoothService : IBluetoothService
             return new TimeOnly(h, m);
         }
         return new TimeOnly(6, 0);
+    }
+
+    private static TimeWindow[] ParseWindows(Dictionary<string, string> d)
+    {
+        var n = GetInt(d, "nwin");
+        if (n <= 0) return [];
+
+        var winStr = Get(d, "win");
+        if (string.IsNullOrEmpty(winStr)) return [];
+
+        var parts = winStr.Split(',');
+        var list = new List<TimeWindow>();
+        for (var i = 0; i + 1 < parts.Length && list.Count < n; i += 2)
+        {
+            var start = ParseHhmm(parts[i]);
+            var end = ParseHhmm(parts[i + 1]);
+            list.Add(new TimeWindow(start, end));
+        }
+        return list.ToArray();
     }
 }

@@ -36,11 +36,15 @@ public record DeviceStatus
 
     // GPS
     public bool GpsValid { get; init; }
+    public int GpsFixType { get; init; }
     public int GpsSatellites { get; init; }
     public double Latitude { get; init; }
     public double Longitude { get; init; }
     public float Altitude { get; init; }
+    public string GpsDate { get; init; } = "";
     public bool PpsValid { get; init; }
+    public long PpsCount { get; init; }
+    public long PpsAgeMs { get; init; }
     public DateTime? GpsTime { get; init; }
 
     // Environment
@@ -64,6 +68,12 @@ public record DeviceStatus
     public int PeakLevel { get; init; }
     public int BufferUsed { get; init; }
     public int BufferCapacity { get; init; }
+
+    // BLE Module
+    public bool BleModuleReady { get; init; }
+    public string BleModuleName { get; init; } = "";
+    public string BleModuleAddr { get; init; } = "";
+    public bool BleConnected { get; init; }
 
     // Timestamp
     public DateTime LastUpdated { get; init; } = DateTime.Now;

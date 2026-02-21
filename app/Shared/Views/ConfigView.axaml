@@ -38,12 +38,20 @@
                                   HorizontalAlignment="Stretch" />
                     </StackPanel>
 
-                    <StackPanel Spacing="4">
-                        <TextBlock Text="Sample Rate" Classes="DataLabel" />
-                        <ComboBox ItemsSource="{Binding SampleRateOptions}"
-                                  SelectedIndex="{Binding SelectedSampleRateIndex}"
-                                  HorizontalAlignment="Stretch" />
-                    </StackPanel>
+                    <Grid ColumnDefinitions="*,12,*">
+                        <StackPanel Spacing="4">
+                            <TextBlock Text="Sample Rate" Classes="DataLabel" />
+                            <ComboBox ItemsSource="{Binding SampleRateOptions}"
+                                      SelectedIndex="{Binding SelectedSampleRateIndex}"
+                                      HorizontalAlignment="Stretch" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2" Spacing="4">
+                            <TextBlock Text="Format" Classes="DataLabel" />
+                            <ComboBox ItemsSource="{Binding FormatOptions}"
+                                      SelectedIndex="{Binding SelectedFormatIndex}"
+                                      HorizontalAlignment="Stretch" />
+                        </StackPanel>
+                    </Grid>
                 </StackPanel>
             </Border>
 
@@ -56,6 +64,17 @@
                                       IsChecked="{Binding AmplitudeTriggerEnabled}"
                                       OnContent="On" OffContent="Off" />
                     </Grid>
+
+                    <!-- Live Audio Level -->
+                    <StackPanel Spacing="4">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Text="Audio Level" Classes="DataLabel" />
+                            <TextBlock Grid.Column="1" Text="{Binding PeakLevel}" Classes="DataLabel" />
+                        </Grid>
+                        <ProgressBar Value="{Binding AudioLevel}" Maximum="100"
+                                     Height="16" CornerRadius="4"
+                                     Foreground="#4CAF50" />
+                    </StackPanel>
 
                     <StackPanel Spacing="12" IsEnabled="{Binding AmplitudeTriggerEnabled}">
                         <StackPanel Spacing="4">

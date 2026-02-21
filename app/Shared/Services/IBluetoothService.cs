@@ -102,6 +102,12 @@ public interface IBluetoothService
     /// </summary>
     /// <param name="operation">Operation string</param>
     Task SendSdCommandAsync(string operation);
+
+    /// <summary>
+    /// Enable or disable firmware status push streaming.
+    /// </summary>
+    /// <param name="intervalMs">Push interval in ms (0=off, 100-30000)</param>
+    Task SetStreamAsync(int intervalMs);
 }
 
 /// <summary>

@@ -17,6 +17,8 @@
  */
 
 using System;
+using System.Collections.ObjectModel;
+using System.Linq;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -25,31 +27,49 @@ using QuailTracker.Shared.Services;
 
 namespace QuailTracker.Shared.ViewModels;
 
+public partial class TimeWindowItem : ObservableObject
+{
+    [ObservableProperty] private TimeSpan _startTime;
+    [ObservableProperty] private TimeSpan _endTime;
+
+    public TimeWindowItem(TimeSpan start, TimeSpan end)
+    {
+        _startTime = start;
+        _endTime = end;
+    }
+}
+
 public partial class ScheduleViewModel : ObservableObject
 {
     private readonly IBluetoothService _bluetoothService;
 
-    // Schedule
-    [ObservableProperty] private int _selectedScheduleModeIndex = 0;
-    [ObservableProperty] private int _sunriseOffset = -30;
-    [ObservableProperty] private int _sunsetOffset = 30;
-    [ObservableProperty] private TimeSpan _manualStartTime = new(6, 0, 0);
-    [ObservableProperty] private TimeSpan _manualEndTime = new(9, 0, 0);
+    // Sunrise
+    [ObservableProperty] private bool _sunriseEnabled = true;
+    [ObservableProperty] private int _sunriseBefore = 30;
+    [ObservableProperty] private int _sunriseAfter = 60;
 
-    // UI State
-    [ObservableProperty] private bool _hasChanges = false;
+    // Sunset
+    [ObservableProperty] private bool _sunsetEnabled = true;
+    [ObservableProperty] private int _sunsetBefore = 30;
+    [ObservableProperty] private int _sunsetAfter = 30;
+
+    // Freeform windows
+    public ObservableCollection<TimeWindowItem> Windows { get; } = new();
+
+    // UI state
+    [ObservableProperty] private bool _hasChanges;
     [ObservableProperty] private string _statusMessage = "";
-
-    public string[] ScheduleModeOptions { get; } = ["Manual", "Sunrise/Sunset", "Continuous"];
 
     public ScheduleViewModel(IBluetoothService bluetoothService)
     {
         _bluetoothService = bluetoothService;
         _bluetoothService.ConfigReceived += OnConfigReceived;
 
-        PropertyChanged += (s, e) =>
+        Windows.CollectionChanged += (_, _) => HasChanges = true;
+
+        PropertyChanged += (_, e) =>
         {
-            if (e.PropertyName != nameof(HasChanges) && e.PropertyName != nameof(StatusMessage))
+            if (e.PropertyName is not (nameof(HasChanges) or nameof(StatusMessage)))
             {
                 HasChanges = true;
             }
@@ -58,11 +78,16 @@ public partial class ScheduleViewModel : ObservableObject
 
     private void OnConfigReceived(object? sender, DeviceConfig config)
     {
-        SelectedScheduleModeIndex = (int)config.ScheduleMode;
-        SunriseOffset = config.SunriseOffsetMinutes;
-        SunsetOffset = config.SunsetOffsetMinutes;
-        ManualStartTime = config.ManualStartTime.ToTimeSpan();
-        ManualEndTime = config.ManualEndTime.ToTimeSpan();
+        SunriseEnabled = config.SunriseEnabled;
+        SunriseBefore = config.SunriseBeforeMinutes;
+        SunriseAfter = config.SunriseAfterMinutes;
+        SunsetEnabled = config.SunsetEnabled;
+        SunsetBefore = config.SunsetBeforeMinutes;
+        SunsetAfter = config.SunsetAfterMinutes;
+
+        Windows.Clear();
+        foreach (var w in config.FreeformWindows)
+            Windows.Add(new TimeWindowItem(w.Start.ToTimeSpan(), w.End.ToTimeSpan()));
 
         HasChanges = false;
         StatusMessage = "Schedule loaded";
@@ -82,11 +107,17 @@ public partial class ScheduleViewModel : ObservableObject
 
         var config = new DeviceConfig
         {
-            ScheduleMode = (ScheduleMode)SelectedScheduleModeIndex,
-            SunriseOffsetMinutes = SunriseOffset,
-            SunsetOffsetMinutes = SunsetOffset,
-            ManualStartTime = TimeOnly.FromTimeSpan(ManualStartTime),
-            ManualEndTime = TimeOnly.FromTimeSpan(ManualEndTime),
+            SunriseEnabled = SunriseEnabled,
+            SunriseBeforeMinutes = SunriseBefore,
+            SunriseAfterMinutes = SunriseAfter,
+            SunsetEnabled = SunsetEnabled,
+            SunsetBeforeMinutes = SunsetBefore,
+            SunsetAfterMinutes = SunsetAfter,
+            FreeformWindows = Windows
+                .Select(w => new TimeWindow(
+                    TimeOnly.FromTimeSpan(w.StartTime),
+                    TimeOnly.FromTimeSpan(w.EndTime)))
+                .ToArray(),
         };
 
         var success = await _bluetoothService.SendScheduleAsync(config);
@@ -100,5 +131,61 @@ public partial class ScheduleViewModel : ObservableObject
         {
             StatusMessage = "Save failed!";
         }
+    }
+
+    [RelayCommand]
+    private void AddWindow()
+    {
+        Windows.Add(new TimeWindowItem(new TimeSpan(6, 0, 0), new TimeSpan(9, 0, 0)));
+    }
+
+    [RelayCommand]
+    private void RemoveWindow(TimeWindowItem? item)
+    {
+        if (item != null)
+            Windows.Remove(item);
+    }
+
+    [RelayCommand]
+    private void PresetDawnDusk()
+    {
+        SunriseEnabled = true;
+        SunriseBefore = 30;
+        SunriseAfter = 90;
+        SunsetEnabled = true;
+        SunsetBefore = 30;
+        SunsetAfter = 60;
+        Windows.Clear();
+    }
+
+    [RelayCommand]
+    private void PresetDawnOnly()
+    {
+        SunriseEnabled = true;
+        SunriseBefore = 30;
+        SunriseAfter = 120;
+        SunsetEnabled = false;
+        SunsetBefore = 30;
+        SunsetAfter = 30;
+        Windows.Clear();
+    }
+
+    [RelayCommand]
+    private void PresetNocturnal()
+    {
+        SunriseEnabled = false;
+        SunsetEnabled = false;
+        Windows.Clear();
+        Windows.Add(new TimeWindowItem(new TimeSpan(20, 0, 0), new TimeSpan(23, 59, 0)));
+        Windows.Add(new TimeWindowItem(new TimeSpan(0, 0, 0), new TimeSpan(5, 0, 0)));
+    }
+
+    [RelayCommand]
+    private void PresetAllDay()
+    {
+        SunriseEnabled = false;
+        SunsetEnabled = false;
+        Windows.Clear();
+        Windows.Add(new TimeWindowItem(new TimeSpan(0, 0, 0), new TimeSpan(23, 59, 0)));
     }
 }

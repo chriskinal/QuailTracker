@@ -32,13 +32,18 @@ public record DeviceConfig
     public GainLevel Gain { get; init; } = GainLevel.Medium;
     public HighPassFilter HighPassFilter { get; init; } = HighPassFilter.Hz8;
     public int SampleRate { get; init; } = 48000;
+    public RecordingFormat Format { get; init; } = RecordingFormat.FLAC;
 
-    // Recording Schedule
-    public ScheduleMode ScheduleMode { get; init; } = ScheduleMode.Manual;
-    public int SunriseOffsetMinutes { get; init; } = -30;  // Before sunrise
-    public int SunsetOffsetMinutes { get; init; } = 30;    // After sunset
-    public TimeOnly ManualStartTime { get; init; } = new(6, 0);
-    public TimeOnly ManualEndTime { get; init; } = new(9, 0);
+    // Sunrise/Sunset Schedule
+    public bool SunriseEnabled { get; init; } = true;
+    public int SunriseBeforeMinutes { get; init; } = 30;
+    public int SunriseAfterMinutes { get; init; } = 60;
+    public bool SunsetEnabled { get; init; } = true;
+    public int SunsetBeforeMinutes { get; init; } = 30;
+    public int SunsetAfterMinutes { get; init; } = 30;
+
+    // Freeform Recording Windows
+    public TimeWindow[] FreeformWindows { get; init; } = [];
 
     // Triggering
     public bool AmplitudeTriggerEnabled { get; init; } = false;
@@ -67,9 +72,10 @@ public enum HighPassFilter
     Hz48
 }
 
-public enum ScheduleMode
+public enum RecordingFormat
 {
-    Manual,
-    SunriseSunset,
-    Continuous
+    FLAC,
+    WAV
 }
+
+public record TimeWindow(TimeOnly Start, TimeOnly End);

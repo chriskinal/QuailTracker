@@ -36,12 +36,17 @@ public partial class ConfigViewModel : ObservableObject
     [ObservableProperty] private int _selectedGainIndex = 2; // Medium
     [ObservableProperty] private int _selectedHighPassIndex = 1; // 8 Hz
     [ObservableProperty] private int _selectedSampleRateIndex = 0; // 48kHz
+    [ObservableProperty] private int _selectedFormatIndex = 0; // FLAC
 
     // Triggering
     [ObservableProperty] private bool _amplitudeTriggerEnabled = false;
     [ObservableProperty] private int _amplitudeThreshold = -40;
     [ObservableProperty] private int _preTriggerSeconds = 2;
     [ObservableProperty] private int _postTriggerSeconds = 5;
+
+    // Audio Level (live from StatusReceived)
+    [ObservableProperty] private int _audioLevel = 0;
+    [ObservableProperty] private string _peakLevel = "-- dB";
 
     // Power
     [ObservableProperty] private int _lowBatteryThreshold = 10;
@@ -55,20 +60,29 @@ public partial class ConfigViewModel : ObservableObject
     public string[] GainOptions { get; } = ["Low", "Low-Medium", "Medium", "Medium-High", "High"];
     public string[] HighPassOptions { get; } = ["Disabled", "8 Hz", "48 Hz"];
     public string[] SampleRateOptions { get; } = ["48 kHz", "44.1 kHz", "32 kHz", "16 kHz"];
+    public string[] FormatOptions { get; } = ["FLAC", "WAV"];
 
     public ConfigViewModel(IBluetoothService bluetoothService)
     {
         _bluetoothService = bluetoothService;
         _bluetoothService.ConfigReceived += OnConfigReceived;
+        _bluetoothService.StatusReceived += OnStatusReceived;
 
         // Track changes
         PropertyChanged += (s, e) =>
         {
-            if (e.PropertyName != nameof(HasChanges) && e.PropertyName != nameof(StatusMessage))
+            if (e.PropertyName is not (nameof(HasChanges) or nameof(StatusMessage)
+                or nameof(AudioLevel) or nameof(PeakLevel)))
             {
                 HasChanges = true;
             }
         };
+    }
+
+    private void OnStatusReceived(object? sender, DeviceStatus status)
+    {
+        AudioLevel = Math.Clamp(status.PeakLevel * 100 / 32768, 0, 100);
+        PeakLevel = $"{20 * Math.Log10(Math.Max(1, status.PeakLevel) / 32768.0):F0} dB";
     }
 
     private void OnConfigReceived(object? sender, DeviceConfig config)
@@ -77,6 +91,7 @@ public partial class ConfigViewModel : ObservableObject
 
         SelectedGainIndex = (int)config.Gain;
         SelectedHighPassIndex = (int)config.HighPassFilter;
+        SelectedFormatIndex = (int)config.Format;
         SelectedSampleRateIndex = config.SampleRate switch
         {
             48000 => 0,
@@ -115,6 +130,7 @@ public partial class ConfigViewModel : ObservableObject
             StationId = StationId,
             Gain = (GainLevel)SelectedGainIndex,
             HighPassFilter = (HighPassFilter)SelectedHighPassIndex,
+            Format = (RecordingFormat)SelectedFormatIndex,
             SampleRate = SelectedSampleRateIndex switch
             {
                 0 => 48000,
@@ -151,6 +167,7 @@ public partial class ConfigViewModel : ObservableObject
         SelectedGainIndex = 2;
         SelectedHighPassIndex = 1;
         SelectedSampleRateIndex = 0;
+        SelectedFormatIndex = 0;
         AmplitudeTriggerEnabled = false;
         AmplitudeThreshold = -40;
         PreTriggerSeconds = 2;
