@@ -108,6 +108,12 @@ public interface IBluetoothService
     /// </summary>
     /// <param name="intervalMs">Push interval in ms (0=off, 100-30000)</param>
     Task SetStreamAsync(int intervalMs);
+
+    /// <summary>
+    /// Send a survey-in command (START, STOP, CLEAR).
+    /// </summary>
+    /// <param name="operation">Operation string</param>
+    Task SendSurveyCommandAsync(string operation);
 }
 
 /// <summary>

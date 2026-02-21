@@ -102,12 +102,13 @@ uint32_t ppsUtcDate = 0;            /* DDMMYY latched from NMEA after PPS */
 volatile uint8_t ppsSynced = 0;     /* 1 when PPS + valid NMEA time available */
 float ppsLatitude = 0.0f;
 float ppsLongitude = 0.0f;
+float ppsAltitude = 0.0f;
 
 /* Station ID (copied from config by app_freertos.c, used for FLAC metadata) */
 char deviceStationId[16] = "QT001";
 
 /* Current recording filename (shared with app_freertos.c for BLE status) */
-char recFilename[32] = "";
+char recFilename[48] = "";
 
 /* Audio DMA callback tracking for PPS-sample correlation */
 volatile uint32_t dmaCallbackCount = 0;
@@ -118,6 +119,7 @@ static uint32_t recStartTime = 0;
 static uint32_t recStartDate = 0;
 static float    recStartLat = 0.0f;
 static float    recStartLon = 0.0f;
+static float    recStartAlt = 0.0f;
 static uint8_t  recHasGps = 0;
 
 /* PPS-sample correlation for TDOA */
@@ -145,7 +147,13 @@ static void MX_ADF1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-#define FW_VERSION "0.6.0"
+#define FW_VERSION "0.7.1"
+
+/* Survey accessors from app_freertos.c */
+extern uint32_t configGetSurveyCount(void);
+extern float configGetSurveyLat(void);
+extern float configGetSurveyLon(void);
+extern float configGetSurveyAlt(void);
 
 /* Command IDs for audio task queue */
 #define CMD_START_REC 1
@@ -246,6 +254,17 @@ void writeGuanoChunk(FIL *fp, uint32_t audioDataBytes)
                         "Loc Position: %s%ld.%06ld %s%ld.%06ld\n",
                         latNeg ? "-" : "", (long)lat_d, (long)lat_f,
                         lonNeg ? "-" : "", (long)lon_d, (long)lon_f);
+
+        /* Loc Elevation: altitude in meters */
+        {
+            float alt = recStartAlt;
+            int aN = (alt < 0); if (aN) alt = -alt;
+            int32_t a_d = (int32_t)alt;
+            int32_t a_f = (int32_t)((alt - (float)a_d) * 10.0f);
+            len += snprintf(buf + len, sizeof(buf) - len,
+                            "Loc Elevation: %s%ld.%01ld\n",
+                            aN ? "-" : "", (long)a_d, (long)a_f);
+        }
     }
 
     /* Device info */
@@ -357,16 +376,19 @@ void writeFlacVorbisComment(FIL *fp)
                  (unsigned long)yy, (unsigned long)mm, (unsigned long)dd,
                  (unsigned long)hh, (unsigned long)mn, (unsigned long)ss);
 
-        float lat = recStartLat, lon = recStartLon;
+        float lat = recStartLat, lon = recStartLon, alt = recStartAlt;
         int latNeg = (lat < 0); if (latNeg) lat = -lat;
         int lonNeg = (lon < 0); if (lonNeg) lon = -lon;
-        int32_t lat_d = (int32_t)lat, lon_d = (int32_t)lon;
+        int altNeg = (alt < 0); if (altNeg) alt = -alt;
+        int32_t lat_d = (int32_t)lat, lon_d = (int32_t)lon, alt_d = (int32_t)alt;
         int32_t lat_f = (int32_t)((lat - (float)lat_d) * 1000000.0f);
         int32_t lon_f = (int32_t)((lon - (float)lon_d) * 1000000.0f);
+        int32_t alt_f = (int32_t)((alt - (float)alt_d) * 10.0f);
         snprintf(tags[ntags++], 80,
-                 "LOCATION=%s%ld.%06ld %s%ld.%06ld",
+                 "LOCATION=%s%ld.%06ld %s%ld.%06ld %s%ld.%01ld",
                  latNeg ? "-" : "", (long)lat_d, (long)lat_f,
-                 lonNeg ? "-" : "", (long)lon_d, (long)lon_f);
+                 lonNeg ? "-" : "", (long)lon_d, (long)lon_f,
+                 altNeg ? "-" : "", (long)alt_d, (long)alt_f);
     }
 
     snprintf(tags[ntags++], 80, "STATION_ID=%s", deviceStationId);
@@ -453,6 +475,8 @@ void printMenu(void)
     printf("F. Toggle Format (%s)\r\n", recFormat == REC_FMT_WAV ? "WAV" : "FLAC");
     printf("G. Toggle GPS Raw Output\r\n");
     printf("R. Toggle Recording\r\n");
+    printf("S. Toggle GPS Survey-In (%s)\r\n",
+           configGetSurveyCount() > 0 ? "has data" : "no data");
     printf("================\r\n");
     printf("[%s] > ", isRecording ? "REC" : "IDLE");
 }
@@ -515,7 +539,7 @@ void startRecording(void)
     }
 
     const char *ext = (recFormat == REC_FMT_WAV) ? "wav" : "flac";
-    char fname[32];
+    char fname[48];
     if (ppsSynced && ppsUtcDate != 0) {
         /* ppsUtcDate = DDMMYY, ppsUtcTime = HHMMSS */
         uint32_t dd = ppsUtcDate / 10000;
@@ -524,19 +548,30 @@ void startRecording(void)
         uint32_t hh = ppsUtcTime / 10000;
         uint32_t mn = (ppsUtcTime / 100) % 100;
         uint32_t ss = ppsUtcTime % 100;
-        snprintf(fname, sizeof(fname), "20%02lu%02lu%02lu_%02lu%02lu%02lu.%s",
+        snprintf(fname, sizeof(fname), "20%02lu%02lu%02lu_%02lu%02lu%02lu_%s.%s",
                  (unsigned long)yy, (unsigned long)mm, (unsigned long)dd,
-                 (unsigned long)hh, (unsigned long)mn, (unsigned long)ss, ext);
+                 (unsigned long)hh, (unsigned long)mn, (unsigned long)ss,
+                 deviceStationId, ext);
     } else {
-        snprintf(fname, sizeof(fname), "rec_%03lu.%s", (unsigned long)fileCounter, ext);
+        snprintf(fname, sizeof(fname), "rec_%03lu_%s.%s",
+                 (unsigned long)fileCounter, deviceStationId, ext);
     }
 
-    /* Latch GPS state for GUANO metadata */
+    /* Latch GPS state for GUANO metadata.
+     * Prefer surveyed position (sub-meter accuracy) over instantaneous fix. */
     if (ppsSynced && ppsUtcDate != 0) {
         recStartTime = ppsUtcTime;
         recStartDate = ppsUtcDate;
-        recStartLat  = ppsLatitude;
-        recStartLon  = ppsLongitude;
+
+        if (configGetSurveyCount() > 0) {
+            recStartLat = configGetSurveyLat();
+            recStartLon = configGetSurveyLon();
+            recStartAlt = configGetSurveyAlt();
+        } else {
+            recStartLat  = ppsLatitude;
+            recStartLon  = ppsLongitude;
+            recStartAlt  = ppsAltitude;
+        }
         recHasGps = 1;
     } else {
         recHasGps = 0;

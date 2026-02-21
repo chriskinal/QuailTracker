@@ -37,6 +37,7 @@ typedef struct {
     uint8_t  satellites;
     float    latitude;   /* decimal degrees, + = N */
     float    longitude;  /* decimal degrees, + = E */
+    float    altitude;   /* meters above MSL (from GGA) */
     uint32_t utc_time;   /* HHMMSS as integer */
     uint32_t utc_date;   /* DDMMYY as integer */
     uint8_t  valid;      /* RMC status: 1=A, 0=V */
@@ -44,7 +45,7 @@ typedef struct {
 
 /* ---- Flash-persisted device configuration ---- */
 #define CONFIG_MAGIC      0x51544346   /* "QTCF" */
-#define CONFIG_VERSION    2
+#define CONFIG_VERSION    3
 #define CONFIG_FLASH_ADDR 0x081FE000   /* Bank 2, page 127 (last 8KB page of 2MB) */
 
 typedef struct __attribute__((packed, aligned(16))) {
@@ -68,7 +69,11 @@ typedef struct __attribute__((packed, aligned(16))) {
     uint8_t  trigPost;        /* 0-60 seconds */
     uint8_t  lowBatPct;       /* 0-100 */
     uint8_t  autoStop;        /* 0/1 */
-    uint8_t  _pad[128 - 73 - 4]; /* pad to 128 bytes: 73 pre-pad + 51 pad + 4 crc */
+    float    surveyLat;       /* averaged latitude (decimal degrees) */
+    float    surveyLon;       /* averaged longitude (decimal degrees) */
+    float    surveyAlt;       /* averaged altitude (meters) */
+    uint32_t surveyCount;     /* number of GPS fixes averaged */
+    uint8_t  _pad[128 - 89 - 4]; /* pad to 128 bytes: 89 pre-pad + 35 pad + 4 crc */
     uint32_t crc32;           /* CRC-32 over bytes 0..123 */
 } device_config_t;
 
@@ -92,7 +97,7 @@ typedef struct {
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define FW_VERSION "0.7.0"
+#define FW_VERSION "0.7.1"
 
 #define OTA_PAGE_SIZE     8192
 #define OTA_BANK2_BASE    0x08100000
@@ -139,6 +144,13 @@ static volatile int16_t audioPeakLevel = 0;
 static uint32_t streamInterval = 0;
 static uint32_t lastStreamTick = 0;
 
+/* BLE log forwarding — ring buffer fed by _write(), drained by BLE task */
+#define BLE_LOG_RING_SIZE 512
+volatile uint8_t bleLogEnabled = 0;
+volatile uint8_t bleLogRing[BLE_LOG_RING_SIZE];
+volatile uint16_t bleLogHead = 0;  /* written by _write (producer) */
+volatile uint16_t bleLogTail = 0;  /* read by BLE task (consumer) */
+
 /* Queues from main.c */
 extern osMessageQueueId_t bleRxQueue;
 
@@ -162,10 +174,17 @@ extern uint32_t ppsUtcDate;
 extern volatile uint8_t ppsSynced;
 extern float ppsLatitude;
 extern float ppsLongitude;
+extern float ppsAltitude;
 
 /* GPS state */
 static gps_data_t gpsData;
 static volatile uint8_t gpsRawOutput;
+
+/* Survey-in state */
+static uint8_t surveyActive = 0;       /* 1 = survey in progress */
+static uint32_t surveyStartTick = 0;   /* HAL tick when survey started */
+#define SURVEY_DURATION_MS  300000      /* 5 minutes */
+#define SURVEY_MIN_SATS     4           /* minimum satellites for valid fix */
 
 /* BLE state */
 static char bleName[32];
@@ -231,6 +250,9 @@ static void configSetDefaults(device_config_t *c);
 static uint32_t configComputeCrc(const device_config_t *c);
 static void configLoad(void);
 static int configSave(void);
+
+/* Survey-in */
+static void surveyAccumulate(float lat, float lon, float alt);
 
 /* BLE protocol */
 static void bleSendLine(const char *fmt, ...);
@@ -568,6 +590,30 @@ void StartCliTask(void *argument)
         break;
       }
 
+      case 's':
+      case 'S':
+        if (surveyActive) {
+          surveyActive = 0;
+          configSave();
+          printf("Survey stopped (%lu fixes)\r\n",
+                 (unsigned long)cfg.surveyCount);
+        } else {
+          if (gpsData.satellites < SURVEY_MIN_SATS || gpsData.fix < 1) {
+            printf("Need 4+ satellites to start survey (currently %d)\r\n",
+                   gpsData.satellites);
+          } else {
+            cfg.surveyLat = 0.0f;
+            cfg.surveyLon = 0.0f;
+            cfg.surveyAlt = 0.0f;
+            cfg.surveyCount = 0;
+            surveyActive = 1;
+            surveyStartTick = HAL_GetTick();
+            printf("Survey started (5 min)\r\n");
+          }
+        }
+        printMenu();
+        break;
+
       case '\r':
       case '\n':
         break;
@@ -648,7 +694,11 @@ static void nmea_parse_rmc(const char *line)
         ppsUtcDate = gpsData.utc_date;
         ppsLatitude = gpsData.latitude;
         ppsLongitude = gpsData.longitude;
+        ppsAltitude = gpsData.altitude;
         ppsSynced = 1;
+
+        /* Accumulate GPS fix for survey-in (PPS-synchronized fixes only) */
+        surveyAccumulate(gpsData.latitude, gpsData.longitude, gpsData.altitude);
     }
 }
 
@@ -675,6 +725,24 @@ static void nmea_parse_gga(const char *line)
 
     f = nmea_field(line, 6);  gpsData.fix = (uint8_t)nmea_parse_int(f);
     f = nmea_field(line, 7);  gpsData.satellites = (uint8_t)nmea_parse_int(f);
+
+    /* Field 9: altitude above MSL in meters (e.g. "728.3") */
+    f = nmea_field(line, 9);
+    if (*f && (*f == '-' || (*f >= '0' && *f <= '9'))) {
+        int32_t neg = 0, whole = 0, frac = 0, frac_div = 1;
+        const char *p = f;
+        if (*p == '-') { neg = 1; p++; }
+        while (*p >= '0' && *p <= '9') { whole = whole * 10 + (*p++ - '0'); }
+        if (*p == '.') {
+            p++;
+            while (*p >= '0' && *p <= '9') {
+                frac = frac * 10 + (*p++ - '0');
+                frac_div *= 10;
+            }
+        }
+        gpsData.altitude = (float)whole + (float)frac / (float)frac_div;
+        if (neg) gpsData.altitude = -gpsData.altitude;
+    }
 }
 
 static void nmea_process_line(const char *line)
@@ -708,6 +776,14 @@ static void printGpsStatus(void)
         int32_t lon_f = (int32_t)((lon - (float)lon_d) * 1000000.0f);
         printf("Latitude:  %c%ld.%06ld\r\n", ls, (long)lat_d, (long)lat_f);
         printf("Longitude: %c%ld.%06ld\r\n", os, (long)lon_d, (long)lon_f);
+        {
+            float a = gpsData.altitude;
+            char as = ' ';
+            if (a < 0) { as = '-'; a = -a; }
+            int32_t a_d = (int32_t)a;
+            int32_t a_f = (int32_t)((a - (float)a_d) * 10.0f);
+            printf("Altitude:  %c%ld.%01ld m\r\n", as, (long)a_d, (long)a_f);
+        }
     }
     if (gpsData.utc_time) {
         printf("UTC Time:   %02lu:%02lu:%02lu\r\n",
@@ -737,6 +813,23 @@ static void printGpsStatus(void)
                (unsigned long)((ppsUtcTime / 100) % 100),
                (unsigned long)(ppsUtcTime % 100));
     }
+    printf("Survey:\r\n");
+    printf("  Active:   %s\r\n", surveyActive ? "Yes" : "No");
+    printf("  Fixes:    %lu\r\n", (unsigned long)cfg.surveyCount);
+    if (cfg.surveyCount > 0) {
+        float slat = cfg.surveyLat, slon = cfg.surveyLon, salt = cfg.surveyAlt;
+        char sls = ' ', sos = ' ', sas = ' ';
+        if (slat < 0) { sls = '-'; slat = -slat; }
+        if (slon < 0) { sos = '-'; slon = -slon; }
+        if (salt < 0) { sas = '-'; salt = -salt; }
+        int32_t slat_d = (int32_t)slat, slon_d = (int32_t)slon, salt_d = (int32_t)salt;
+        int32_t slat_f = (int32_t)((slat - (float)slat_d) * 1000000.0f);
+        int32_t slon_f = (int32_t)((slon - (float)slon_d) * 1000000.0f);
+        int32_t salt_f = (int32_t)((salt - (float)salt_d) * 10.0f);
+        printf("  Lat:      %c%ld.%06ld\r\n", sls, (long)slat_d, (long)slat_f);
+        printf("  Lon:      %c%ld.%06ld\r\n", sos, (long)slon_d, (long)slon_f);
+        printf("  Alt:      %c%ld.%01ld m\r\n", sas, (long)salt_d, (long)salt_f);
+    }
     printf("Raw output: %s\r\n", gpsRawOutput ? "ON" : "OFF");
     printf("==================\r\n");
 }
@@ -759,6 +852,50 @@ static void StartGpsTask(void *argument)
             } else if (pos < (int)sizeof(buf) - 1) {
                 buf[pos++] = (char)c;
             }
+        }
+    }
+}
+
+/* ========================= Survey Accessors (for main.c) ========================= */
+uint32_t configGetSurveyCount(void) { return cfg.surveyCount; }
+float configGetSurveyLat(void) { return cfg.surveyLat; }
+float configGetSurveyLon(void) { return cfg.surveyLon; }
+float configGetSurveyAlt(void) { return cfg.surveyAlt; }
+
+/* ========================= Survey-In ========================= */
+
+static void surveyAccumulate(float lat, float lon, float alt)
+{
+    /* Skip fixes with insufficient satellite coverage */
+    if (gpsData.satellites < SURVEY_MIN_SATS || gpsData.fix < 1)
+        return;
+
+    if (surveyActive) {
+        /* Check if survey duration has elapsed */
+        if ((HAL_GetTick() - surveyStartTick) >= SURVEY_DURATION_MS) {
+            surveyActive = 0;
+            if (configSave()) {
+                printf("Survey: Complete (%lu fixes)\r\n",
+                       (unsigned long)cfg.surveyCount);
+            }
+            return;
+        }
+
+        /* Incremental mean: avg += (new - avg) / count */
+        cfg.surveyCount++;
+        cfg.surveyLat += (lat - cfg.surveyLat) / (float)cfg.surveyCount;
+        cfg.surveyLon += (lon - cfg.surveyLon) / (float)cfg.surveyCount;
+        cfg.surveyAlt += (alt - cfg.surveyAlt) / (float)cfg.surveyCount;
+    } else if (cfg.surveyCount > 0) {
+        /* Continuous refinement: keep averaging after initial survey */
+        cfg.surveyCount++;
+        cfg.surveyLat += (lat - cfg.surveyLat) / (float)cfg.surveyCount;
+        cfg.surveyLon += (lon - cfg.surveyLon) / (float)cfg.surveyCount;
+        cfg.surveyAlt += (alt - cfg.surveyAlt) / (float)cfg.surveyCount;
+
+        /* Save periodically (every 100 fixes) to avoid flash wear */
+        if ((cfg.surveyCount % 100) == 0) {
+            configSave();
         }
     }
 }
@@ -929,6 +1066,7 @@ static void StartBleTask(void *argument)
                     } else if (strncmp(buf, "OK+LOST", 7) == 0) {
                         bleConnected = 0;
                         streamInterval = 0;  /* stop streaming on disconnect */
+                        bleLogEnabled = 0;
                         printf("BLE: Disconnected\r\n");
                     }
                     /* else: ignore unknown lines */
@@ -946,6 +1084,22 @@ static void StartBleTask(void *argument)
             (HAL_GetTick() - lastStreamTick) >= streamInterval) {
             lastStreamTick = HAL_GetTick();
             bleHandleStatusEx("$STREAM");
+        }
+
+        /* Drain log ring buffer over BLE */
+        if (bleLogEnabled && bleConnected) {
+            char logChunk[64];
+            int n = 0;
+            while (n < (int)sizeof(logChunk) - 1) {
+                uint16_t t = bleLogTail;
+                if (t == bleLogHead) break;
+                logChunk[n++] = (char)bleLogRing[t];
+                bleLogTail = (uint16_t)((t + 1) % BLE_LOG_RING_SIZE);
+            }
+            if (n > 0) {
+                logChunk[n] = '\0';
+                bleSend(logChunk);
+            }
         }
     }
 }
@@ -975,6 +1129,10 @@ static void configSetDefaults(device_config_t *c)
     c->trigPost = 5;
     c->lowBatPct = 10;
     c->autoStop = 1;
+    c->surveyLat = 0.0f;
+    c->surveyLon = 0.0f;
+    c->surveyAlt = 0.0f;
+    c->surveyCount = 0;
     memset(c->_pad, 0xFF, sizeof(c->_pad));
     c->crc32 = 0;
 }
@@ -1138,7 +1296,10 @@ static void bleHandleStatusEx(const char *tag)
     int32_t lon7 = (int32_t)(gpsData.longitude * 10000000.0f);
     bleSendLine("gps_lat=%ld", (long)lat7);
     bleSendLine("gps_lon=%ld", (long)lon7);
-    bleSendLine("gps_alt=0");
+    {
+        int32_t alt_mm = (int32_t)(gpsData.altitude * 1000.0f);
+        bleSendLine("gps_alt=%ld", (long)alt_mm);
+    }
 
     /* GPS time: reformat DDMMYY + HHMMSS → YYYYMMDDHHmmss */
     if (ppsSynced && ppsUtcDate != 0) {
@@ -1225,6 +1386,18 @@ static void bleHandleStatusEx(const char *tag)
     bleSendLine("ble_addr=%s", bleAddr);
     bleSendLine("ble_conn=%d", bleConnected ? 1 : 0);
 
+    /* Survey-in status */
+    {
+        int32_t slat7 = (int32_t)(cfg.surveyLat * 10000000.0f);
+        int32_t slon7 = (int32_t)(cfg.surveyLon * 10000000.0f);
+        int32_t salt_mm = (int32_t)(cfg.surveyAlt * 1000.0f);
+        bleSendLine("survey_lat=%ld", (long)slat7);
+        bleSendLine("survey_lon=%ld", (long)slon7);
+        bleSendLine("survey_alt=%ld", (long)salt_mm);
+        bleSendLine("survey_count=%lu", (unsigned long)cfg.surveyCount);
+        bleSendLine("survey_active=%d", surveyActive ? 1 : 0);
+    }
+
     bleSendLine("$END");
 }
 
@@ -1258,6 +1431,18 @@ static void bleHandleConfig(void)
     bleSendLine("trig_post=%d", cfg.trigPost);
     bleSendLine("lowbat=%d", cfg.lowBatPct);
     bleSendLine("autostop=%d", cfg.autoStop);
+
+    /* Survey-in config */
+    {
+        int32_t slat7 = (int32_t)(cfg.surveyLat * 10000000.0f);
+        int32_t slon7 = (int32_t)(cfg.surveyLon * 10000000.0f);
+        int32_t salt_mm = (int32_t)(cfg.surveyAlt * 1000.0f);
+        bleSendLine("survey_lat=%ld", (long)slat7);
+        bleSendLine("survey_lon=%ld", (long)slon7);
+        bleSendLine("survey_alt=%ld", (long)salt_mm);
+        bleSendLine("survey_count=%lu", (unsigned long)cfg.surveyCount);
+    }
+
     bleSendLine("$END");
 }
 
@@ -1404,6 +1589,42 @@ static void bleHandleSet(const char *args)
         int v = val[0] - '0';
         if (v < 0 || v > 1) { bleSendLine("$ERR,BADARG"); return; }
         cfg.autoStop = (uint8_t)v;
+    } else if (strcmp(key, "SURVEY") == 0) {
+        if (strcmp(val, "START") == 0) {
+            if (gpsData.satellites < SURVEY_MIN_SATS || gpsData.fix < 1) {
+                bleSendLine("$ERR,NOSATS");
+                return;
+            }
+            /* Reset and start 5-minute survey */
+            cfg.surveyLat = 0.0f;
+            cfg.surveyLon = 0.0f;
+            cfg.surveyAlt = 0.0f;
+            cfg.surveyCount = 0;
+            surveyActive = 1;
+            surveyStartTick = HAL_GetTick();
+            printf("Survey: Started (5 min)\r\n");
+            bleSendLine("$OK");
+        } else if (strcmp(val, "STOP") == 0) {
+            if (surveyActive) {
+                surveyActive = 0;
+                configSave();
+                printf("Survey: Stopped (%lu fixes)\r\n",
+                       (unsigned long)cfg.surveyCount);
+            }
+            bleSendLine("$OK");
+        } else if (strcmp(val, "CLEAR") == 0) {
+            surveyActive = 0;
+            cfg.surveyLat = 0.0f;
+            cfg.surveyLon = 0.0f;
+            cfg.surveyAlt = 0.0f;
+            cfg.surveyCount = 0;
+            configSave();
+            printf("Survey: Cleared\r\n");
+            bleSendLine("$OK");
+        } else {
+            bleSendLine("$ERR,BADARG");
+        }
+        return; /* no additional flash save needed */
     } else if (strcmp(key, "STREAM") == 0) {
         /* Runtime-only: set status push interval in ms (0=off, 100-30000) */
         int v = atoi(val);
@@ -1782,8 +2003,54 @@ static void bleHandleCommand(const char *cmd)
 
     if (strcmp(cmd, "$PING") == 0) {
         bleSendLine("$PONG");
+    } else if (strcmp(cmd, "$MENU") == 0) {
+        bleSendLine("$MENU");
+        bleSendLine("$PING              - connection test");
+        bleSendLine("$VER               - firmware version");
+        bleSendLine("$STATUS            - full device status");
+        bleSendLine("$CONFIG            - current configuration");
+        bleSendLine("$REC,START         - start recording");
+        bleSendLine("$REC,STOP          - stop recording");
+        bleSendLine("$REC,TOGGLE        - toggle recording");
+        bleSendLine("$SD,MOUNT          - mount SD card");
+        bleSendLine("$SD,EJECT          - eject SD card");
+        bleSendLine("$SD,FORMAT         - format SD card");
+        bleSendLine("$SET,STATION,<id>  - set station ID");
+        bleSendLine("$SET,GAIN,<0-4>    - set mic gain");
+        bleSendLine("$SET,HPF,<0-2>     - set high-pass filter");
+        bleSendLine("$SET,FORMAT,<WAV|FLAC>");
+        bleSendLine("$LOGS              - toggle log forwarding");
+        bleSendLine("$SET,STREAM,<ms>   - status push (0=off)");
+        bleSendLine("$SET,SURVEY,START  - begin 5-min survey");
+        bleSendLine("$SET,SURVEY,STOP   - stop survey early");
+        bleSendLine("$SET,SURVEY,CLEAR  - reset survey data");
+        bleSendLine("$SET,SUNRISE,<e>,<before>,<after>");
+        bleSendLine("$SET,SUNSET,<e>,<before>,<after>");
+        bleSendLine("$SET,WINDOWS,<n>,<HHMM>,<HHMM>,...");
+        bleSendLine("$SET,TRIG,<0|1>    - amplitude trigger");
+        bleSendLine("$SET,TRIGDB,<-60..0>");
+        bleSendLine("$SET,TRIGPRE,<0-30>");
+        bleSendLine("$SET,TRIGPOST,<0-60>");
+        bleSendLine("$SET,LOWBAT,<0-100>");
+        bleSendLine("$SET,AUTOSTOP,<0|1>");
+        bleSendLine("$OTA,BEGIN,<size>,<crc32hex>");
+        bleSendLine("$OTA,D,<hexdata>   - OTA data chunk");
+        bleSendLine("$OTA,END           - finalize OTA");
+        bleSendLine("$OTA,COMMIT        - swap banks + reboot");
+        bleSendLine("$OTA,ABORT         - cancel OTA");
+        bleSendLine("$OTA,ROLLBACK      - revert to prev FW");
+        bleSendLine("$OTA,STATUS        - OTA progress");
+        bleSendLine("$END");
     } else if (strcmp(cmd, "$VER") == 0) {
         bleSendLine("$VER," FW_VERSION);
+    } else if (strcmp(cmd, "$LOGS") == 0) {
+        bleLogEnabled = !bleLogEnabled;
+        if (bleLogEnabled) {
+            bleLogHead = 0;
+            bleLogTail = 0;
+        }
+        printf("BLE: Log forwarding = %s\r\n", bleLogEnabled ? "ON" : "OFF");
+        bleSendLine("$OK,%s", bleLogEnabled ? "ON" : "OFF");
     } else if (strcmp(cmd, "$STATUS") == 0) {
         bleHandleStatus();
     } else if (strcmp(cmd, "$CONFIG") == 0) {

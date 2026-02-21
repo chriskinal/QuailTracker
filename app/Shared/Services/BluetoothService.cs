@@ -308,6 +308,20 @@ public class BluetoothService : IBluetoothService
         }
     }
 
+    public async Task SendSurveyCommandAsync(string operation)
+    {
+        if (CurrentState != ConnectionState.Connected) return;
+
+        try
+        {
+            await SendRawAsync($"$SET,SURVEY,{operation}");
+        }
+        catch
+        {
+            // Timeout — non-fatal
+        }
+    }
+
     public async Task SendCommandAsync(string command)
     {
         if (CurrentState != ConnectionState.Connected) return;
@@ -586,6 +600,12 @@ public class BluetoothService : IBluetoothService
             BleModuleAddr = Get(d, "ble_addr"),
             BleConnected = GetBool(d, "ble_conn"),
 
+            SurveyLatitude = GetLong(d, "survey_lat") / 1e7,
+            SurveyLongitude = GetLong(d, "survey_lon") / 1e7,
+            SurveyAltitude = GetLong(d, "survey_alt") / 1000f,
+            SurveyCount = GetInt(d, "survey_count"),
+            SurveyActive = GetBool(d, "survey_active"),
+
             LastUpdated = DateTime.Now,
         };
     }
@@ -614,6 +634,11 @@ public class BluetoothService : IBluetoothService
             PostTriggerSeconds = GetInt(d, "trig_post", 5),
             LowBatteryThresholdPercent = GetInt(d, "lowbat", 10),
             AutoStopOnLowBattery = GetBool(d, "autostop"),
+
+            SurveyLatitude = GetLong(d, "survey_lat") / 1e7,
+            SurveyLongitude = GetLong(d, "survey_lon") / 1e7,
+            SurveyAltitude = GetLong(d, "survey_alt") / 1000f,
+            SurveyCount = GetInt(d, "survey_count"),
         };
     }
 

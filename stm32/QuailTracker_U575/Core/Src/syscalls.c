@@ -40,6 +40,13 @@ extern int __io_getchar(void) __attribute__((weak));
  * NULL before RTOS init (single-threaded, no lock needed). */
 extern osMutexId_t printMutex;
 
+/* BLE log forwarding ring buffer (defined in app_freertos.c) */
+#define BLE_LOG_RING_SIZE 512
+extern volatile uint8_t bleLogEnabled;
+extern volatile uint8_t bleLogRing[BLE_LOG_RING_SIZE];
+extern volatile uint16_t bleLogHead;
+extern volatile uint16_t bleLogTail;
+
 
 char *__env[1] = { 0 };
 char **environ = __env;
@@ -92,6 +99,18 @@ __attribute__((weak)) int _write(int file, char *ptr, int len)
   {
     __io_putchar(*ptr++);
   }
+
+  /* Mirror output to BLE log ring buffer (non-blocking, drops on overflow) */
+  if (bleLogEnabled) {
+    const char *p = ptr - len;  /* ptr was incremented above */
+    for (int i = 0; i < len; i++) {
+      uint16_t next = (uint16_t)((bleLogHead + 1) % BLE_LOG_RING_SIZE);
+      if (next == bleLogTail) break;  /* full — drop remaining */
+      bleLogRing[bleLogHead] = (uint8_t)p[i];
+      bleLogHead = next;
+    }
+  }
+
   if (printMutex) osMutexRelease(printMutex);
   return len;
 }

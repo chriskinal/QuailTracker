@@ -124,6 +124,12 @@ public class MockBluetoothService : IBluetoothService
             BleModuleAddr = "AA:BB:CC:DD:EE:FF",
             BleConnected = true,
 
+            SurveyLatitude = 32.2226,
+            SurveyLongitude = -110.9747,
+            SurveyAltitude = 728.5f,
+            SurveyCount = 450,
+            SurveyActive = false,
+
             LastUpdated = DateTime.Now
         };
 
@@ -170,6 +176,13 @@ public class MockBluetoothService : IBluetoothService
         if (CurrentState != ConnectionState.Connected) return;
         await Task.Delay(200);
         // Mock: just trigger a status refresh
+        await RequestStatusAsync();
+    }
+
+    public async Task SendSurveyCommandAsync(string operation)
+    {
+        if (CurrentState != ConnectionState.Connected) return;
+        await Task.Delay(200);
         await RequestStatusAsync();
     }
 

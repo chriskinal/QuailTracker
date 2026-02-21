@@ -75,6 +75,13 @@ public record DeviceStatus
     public string BleModuleAddr { get; init; } = "";
     public bool BleConnected { get; init; }
 
+    // Survey-In
+    public double SurveyLatitude { get; init; }
+    public double SurveyLongitude { get; init; }
+    public float SurveyAltitude { get; init; }
+    public int SurveyCount { get; init; }
+    public bool SurveyActive { get; init; }
+
     // Timestamp
     public DateTime LastUpdated { get; init; } = DateTime.Now;
 }

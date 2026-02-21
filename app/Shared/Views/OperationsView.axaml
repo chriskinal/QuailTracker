@@ -126,6 +126,61 @@
                 </StackPanel>
             </Border>
 
+            <!-- Location Survey Card -->
+            <Border Classes="CardPanel">
+                <StackPanel Spacing="8">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Text="Location Survey" Classes="SectionHeader" />
+                        <Border Grid.Column="1" CornerRadius="4" Padding="8,4"
+                                Background="{Binding SurveyColor}">
+                            <TextBlock Foreground="White" FontSize="12">
+                                <TextBlock.Text>
+                                    <MultiBinding StringFormat="{}{0} fixes">
+                                        <Binding Path="SurveyCount" />
+                                    </MultiBinding>
+                                </TextBlock.Text>
+                            </TextBlock>
+                        </Border>
+                    </Grid>
+                    <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto">
+                        <StackPanel Grid.ColumnSpan="2">
+                            <TextBlock Text="Surveyed Position" Classes="DataLabel" />
+                            <TextBlock Text="{Binding SurveyPosition}" FontSize="14" Foreground="White" />
+                        </StackPanel>
+                        <StackPanel Grid.Row="1" Margin="0,8,0,0">
+                            <TextBlock Text="Altitude" Classes="DataLabel" />
+                            <TextBlock Text="{Binding SurveyAltitude}" FontSize="14" Foreground="White" />
+                        </StackPanel>
+                        <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,8,0,0">
+                            <TextBlock Text="Fix Count" Classes="DataLabel" />
+                            <TextBlock Text="{Binding SurveyCount}" FontSize="14" Foreground="White" />
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- Warning when not enough satellites -->
+                    <TextBlock Text="Need 4+ satellites to survey"
+                               FontSize="12" Foreground="#FFC107"
+                               IsVisible="{Binding !CanStartSurvey}" />
+
+                    <!-- Survey Buttons -->
+                    <Grid ColumnDefinitions="*,8,*">
+                        <Button Grid.Column="0"
+                                HorizontalAlignment="Stretch"
+                                Classes="ToolbarButton"
+                                Command="{Binding ToggleSurveyCommand}">
+                            <TextBlock Text="{Binding SurveyButtonText}"
+                                       HorizontalAlignment="Center" />
+                        </Button>
+                        <Button Grid.Column="2"
+                                HorizontalAlignment="Stretch"
+                                Classes="DangerButton"
+                                Command="{Binding ClearSurveyCommand}">
+                            <TextBlock Text="Clear" HorizontalAlignment="Center" />
+                        </Button>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
             <!-- BLE Module Detail Card -->
             <Border Classes="CardPanel">
                 <StackPanel Spacing="8">

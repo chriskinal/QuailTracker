@@ -54,6 +54,12 @@ public record DeviceConfig
     // Power
     public int LowBatteryThresholdPercent { get; init; } = 10;
     public bool AutoStopOnLowBattery { get; init; } = true;
+
+    // Surveyed Position
+    public double SurveyLatitude { get; init; }
+    public double SurveyLongitude { get; init; }
+    public float SurveyAltitude { get; init; }
+    public int SurveyCount { get; init; }
 }
 
 public enum GainLevel

@@ -62,6 +62,16 @@ public partial class OperationsViewModel : ObservableObject
     [ObservableProperty] private string _bleLink = "Disconnected";
     [ObservableProperty] private string _bleColor = "#808080";
 
+    // Survey-In
+    [ObservableProperty] private string _surveyPosition = "---, ---";
+    [ObservableProperty] private string _surveyAltitude = "--";
+    [ObservableProperty] private string _surveyCount = "0";
+    [ObservableProperty] private bool _surveyActive = false;
+    [ObservableProperty] private string _surveyButtonText = "Start Survey";
+    [ObservableProperty] private string _surveyColor = "#808080";
+    [ObservableProperty] private bool _canStartSurvey = false;
+    private int _gpsSatCount = 0;
+
     public OperationsViewModel(IBluetoothService bluetoothService)
     {
         _bluetoothService = bluetoothService;
@@ -109,6 +119,26 @@ public partial class OperationsViewModel : ObservableObject
         BleAddr = status.BleModuleAddr is { Length: > 0 } a ? a : "--";
         BleLink = status.BleConnected ? "Connected" : "Idle";
         BleColor = status.BleModuleReady ? "#4CAF50" : "#F44336";
+
+        // Survey-In
+        _gpsSatCount = status.GpsSatellites;
+        SurveyActive = status.SurveyActive;
+        SurveyCount = status.SurveyCount.ToString();
+        SurveyButtonText = status.SurveyActive ? "Stop Survey" : "Start Survey";
+        CanStartSurvey = status.GpsSatellites >= 4 && !status.IsRecording;
+
+        if (status.SurveyCount > 0)
+        {
+            SurveyPosition = $"{status.SurveyLatitude:F6}, {status.SurveyLongitude:F6}";
+            SurveyAltitude = $"{status.SurveyAltitude:F1} m";
+            SurveyColor = "#4CAF50";
+        }
+        else
+        {
+            SurveyPosition = "---, ---";
+            SurveyAltitude = "--";
+            SurveyColor = "#808080";
+        }
     }
 
     [RelayCommand]
@@ -148,6 +178,27 @@ public partial class OperationsViewModel : ObservableObject
     private async Task FormatSdAsync()
     {
         await _bluetoothService.SendSdCommandAsync("FORMAT");
+        await _bluetoothService.RequestStatusAsync();
+    }
+
+    [RelayCommand]
+    private async Task ToggleSurveyAsync()
+    {
+        if (SurveyActive)
+        {
+            await _bluetoothService.SendSurveyCommandAsync("STOP");
+        }
+        else
+        {
+            await _bluetoothService.SendSurveyCommandAsync("START");
+        }
+        await _bluetoothService.RequestStatusAsync();
+    }
+
+    [RelayCommand]
+    private async Task ClearSurveyAsync()
+    {
+        await _bluetoothService.SendSurveyCommandAsync("CLEAR");
         await _bluetoothService.RequestStatusAsync();
     }
 
