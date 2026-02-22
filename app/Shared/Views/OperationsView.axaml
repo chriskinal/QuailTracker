@@ -73,9 +73,14 @@
                         </Button>
                         <Button Grid.Column="4"
                                 HorizontalAlignment="Stretch"
-                                Classes="DangerButton"
+                                Padding="16,12"
+                                CornerRadius="6"
+                                BorderThickness="0"
+                                Background="{Binding FormatButtonColor}"
                                 Command="{Binding FormatSdCommand}">
-                            <TextBlock Text="Format" HorizontalAlignment="Center" />
+                            <TextBlock Text="{Binding FormatButtonText}"
+                                       Foreground="White" FontWeight="SemiBold"
+                                       HorizontalAlignment="Center" />
                         </Button>
                     </Grid>
                 </StackPanel>

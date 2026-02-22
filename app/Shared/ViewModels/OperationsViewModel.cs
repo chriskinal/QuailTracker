@@ -43,6 +43,10 @@ public partial class OperationsViewModel : ObservableObject
     [ObservableProperty] private string _sdStatus = "Not Mounted";
     [ObservableProperty] private string _sdColor = "#808080";
     [ObservableProperty] private bool _isSdMounted = false;
+    [ObservableProperty] private string _formatButtonText = "Format";
+    [ObservableProperty] private string _formatButtonColor = "#E53935";
+    [ObservableProperty] private bool _isFormatting = false;
+    private bool _formatConfirmPending = false;
 
     // GPS Detail
     [ObservableProperty] private string _gpsFixType = "No Fix";
@@ -194,8 +198,39 @@ public partial class OperationsViewModel : ObservableObject
     [RelayCommand]
     private async Task FormatSdAsync()
     {
+        if (IsFormatting) return;
+
+        if (!_formatConfirmPending)
+        {
+            _formatConfirmPending = true;
+            FormatButtonText = "Confirm?";
+            FormatButtonColor = "#FF9800";
+            // Auto-cancel after 5 seconds
+            _ = Task.Delay(5000).ContinueWith(_ =>
+            {
+                if (_formatConfirmPending)
+                {
+                    _formatConfirmPending = false;
+                    FormatButtonText = "Format";
+                    FormatButtonColor = "#E53935";
+                }
+            });
+            return;
+        }
+
+        _formatConfirmPending = false;
+        IsFormatting = true;
+        FormatButtonText = "Formatting...";
+        FormatButtonColor = "#808080";
+        SdStatus = "Formatting...";
+        SdColor = "#FF9800";
+
         await _bluetoothService.SendSdCommandAsync("FORMAT");
         await _bluetoothService.RequestStatusAsync();
+
+        IsFormatting = false;
+        FormatButtonText = "Format";
+        FormatButtonColor = "#E53935";
     }
 
     [RelayCommand]
