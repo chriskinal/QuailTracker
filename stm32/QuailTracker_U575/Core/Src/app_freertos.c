@@ -97,7 +97,7 @@ typedef struct {
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define FW_VERSION "0.7.1"
+#define FW_VERSION "0.7.2"
 
 #define OTA_PAGE_SIZE     8192
 #define OTA_BANK2_BASE    0x08100000
@@ -492,6 +492,7 @@ void StartCliTask(void *argument)
           printf("Stop recording first!\r\n");
         } else {
           printf("Format SD card? ALL DATA WILL BE ERASED. (y/n) > ");
+          fflush(stdout);
           int confirm = -1;
           while (confirm < 0) {
             confirm = getChar(osWaitForever);

@@ -147,7 +147,7 @@ static void MX_ADF1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-#define FW_VERSION "0.7.1"
+#define FW_VERSION "0.7.2"
 
 /* Survey accessors from app_freertos.c */
 extern uint32_t configGetSurveyCount(void);
@@ -479,6 +479,7 @@ void printMenu(void)
            configGetSurveyCount() > 0 ? "has data" : "no data");
     printf("================\r\n");
     printf("[%s] > ", isRecording ? "REC" : "IDLE");
+    fflush(stdout);
 }
 
 void printStatus(void)
