@@ -1,0 +1,248 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:QuailTracker.Analyzer.Shared.ViewModels"
+             x:Class="QuailTracker.Analyzer.Shared.Views.PopulationView"
+             x:DataType="vm:PopulationViewModel">
+
+    <Grid RowDefinitions="Auto,*,Auto" Margin="8">
+        <!-- Row 0: Survey Configuration -->
+        <Border Grid.Row="0"
+                Classes="CardPanel"
+                Margin="0,0,0,8">
+            <Grid RowDefinitions="Auto,Auto,Auto,Auto">
+                <!-- Row: Dates, Season, Species -->
+                <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="16">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Start:" VerticalAlignment="Center" />
+                        <CalendarDatePicker SelectedDate="{Binding StartDate}"
+                                            SelectedDateFormat="Short"
+                                            Width="130" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="End:" VerticalAlignment="Center" />
+                        <CalendarDatePicker SelectedDate="{Binding EndDate}"
+                                            SelectedDateFormat="Short"
+                                            Width="130" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Season:" VerticalAlignment="Center" />
+                        <ComboBox ItemsSource="{Binding SeasonOptions}"
+                                  SelectedIndex="{Binding SelectedSeasonIndex}"
+                                  Width="155" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Species:" VerticalAlignment="Center" />
+                        <ComboBox ItemsSource="{Binding SpeciesOptions}"
+                                  SelectedIndex="{Binding SelectedSpeciesIndex}"
+                                  Width="160" />
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- Row: Confidence, Dedup Radius, Truncation, Covey Size -->
+                <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="16" Margin="0,8,0,0">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Confidence:" VerticalAlignment="Center" />
+                        <Slider Value="{Binding MinConfidence}"
+                                Minimum="0.1" Maximum="1.0"
+                                Width="120"
+                                VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding MinConfidence, StringFormat='{}{0:P0}'}"
+                                   Width="40"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Dedup Radius (m):" VerticalAlignment="Center" />
+                        <Slider Value="{Binding DeduplicationRadius}"
+                                Minimum="50" Maximum="1000"
+                                Width="120"
+                                VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding DeduplicationRadius, StringFormat='{}{0:F0}'}"
+                                   Width="35"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Truncation (m):" VerticalAlignment="Center" />
+                        <Slider Value="{Binding TruncationRadius}"
+                                Minimum="0" Maximum="2000"
+                                Width="120"
+                                VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding TruncationRadius, StringFormat='{}{0:F0}'}"
+                                   Width="35"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8"
+                                IsVisible="{Binding IsFallCoveyCount}">
+                        <TextBlock Text="Covey Size:" VerticalAlignment="Center" />
+                        <Slider Value="{Binding DefaultCoveySize}"
+                                Minimum="1" Maximum="30"
+                                IsSnapToTickEnabled="True"
+                                TickFrequency="1"
+                                Width="80"
+                                VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding DefaultCoveySize}"
+                                   Width="20"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- Progress bar (visible when analyzing) -->
+                <StackPanel Grid.Row="2"
+                            Margin="0,8,0,0"
+                            IsVisible="{Binding IsAnalyzing}">
+                    <TextBlock Text="{Binding ProgressText}" FontSize="12" Margin="0,0,0,4" />
+                    <ProgressBar IsIndeterminate="True" />
+                </StackPanel>
+
+                <!-- Action Buttons -->
+                <StackPanel Grid.Row="3"
+                            Orientation="Horizontal"
+                            Spacing="8"
+                            Margin="0,12,0,0"
+                            IsVisible="{Binding !IsAnalyzing}">
+                    <Button Content="Build Counts"
+                            Classes="SecondaryButton"
+                            Command="{Binding BuildCountMatrixCommand}" />
+                    <Button Content="Fetch Weather"
+                            Classes="SecondaryButton"
+                            Command="{Binding FetchWeatherCommand}" />
+                    <Button Content="Run Analysis"
+                            Classes="PrimaryButton"
+                            Command="{Binding RunAnalysisCommand}" />
+                    <Button Content="Export..."
+                            Classes="ToolbarButton"
+                            x:Name="ExportButton"
+                            Click="OnExportClick" />
+                    <Button Content="Clear"
+                            Classes="ToolbarButton"
+                            Command="{Binding ClearCommand}" />
+                </StackPanel>
+                <Button Grid.Row="3"
+                        Content="Cancel"
+                        Classes="DangerButton"
+                        Command="{Binding CancelAnalysisCommand}"
+                        IsVisible="{Binding IsAnalyzing}"
+                        Margin="0,12,0,0" />
+            </Grid>
+        </Border>
+
+        <!-- Row 1: Count Matrix + Results -->
+        <Grid Grid.Row="1" RowDefinitions="*,Auto">
+            <!-- Daily Counts DataGrid (full width) -->
+            <Grid Grid.Row="0" RowDefinitions="Auto,*">
+                <TextBlock Grid.Row="0" Text="Daily Counts" Classes="SectionHeader" />
+                <DataGrid Grid.Row="1"
+                          ItemsSource="{Binding DailyCounts}"
+                          AutoGenerateColumns="False"
+                          IsReadOnly="True"
+                          GridLinesVisibility="Horizontal"
+                          BorderBrush="#E0E0E0"
+                          BorderThickness="1">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Date" Binding="{Binding Date, StringFormat='{}{0:yyyy-MM-dd}'}" Width="95" />
+                        <DataGridTextColumn Header="Station" Binding="{Binding StationId}" Width="*" />
+                        <DataGridTextColumn Header="Count" Binding="{Binding Count}" Width="60" />
+                        <DataGridTextColumn Header="Raw" Binding="{Binding RawDetectionCount}" Width="55" />
+                        <DataGridTextColumn Header="Temp" Binding="{Binding TemperatureDisplay}" Width="60" />
+                        <DataGridTextColumn Header="Wind" Binding="{Binding WindSpeedDisplay}" Width="60" />
+                        <DataGridTextColumn Header="Cloud" Binding="{Binding CloudCoverDisplay}" Width="60" />
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Grid>
+
+            <!-- Results panel (full width, below grid) -->
+            <StackPanel Grid.Row="1"
+                        Orientation="Horizontal"
+                        Spacing="8"
+                        Margin="0,8,0,0"
+                        IsVisible="{Binding HasResults}">
+                <!-- Simple Summary -->
+                <Border Classes="CardPanel" MinWidth="200">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="Simple Summary" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding TotalSurveyDays, StringFormat='Survey days: {0}'}" FontSize="12" />
+                        <TextBlock Text="{Binding TotalStationsCount, StringFormat='Stations: {0}'}" FontSize="12" />
+                        <TextBlock Text="{Binding MeanMaxCount, StringFormat='Mean max count: {0:F2}'}" FontSize="12" />
+                        <TextBlock Text="{Binding TotalCoveys, StringFormat='Total coveys: {0}'}" FontSize="12" />
+                        <TextBlock Text="{Binding EstimatedPopulation, StringFormat='Est. population: {0}'}"
+                                   FontSize="14" FontWeight="SemiBold" />
+                    </StackPanel>
+                </Border>
+
+                <!-- N-Mixture Model -->
+                <Border Classes="CardPanel" MinWidth="250">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="N-Mixture Model" FontWeight="SemiBold" />
+                        <TextBlock FontSize="12">
+                            <TextBlock.Text>
+                                <MultiBinding StringFormat="Converged: {0}">
+                                    <Binding Path="ModelConverged" />
+                                </MultiBinding>
+                            </TextBlock.Text>
+                        </TextBlock>
+                        <TextBlock Text="{Binding LambdaDisplay, StringFormat='Lambda (abundance): {0}'}" FontSize="12" />
+                        <TextBlock Text="{Binding DetectionProbabilityDisplay, StringFormat='Detection prob: {0}'}" FontSize="12" />
+                        <TextBlock Text="{Binding LogLikelihoodDisplay, StringFormat='Log-likelihood: {0}'}" FontSize="12" />
+                        <TextBlock Text="{Binding AicDisplay, StringFormat='AIC: {0}'}" FontSize="12" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Covariate Effects -->
+                <Border Classes="CardPanel"
+                        MinWidth="250"
+                        IsVisible="{Binding HasCovariateEffects}">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="Covariate Effects on Detection" FontWeight="SemiBold" />
+                        <TextBlock Text="(logit-scale coefficients on standardized covariates)" FontSize="11" Opacity="0.6" />
+                        <TextBlock Text="{Binding CovariateTemperature, StringFormat='Temperature: {0}'}" FontSize="12" />
+                        <TextBlock Text="{Binding CovariateWind, StringFormat='Wind speed: {0}'}" FontSize="12" />
+                        <TextBlock Text="{Binding CovariateCloud, StringFormat='Cloud cover: {0}'}" FontSize="12" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </Grid>
+
+        <!-- Row 2: Year-over-Year -->
+        <Border Grid.Row="2"
+                Classes="CardPanel"
+                Margin="0,8,0,0"
+                IsVisible="{Binding PreviousEstimates.Count}">
+            <Grid RowDefinitions="Auto,Auto,Auto">
+                <TextBlock Grid.Row="0" Text="Year-over-Year Comparison" FontWeight="SemiBold" Margin="0,0,0,8" />
+                <DataGrid Grid.Row="1"
+                          ItemsSource="{Binding PreviousEstimates}"
+                          AutoGenerateColumns="False"
+                          IsReadOnly="True"
+                          GridLinesVisibility="Horizontal"
+                          BorderBrush="#E0E0E0"
+                          BorderThickness="1"
+                          MaxHeight="200">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Year" Binding="{Binding SurveyYear}" Width="60" />
+                        <DataGridTextColumn Header="Type" Binding="{Binding SurveyType}" Width="100" />
+                        <DataGridTextColumn Header="Lambda [95% CI]" Binding="{Binding LambdaDisplay}" Width="*" />
+                        <DataGridTextColumn Header="Det. Prob" Binding="{Binding DetectionDisplay}" Width="120" />
+                        <DataGridTextColumn Header="Population" Binding="{Binding EstimatedPopulation}" Width="80" />
+                        <DataGridTextColumn Header="AIC" Binding="{Binding AicDisplay}" Width="70" />
+                    </DataGrid.Columns>
+                </DataGrid>
+                <Button Grid.Row="2"
+                        Content="Import Previous..."
+                        Classes="ToolbarButton"
+                        x:Name="ImportButton"
+                        Click="OnImportClick"
+                        Margin="0,8,0,0" />
+            </Grid>
+        </Border>
+
+        <!-- Import button always visible when no previous estimates -->
+        <StackPanel Grid.Row="2"
+                    Orientation="Horizontal"
+                    Margin="0,8,0,0"
+                    IsVisible="{Binding !PreviousEstimates.Count}">
+            <Button Content="Import Previous Year..."
+                    Classes="ToolbarButton"
+                    x:Name="ImportButtonAlt"
+                    Click="OnImportClick" />
+        </StackPanel>
+    </Grid>
+</UserControl>

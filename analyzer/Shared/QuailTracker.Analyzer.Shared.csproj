@@ -21,6 +21,8 @@
     <PackageReference Include="NAudio" Version="2.2.*" />
     <!-- KML Export -->
     <PackageReference Include="SharpKml.Core" Version="6.1.*" />
+    <!-- Numerical Computing (N-mixture model optimization) -->
+    <PackageReference Include="MathNet.Numerics" Version="5.0.*" />
   </ItemGroup>
 
   <ItemGroup>

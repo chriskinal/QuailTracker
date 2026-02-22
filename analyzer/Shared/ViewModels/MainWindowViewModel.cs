@@ -48,6 +48,9 @@ public partial class MainWindowViewModel : ObservableObject
     private LocalizationViewModel _localizationViewModel;
 
     [ObservableProperty]
+    private PopulationViewModel _populationViewModel;
+
+    [ObservableProperty]
     private MapViewModel _mapViewModel;
 
     public MainWindowViewModel()
@@ -56,7 +59,9 @@ public partial class MainWindowViewModel : ObservableObject
             new BirdNetService(),
             new TdoaService(),
             new MapService(),
-            new KmlExportService())
+            new KmlExportService(),
+            new PopulationService(),
+            new WeatherService())
     {
     }
 
@@ -65,7 +70,9 @@ public partial class MainWindowViewModel : ObservableObject
         IBirdNetService birdNetService,
         ITdoaService tdoaService,
         IMapService mapService,
-        IKmlExportService kmlExportService)
+        IKmlExportService kmlExportService,
+        IPopulationService populationService,
+        IWeatherService weatherService)
     {
         _importViewModel = new ImportViewModel(
             audioFileService,
@@ -81,6 +88,15 @@ public partial class MainWindowViewModel : ObservableObject
             status => StatusMessage = status);
 
         _localizationViewModel = new LocalizationViewModel(
+            tdoaService,
+            Stations,
+            Detections,
+            Localizations,
+            status => StatusMessage = status);
+
+        _populationViewModel = new PopulationViewModel(
+            populationService,
+            weatherService,
             tdoaService,
             Stations,
             Detections,
