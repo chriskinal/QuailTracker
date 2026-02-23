@@ -104,11 +104,26 @@ public partial class ImportViewModel : ObservableObject
                 var audioFile = await _audioFileService.LoadFileAsync(path, _cts.Token);
                 _audioFiles.Add(audioFile);
 
-                // Auto-create station if not exists
-                if (!string.IsNullOrEmpty(audioFile.StationId) &&
-                    !_stations.Any(s => s.Id == audioFile.StationId))
+                // Auto-create or update station from file metadata
+                if (!string.IsNullOrEmpty(audioFile.StationId))
                 {
-                    _stations.Add(new Station { Id = audioFile.StationId });
+                    var existing = _stations.FirstOrDefault(s => s.Id == audioFile.StationId);
+                    if (existing == null)
+                    {
+                        _stations.Add(new Station
+                        {
+                            Id = audioFile.StationId,
+                            Latitude = audioFile.Latitude ?? 0,
+                            Longitude = audioFile.Longitude ?? 0,
+                            Elevation = audioFile.Altitude,
+                        });
+                    }
+                    else if (!existing.HasValidLocation && audioFile.Latitude.HasValue)
+                    {
+                        existing.Latitude = audioFile.Latitude.Value;
+                        existing.Longitude = audioFile.Longitude ?? 0;
+                        existing.Elevation = audioFile.Altitude;
+                    }
                 }
 
                 ImportProgress++;
@@ -158,10 +173,25 @@ public partial class ImportViewModel : ObservableObject
             {
                 _audioFiles.Add(file);
 
-                if (!string.IsNullOrEmpty(file.StationId) &&
-                    !_stations.Any(s => s.Id == file.StationId))
+                if (!string.IsNullOrEmpty(file.StationId))
                 {
-                    _stations.Add(new Station { Id = file.StationId });
+                    var existing = _stations.FirstOrDefault(s => s.Id == file.StationId);
+                    if (existing == null)
+                    {
+                        _stations.Add(new Station
+                        {
+                            Id = file.StationId,
+                            Latitude = file.Latitude ?? 0,
+                            Longitude = file.Longitude ?? 0,
+                            Elevation = file.Altitude,
+                        });
+                    }
+                    else if (!existing.HasValidLocation && file.Latitude.HasValue)
+                    {
+                        existing.Latitude = file.Latitude.Value;
+                        existing.Longitude = file.Longitude ?? 0;
+                        existing.Elevation = file.Altitude;
+                    }
                 }
             }
 
@@ -229,9 +259,10 @@ public partial class ImportViewModel : ObservableObject
     {
         if (SelectedStation == null) return;
 
+        var id = SelectedStation.Id;
         _stations.Remove(SelectedStation);
-        _setStatus($"Removed station {SelectedStation.Id}");
         SelectedStation = null;
+        _setStatus($"Removed station {id}");
     }
 
     [RelayCommand]
@@ -239,9 +270,10 @@ public partial class ImportViewModel : ObservableObject
     {
         if (SelectedAudioFile == null) return;
 
+        var name = SelectedAudioFile.FileName;
         _audioFiles.Remove(SelectedAudioFile);
-        _setStatus($"Removed {SelectedAudioFile.FileName}");
         SelectedAudioFile = null;
+        _setStatus($"Removed {name}");
     }
 
     [RelayCommand]

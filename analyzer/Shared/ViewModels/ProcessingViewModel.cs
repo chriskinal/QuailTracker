@@ -38,9 +38,11 @@ public partial class ProcessingViewModel : ObservableObject
     private CancellationTokenSource? _cts;
 
     [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(StartProcessingCommand))]
     private bool _isProcessing;
 
     [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(StartProcessingCommand))]
     private bool _isModelLoaded;
 
     [ObservableProperty]
@@ -104,6 +106,7 @@ public partial class ProcessingViewModel : ObservableObject
         _setStatus = setStatus;
 
         _detections.CollectionChanged += (_, _) => UpdateFilteredDetections();
+        _audioFiles.CollectionChanged += (_, _) => StartProcessingCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnConfidenceThresholdChanged(double value) => UpdateFilteredDetections();

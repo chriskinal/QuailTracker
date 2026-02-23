@@ -43,8 +43,9 @@
                             <DataGridTextColumn Header="File" Binding="{Binding FileName}" Width="*" />
                             <DataGridTextColumn Header="Station" Binding="{Binding StationId}" Width="80" />
                             <DataGridTextColumn Header="Timestamp" Binding="{Binding Timestamp, StringFormat='{}{0:yyyy-MM-dd HH:mm}'}" Width="120" />
-                            <DataGridTextColumn Header="Duration" Binding="{Binding Duration, StringFormat='{}{0:mm\\:ss}'}" Width="70" />
+                            <DataGridTextColumn Header="Duration" Binding="{Binding DurationText}" Width="70" />
                             <DataGridTextColumn Header="Sample Rate" Binding="{Binding SampleRate, StringFormat='{}{0} Hz'}" Width="90" />
+                            <DataGridTextColumn Header="Status" Binding="{Binding ErrorMessage}" Width="120" />
                         </DataGrid.Columns>
                     </DataGrid>
                 </Grid>

@@ -33,12 +33,18 @@ public partial class AudioFile
     public string StationId { get; set; } = string.Empty;
     public DateTime Timestamp { get; set; }
     public TimeSpan Duration { get; set; }
+    public string DurationText => Duration.TotalHours >= 1
+        ? Duration.ToString(@"h\:mm\:ss")
+        : Duration.ToString(@"mm\:ss");
     public int SampleRate { get; set; }
     public int BitDepth { get; set; }
     public int Channels { get; set; }
     public long FileSizeBytes { get; set; }
     public bool IsValid { get; set; }
     public string? ErrorMessage { get; set; }
+    public double? Latitude { get; set; }
+    public double? Longitude { get; set; }
+    public double? Altitude { get; set; }
 
     [GeneratedRegex(@"^(\d{8})_(\d{6})_(.+)\.(wav|flac)$", RegexOptions.IgnoreCase)]
     private static partial Regex FileNamePattern();

@@ -49,10 +49,10 @@ public partial class MapViewModel : ObservableObject
     private bool _showLocalizations = true;
 
     [ObservableProperty]
-    private DateTime? _filterStartTime;
+    private DateTimeOffset? _filterStartTime;
 
     [ObservableProperty]
-    private DateTime? _filterEndTime;
+    private DateTimeOffset? _filterEndTime;
 
     [ObservableProperty]
     private Station? _selectedStation;
@@ -125,8 +125,8 @@ public partial class MapViewModel : ObservableObject
     partial void OnShowStationsChanged(bool value) => _ = UpdateLayerVisibilityAsync();
     partial void OnShowDetectionsChanged(bool value) => _ = UpdateLayerVisibilityAsync();
     partial void OnShowLocalizationsChanged(bool value) => _ = UpdateLayerVisibilityAsync();
-    partial void OnFilterStartTimeChanged(DateTime? value) => _ = UpdateTimeFilterAsync();
-    partial void OnFilterEndTimeChanged(DateTime? value) => _ = UpdateTimeFilterAsync();
+    partial void OnFilterStartTimeChanged(DateTimeOffset? value) => _ = UpdateTimeFilterAsync();
+    partial void OnFilterEndTimeChanged(DateTimeOffset? value) => _ = UpdateTimeFilterAsync();
 
     private async Task UpdateLayerVisibilityAsync()
     {
@@ -137,7 +137,7 @@ public partial class MapViewModel : ObservableObject
     private async Task UpdateTimeFilterAsync()
     {
         if (!IsMapReady) return;
-        await _mapService.SetTimeFilterAsync(FilterStartTime, FilterEndTime);
+        await _mapService.SetTimeFilterAsync(FilterStartTime?.DateTime, FilterEndTime?.DateTime);
     }
 
     [RelayCommand]
