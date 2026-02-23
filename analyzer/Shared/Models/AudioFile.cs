@@ -40,7 +40,7 @@ public partial class AudioFile
     public bool IsValid { get; set; }
     public string? ErrorMessage { get; set; }
 
-    [GeneratedRegex(@"^(\d{8})_(\d{6})_(.+)\.wav$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^(\d{8})_(\d{6})_(.+)\.(wav|flac)$", RegexOptions.IgnoreCase)]
     private static partial Regex FileNamePattern();
 
     /// <summary>

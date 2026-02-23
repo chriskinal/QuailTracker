@@ -46,7 +46,13 @@ public interface IBirdNetService : IDisposable
     bool IsModelLoaded { get; }
 
     /// <summary>
+    /// Path to the currently loaded model, or null if not loaded.
+    /// </summary>
+    string? ModelPath { get; }
+
+    /// <summary>
     /// Loads the BirdNet ONNX model from the specified path.
+    /// Also searches for a BirdNET labels file (en_us.txt) near the model.
     /// </summary>
     Task LoadModelAsync(string modelPath, CancellationToken ct = default);
 
@@ -58,6 +64,7 @@ public interface IBirdNetService : IDisposable
         AudioFile sourceFile,
         double offsetSeconds,
         double confidenceThreshold = 0.5,
+        double sensitivity = 1.0,
         CancellationToken ct = default);
 
     /// <summary>
@@ -68,6 +75,9 @@ public interface IBirdNetService : IDisposable
         IAudioFileService audioService,
         double confidenceThreshold = 0.5,
         string[]? targetSpecies = null,
+        double overlapSeconds = 0.0,
+        double sensitivity = 1.0,
+        int mergeCount = 1,
         IProgress<(int segment, int total)>? progress = null,
         CancellationToken ct = default);
 
@@ -79,6 +89,9 @@ public interface IBirdNetService : IDisposable
         IAudioFileService audioService,
         double confidenceThreshold = 0.5,
         string[]? targetSpecies = null,
+        double overlapSeconds = 0.0,
+        double sensitivity = 1.0,
+        int mergeCount = 1,
         IProgress<BirdNetProgress>? progress = null,
         CancellationToken ct = default);
 

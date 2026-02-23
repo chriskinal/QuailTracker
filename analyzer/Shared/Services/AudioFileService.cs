@@ -19,8 +19,10 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using NAudio.Flac;
 using NAudio.Wave;
 using QuailTracker.Analyzer.Shared.Models;
 
@@ -58,8 +60,8 @@ public class AudioFileService : IAudioFileService
                 audioFile.StationId = stationId ?? "unknown";
                 audioFile.Timestamp = timestamp ?? fileInfo.CreationTime;
 
-                // Read WAV metadata
-                using var reader = new WaveFileReader(filePath);
+                // Read audio metadata
+                using var reader = OpenAudioReader(filePath);
                 audioFile.SampleRate = reader.WaveFormat.SampleRate;
                 audioFile.BitDepth = reader.WaveFormat.BitsPerSample;
                 audioFile.Channels = reader.WaveFormat.Channels;
@@ -81,7 +83,10 @@ public class AudioFileService : IAudioFileService
         IProgress<(int current, int total, string fileName)>? progress = null,
         CancellationToken ct = default)
     {
-        var wavFiles = Directory.GetFiles(folderPath, "*.wav", SearchOption.AllDirectories);
+        var wavFiles = Directory.GetFiles(folderPath, "*.*", SearchOption.AllDirectories)
+            .Where(f => f.EndsWith(".wav", StringComparison.OrdinalIgnoreCase) ||
+                        f.EndsWith(".flac", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
         var results = new List<AudioFile>(wavFiles.Length);
         var total = wavFiles.Length;
 
@@ -109,7 +114,7 @@ public class AudioFileService : IAudioFileService
         {
             ct.ThrowIfCancellationRequested();
 
-            using var reader = new WaveFileReader(filePath);
+            using var reader = OpenAudioReader(filePath);
             var waveFormat = reader.WaveFormat;
 
             // Calculate sample positions
@@ -117,7 +122,7 @@ public class AudioFileService : IAudioFileService
             var sampleCount = (int)(durationSeconds * waveFormat.SampleRate);
 
             // Ensure we don't read past end of file
-            var totalSamples = reader.SampleCount;
+            var totalSamples = reader.Length / waveFormat.BlockAlign;
             if (startSample >= totalSamples)
             {
                 return Array.Empty<float>();
@@ -165,32 +170,29 @@ public class AudioFileService : IAudioFileService
                 buffer = Resample(buffer, waveFormat.SampleRate, TargetSampleRate);
             }
 
-            // Normalize
-            var maxAbs = 0f;
-            foreach (var sample in buffer)
-            {
-                var abs = Math.Abs(sample);
-                if (abs > maxAbs) maxAbs = abs;
-            }
-
-            if (maxAbs > 0.001f)
-            {
-                for (var i = 0; i < buffer.Length; i++)
-                {
-                    buffer[i] /= maxAbs;
-                }
-            }
+            // NAudio ToSampleProvider already returns float samples in [-1, 1].
+            // BirdNET's internal mel spectrogram layer handles its own normalization,
+            // so we pass raw samples without additional peak normalization.
 
             return buffer;
         }, ct);
     }
 
-    public int GetSegmentCount(AudioFile audioFile, double segmentDuration = 3.0)
+    public int GetSegmentCount(AudioFile audioFile, double segmentDuration = 3.0, double overlapSeconds = 0.0)
     {
         if (!audioFile.IsValid || audioFile.Duration.TotalSeconds < segmentDuration)
             return 0;
 
-        return (int)Math.Floor(audioFile.Duration.TotalSeconds / segmentDuration);
+        var step = segmentDuration - overlapSeconds;
+        if (step <= 0) step = segmentDuration;
+        return (int)Math.Floor((audioFile.Duration.TotalSeconds - segmentDuration) / step) + 1;
+    }
+
+    private static WaveStream OpenAudioReader(string filePath)
+    {
+        if (filePath.EndsWith(".flac", StringComparison.OrdinalIgnoreCase))
+            return new FlacReader(filePath);
+        return new WaveFileReader(filePath);
     }
 
     private static float[] Resample(float[] input, int fromRate, int toRate)

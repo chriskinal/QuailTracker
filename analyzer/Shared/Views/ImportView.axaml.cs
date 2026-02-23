@@ -55,7 +55,9 @@ public partial class ImportView : UserControl
 
             foreach (var item in files)
             {
-                if (item is IStorageFile file && file.Name.EndsWith(".wav", System.StringComparison.OrdinalIgnoreCase))
+                if (item is IStorageFile file &&
+                    (file.Name.EndsWith(".wav", System.StringComparison.OrdinalIgnoreCase) ||
+                     file.Name.EndsWith(".flac", System.StringComparison.OrdinalIgnoreCase)))
                 {
                     wavFiles.Add(file.Path.LocalPath);
                 }
@@ -82,11 +84,11 @@ public partial class ImportView : UserControl
 
         var files = await topLevel.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            Title = "Select WAV Files",
+            Title = "Select Audio Files",
             AllowMultiple = true,
             FileTypeFilter = new[]
             {
-                new FilePickerFileType("WAV Audio Files") { Patterns = new[] { "*.wav" } }
+                new FilePickerFileType("Audio Files") { Patterns = new[] { "*.wav", "*.flac" } }
             }
         });
 

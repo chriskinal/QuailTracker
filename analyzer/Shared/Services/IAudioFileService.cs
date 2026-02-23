@@ -53,7 +53,7 @@ public interface IAudioFileService
         CancellationToken ct = default);
 
     /// <summary>
-    /// Gets the total number of 3-second segments in an audio file.
+    /// Gets the total number of segments in an audio file, accounting for overlap.
     /// </summary>
-    int GetSegmentCount(AudioFile audioFile, double segmentDuration = 3.0);
+    int GetSegmentCount(AudioFile audioFile, double segmentDuration = 3.0, double overlapSeconds = 0.0);
 }

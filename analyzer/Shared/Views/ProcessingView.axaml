@@ -42,10 +42,10 @@
                 Classes="CardPanel"
                 Margin="0,0,0,8">
             <Grid RowDefinitions="Auto,Auto,Auto">
-                <!-- Settings Row -->
+                <!-- Settings Row 1 -->
                 <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="16">
                     <StackPanel Orientation="Horizontal" Spacing="8">
-                        <TextBlock Text="Confidence Threshold:" VerticalAlignment="Center" />
+                        <TextBlock Text="Confidence:" VerticalAlignment="Center" />
                         <Slider Value="{Binding ConfidenceThreshold}"
                                 Minimum="0.1"
                                 Maximum="0.99"
@@ -53,6 +53,41 @@
                                 VerticalAlignment="Center" />
                         <TextBlock Text="{Binding ConfidenceThreshold, StringFormat='{}{0:P0}'}"
                                    Width="40"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Sensitivity:" VerticalAlignment="Center" />
+                        <Slider Value="{Binding Sensitivity}"
+                                Minimum="0.5"
+                                Maximum="1.5"
+                                Width="120"
+                                VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding Sensitivity, StringFormat='{}{0:F1}'}"
+                                   Width="30"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Overlap (s):" VerticalAlignment="Center" />
+                        <Slider Value="{Binding OverlapSeconds}"
+                                Minimum="0"
+                                Maximum="2.5"
+                                Width="100"
+                                VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding OverlapSeconds, StringFormat='{}{0:F1}'}"
+                                   Width="25"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Merge:" VerticalAlignment="Center" />
+                        <Slider Value="{Binding MergeCount}"
+                                Minimum="1"
+                                Maximum="10"
+                                IsSnapToTickEnabled="True"
+                                TickFrequency="1"
+                                Width="80"
+                                VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding MergeCount}"
+                                   Width="20"
                                    VerticalAlignment="Center" />
                     </StackPanel>
                     <CheckBox Content="Quail species only"
@@ -135,12 +170,12 @@
                       BorderThickness="1">
                 <DataGrid.Columns>
                     <DataGridCheckBoxColumn Header="" Binding="{Binding IsSelected}" Width="40" />
-                    <DataGridTextColumn Header="Species" Binding="{Binding CommonName}" Width="*" IsReadOnly="True" />
-                    <DataGridTextColumn Header="Scientific Name" Binding="{Binding ScientificName}" Width="*" IsReadOnly="True" />
-                    <DataGridTextColumn Header="Confidence" Binding="{Binding ConfidencePercent}" Width="80" IsReadOnly="True" />
-                    <DataGridTextColumn Header="Station" Binding="{Binding StationId}" Width="80" IsReadOnly="True" />
-                    <DataGridTextColumn Header="Time" Binding="{Binding Timestamp, StringFormat='{}{0:HH:mm:ss}'}" Width="80" IsReadOnly="True" />
-                    <DataGridTextColumn Header="Offset" Binding="{Binding OffsetSeconds, StringFormat='{}{0:F1}s'}" Width="60" IsReadOnly="True" />
+                    <DataGridTextColumn Header="Species" Binding="{Binding CommonName}" Width="2*" IsReadOnly="True" />
+                    <DataGridTextColumn Header="Scientific Name" Binding="{Binding ScientificName}" Width="2*" IsReadOnly="True" />
+                    <DataGridTextColumn Header="Confidence" Binding="{Binding ConfidencePercent}" Width="*" IsReadOnly="True" />
+                    <DataGridTextColumn Header="Station" Binding="{Binding StationId}" Width="*" IsReadOnly="True" />
+                    <DataGridTextColumn Header="Time" Binding="{Binding Timestamp, StringFormat='{}{0:HH:mm:ss}'}" Width="*" IsReadOnly="True" />
+                    <DataGridTextColumn Header="Offset" Binding="{Binding OffsetSeconds, StringFormat='{}{0:F1}s'}" Width="*" IsReadOnly="True" />
                 </DataGrid.Columns>
             </DataGrid>
 

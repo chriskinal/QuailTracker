@@ -68,6 +68,15 @@ public partial class ProcessingViewModel : ObservableObject
     private double _confidenceThreshold = 0.5;
 
     [ObservableProperty]
+    private double _overlapSeconds = 0.0;
+
+    [ObservableProperty]
+    private double _sensitivity = 1.0;
+
+    [ObservableProperty]
+    private int _mergeCount = 1;
+
+    [ObservableProperty]
     private bool _filterQuailOnly = true;
 
     [ObservableProperty]
@@ -171,6 +180,9 @@ public partial class ProcessingViewModel : ObservableObject
                 _audioFileService,
                 ConfidenceThreshold,
                 targetSpecies,
+                OverlapSeconds,
+                Sensitivity,
+                MergeCount,
                 progress,
                 _cts.Token);
 

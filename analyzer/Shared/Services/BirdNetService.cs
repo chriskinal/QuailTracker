@@ -39,8 +39,10 @@ public class BirdNetService : IBirdNetService
 
     private InferenceSession? _session;
     private string[]? _labels;
+    private string _inputName = "input";
 
     public bool IsModelLoaded => _session != null;
+    public string? ModelPath { get; private set; }
 
     public async Task LoadModelAsync(string modelPath, CancellationToken ct = default)
     {
@@ -58,19 +60,48 @@ public class BirdNetService : IBirdNetService
             };
 
             _session = new InferenceSession(modelPath, options);
+            _inputName = _session.InputMetadata.Keys.First();
+            ModelPath = modelPath;
 
-            // Load labels if available (assume labels file next to model)
-            var labelsPath = Path.ChangeExtension(modelPath, ".txt");
-            if (File.Exists(labelsPath))
-            {
-                _labels = File.ReadAllLines(labelsPath);
-            }
-            else
-            {
-                // Use default label indices as placeholders
-                _labels = null;
-            }
+            // Search for labels file in multiple locations
+            _labels = FindLabels(modelPath);
         }, ct);
+    }
+
+    private static string[]? FindLabels(string modelPath)
+    {
+        var modelDir = Path.GetDirectoryName(modelPath) ?? ".";
+
+        // Try common label file locations/names
+        string[] candidates =
+        [
+            Path.Combine(modelDir, "BirdNET_GLOBAL_6K_V2.4_Labels.txt"),
+            Path.Combine(modelDir, "BirdNET_GLOBAL_6K_V2.4_Labels_en_us.txt"),
+            Path.Combine(modelDir, "labels", "en_us.txt"),
+            Path.Combine(modelDir, "labels", "BirdNET_GLOBAL_6K_V2.4_Labels_en_us.txt"),
+            Path.ChangeExtension(modelPath, ".txt"),
+            Path.Combine(modelDir, "labels.txt"),
+        ];
+
+        foreach (var candidate in candidates)
+        {
+            if (File.Exists(candidate))
+                return File.ReadAllLines(candidate);
+        }
+
+        // Search for any en_us label file in subdirectories
+        try
+        {
+            var found = Directory.GetFiles(modelDir, "*en_us*", SearchOption.AllDirectories);
+            if (found.Length > 0)
+                return File.ReadAllLines(found[0]);
+        }
+        catch
+        {
+            // Ignore search errors
+        }
+
+        return null;
     }
 
     public async Task<IReadOnlyList<Detection>> AnalyzeSegmentAsync(
@@ -78,6 +109,7 @@ public class BirdNetService : IBirdNetService
         AudioFile sourceFile,
         double offsetSeconds,
         double confidenceThreshold = 0.5,
+        double sensitivity = 1.0,
         CancellationToken ct = default)
     {
         if (_session == null)
@@ -107,7 +139,7 @@ public class BirdNetService : IBirdNetService
 
             var inputs = new List<NamedOnnxValue>
             {
-                NamedOnnxValue.CreateFromTensor(_session.InputMetadata.Keys.First(), inputTensor)
+                NamedOnnxValue.CreateFromTensor(_inputName, inputTensor)
             };
 
             // Run inference
@@ -116,6 +148,16 @@ public class BirdNetService : IBirdNetService
 
             // Apply softmax
             var probabilities = Softmax(output);
+
+            // Apply sensitivity sigmoid (logit-scale, matches BirdNET-Analyzer)
+            if (Math.Abs(sensitivity - 1.0) > 0.01)
+            {
+                for (var i = 0; i < probabilities.Length; i++)
+                {
+                    probabilities[i] = (float)(1.0 / (1.0 + Math.Exp(-sensitivity *
+                        Math.Log(probabilities[i] / (1.0001 - probabilities[i])))));
+                }
+            }
 
             // Find detections above threshold
             var detections = new List<Detection>();
@@ -150,11 +192,16 @@ public class BirdNetService : IBirdNetService
         IAudioFileService audioService,
         double confidenceThreshold = 0.5,
         string[]? targetSpecies = null,
+        double overlapSeconds = 0.0,
+        double sensitivity = 1.0,
+        int mergeCount = 1,
         IProgress<(int segment, int total)>? progress = null,
         CancellationToken ct = default)
     {
         var allDetections = new List<Detection>();
-        var segmentCount = audioService.GetSegmentCount(audioFile, SegmentDuration);
+        var segmentCount = audioService.GetSegmentCount(audioFile, SegmentDuration, overlapSeconds);
+        var step = SegmentDuration - overlapSeconds;
+        if (step <= 0.1) step = SegmentDuration;
 
         for (var i = 0; i < segmentCount; i++)
         {
@@ -162,14 +209,14 @@ public class BirdNetService : IBirdNetService
 
             progress?.Report((i + 1, segmentCount));
 
-            var offsetSeconds = i * SegmentDuration;
+            var offsetSeconds = i * step;
             var samples = await audioService.ExtractSegmentAsync(
                 audioFile.FilePath, offsetSeconds, SegmentDuration, ct);
 
             if (samples.Length == 0) continue;
 
             var detections = await AnalyzeSegmentAsync(
-                samples, audioFile, offsetSeconds, confidenceThreshold, ct);
+                samples, audioFile, offsetSeconds, confidenceThreshold, sensitivity, ct);
 
             // Filter by target species if specified
             if (targetSpecies != null)
@@ -182,7 +229,7 @@ public class BirdNetService : IBirdNetService
             allDetections.AddRange(detections);
         }
 
-        return allDetections;
+        return MergeDetections(allDetections, mergeCount, step);
     }
 
     public async Task<IReadOnlyList<Detection>> AnalyzeBatchAsync(
@@ -190,6 +237,9 @@ public class BirdNetService : IBirdNetService
         IAudioFileService audioService,
         double confidenceThreshold = 0.5,
         string[]? targetSpecies = null,
+        double overlapSeconds = 0.0,
+        double sensitivity = 1.0,
+        int mergeCount = 1,
         IProgress<BirdNetProgress>? progress = null,
         CancellationToken ct = default)
     {
@@ -216,7 +266,8 @@ public class BirdNetService : IBirdNetService
             });
 
             var fileDetections = await AnalyzeFileAsync(
-                audioFile, audioService, confidenceThreshold, targetSpecies, fileProgress, ct);
+                audioFile, audioService, confidenceThreshold, targetSpecies,
+                overlapSeconds, sensitivity, mergeCount, fileProgress, ct);
 
             allDetections.AddRange(fileDetections);
         }
@@ -244,18 +295,59 @@ public class BirdNetService : IBirdNetService
 
         var label = _labels[index];
 
-        // BirdNet labels are typically in format "Scientific_Name_Common Name"
-        // or "Scientific Name_Common Name"
-        var parts = label.Split('_');
-        if (parts.Length >= 2)
+        // BirdNET labels use "Scientific Name_Common Name" format
+        // e.g., "Colinus virginianus_Northern Bobwhite"
+        var separatorIndex = label.IndexOf('_');
+        if (separatorIndex > 0)
         {
-            // Try to reconstruct scientific name (usually first 2 parts)
-            var scientificName = string.Join(" ", parts.Take(2));
-            var commonName = string.Join(" ", parts.Skip(2));
+            var scientificName = label[..separatorIndex];
+            var commonName = label[(separatorIndex + 1)..];
             return (scientificName, commonName);
         }
 
         return (label, label);
+    }
+
+    private static List<Detection> MergeDetections(List<Detection> detections, int mergeCount, double step)
+    {
+        if (mergeCount <= 1 || detections.Count == 0)
+            return detections;
+
+        var merged = new List<Detection>();
+        var groups = detections
+            .GroupBy(d => (d.ScientificName, d.StationId, d.AudioFilePath));
+
+        foreach (var group in groups)
+        {
+            var sorted = group.OrderBy(d => d.OffsetSeconds).ToList();
+            var maxGap = step * 1.1; // consecutive if within one step (+10% tolerance)
+
+            var runStart = 0;
+            while (runStart < sorted.Count)
+            {
+                // Find end of this run of consecutive detections
+                var runEnd = runStart;
+                while (runEnd + 1 < sorted.Count &&
+                       runEnd - runStart + 1 < mergeCount &&
+                       sorted[runEnd + 1].OffsetSeconds - sorted[runEnd].OffsetSeconds <= maxGap)
+                {
+                    runEnd++;
+                }
+
+                // Keep the highest-confidence detection from the run
+                var best = sorted[runStart];
+                for (var i = runStart + 1; i <= runEnd; i++)
+                {
+                    if (sorted[i].Confidence > best.Confidence)
+                        best = sorted[i];
+                }
+                merged.Add(best);
+
+                runStart = runEnd + 1;
+            }
+        }
+
+        return merged.OrderByDescending(d => d.Confidence).ToList();
     }
 
     private static float[] Softmax(float[] input)
