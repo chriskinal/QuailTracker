@@ -41,10 +41,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
                            VerticalAlignment="Center"
                            Margin="16,0"
                            Foreground="#757575" />
-                <Button Grid.Column="2"
-                        Content="Open File..."
-                        Classes="SecondaryButton"
-                        Click="OnOpenFileClick" />
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="12">
+                    <CheckBox Content="Spectrogram"
+                              IsChecked="{Binding GenerateSpectrogram}"
+                              VerticalAlignment="Center" />
+                    <Button Content="Open File..."
+                            Classes="SecondaryButton"
+                            Click="OnOpenFileClick" />
+                </StackPanel>
             </Grid>
         </Border>
 

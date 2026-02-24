@@ -85,6 +85,9 @@ public partial class SingleAnalysisViewModel : ObservableObject
     private double _sensitivity = 1.0;
 
     [ObservableProperty]
+    private bool _generateSpectrogram = true;
+
+    [ObservableProperty]
     private bool _isPlaying;
 
     [ObservableProperty]
@@ -171,13 +174,20 @@ public partial class SingleAnalysisViewModel : ObservableObject
             FileInfo = $"{_loadedFile.SampleRate} Hz | {(_loadedFile.Channels == 1 ? "Mono" : "Stereo")} | {_loadedFile.DurationText}";
             IsFileLoaded = true;
 
-            _setStatus("Generating spectrogram...");
+            if (GenerateSpectrogram)
+            {
+                _setStatus("Generating spectrogram...");
 
-            int imageWidth = Math.Clamp((int)(FileDuration.TotalSeconds * 20), 800, 3000);
-            const int imageHeight = 500;
+                int imageWidth = Math.Clamp((int)(FileDuration.TotalSeconds * 20), 800, 3000);
+                const int imageHeight = 500;
 
-            SpectrogramImage = await _spectrogramService.GenerateAsync(
-                path, imageWidth, imageHeight);
+                SpectrogramImage = await _spectrogramService.GenerateAsync(
+                    path, imageWidth, imageHeight);
+            }
+            else
+            {
+                SpectrogramImage = null;
+            }
 
             _setStatus($"Loaded {FileName}");
         }
