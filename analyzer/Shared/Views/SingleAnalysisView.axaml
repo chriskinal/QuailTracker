@@ -148,6 +148,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
                 <!-- Settings Row -->
                 <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="16">
                     <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Max Freq:" VerticalAlignment="Center" />
+                        <Slider Value="{Binding MaxFrequencyHz}"
+                                Minimum="1000"
+                                Maximum="{Binding SampleRate, Converter={x:Static vm:HalfValueConverter.Instance}}"
+                                Width="120"
+                                VerticalAlignment="Center"
+                                TickFrequency="1000"
+                                IsSnapToTickEnabled="True" />
+                        <TextBlock Text="{Binding MaxFrequencyHz, StringFormat='{}{0:#,0} Hz'}"
+                                   Width="64"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
                         <TextBlock Text="Confidence:" VerticalAlignment="Center" />
                         <Slider Value="{Binding ConfidenceThreshold}"
                                 Minimum="0.1"

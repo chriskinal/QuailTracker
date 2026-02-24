@@ -18,9 +18,11 @@
 
 using System;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using Avalonia.Data.Converters;
 using Avalonia.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -86,6 +88,9 @@ public partial class SingleAnalysisViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _generateSpectrogram = true;
+
+    [ObservableProperty]
+    private double _maxFrequencyHz = 24000;
 
     [ObservableProperty]
     private bool _isPlaying;
@@ -172,6 +177,7 @@ public partial class SingleAnalysisViewModel : ObservableObject
             SampleRate = _loadedFile.SampleRate;
             FileDuration = _loadedFile.Duration;
             FileInfo = $"{_loadedFile.SampleRate} Hz | {(_loadedFile.Channels == 1 ? "Mono" : "Stereo")} | {_loadedFile.DurationText}";
+            MaxFrequencyHz = _loadedFile.SampleRate / 2.0;
             IsFileLoaded = true;
 
             if (GenerateSpectrogram)
@@ -182,7 +188,7 @@ public partial class SingleAnalysisViewModel : ObservableObject
                 const int imageHeight = 500;
 
                 SpectrogramImage = await _spectrogramService.GenerateAsync(
-                    path, imageWidth, imageHeight);
+                    path, imageWidth, imageHeight, MaxFrequencyHz);
             }
             else
             {
@@ -278,6 +284,32 @@ public partial class SingleAnalysisViewModel : ObservableObject
         }
     }
 
+    partial void OnMaxFrequencyHzChanged(double value)
+    {
+        if (IsFileLoaded && GenerateSpectrogram && !string.IsNullOrEmpty(FilePath))
+            _ = RegenerateSpectrogramAsync();
+    }
+
+    private async Task RegenerateSpectrogramAsync()
+    {
+        try
+        {
+            IsGenerating = true;
+            int imageWidth = Math.Clamp((int)(FileDuration.TotalSeconds * 20), 800, 3000);
+            const int imageHeight = 500;
+            SpectrogramImage = await _spectrogramService.GenerateAsync(
+                FilePath, imageWidth, imageHeight, MaxFrequencyHz);
+        }
+        catch (Exception ex)
+        {
+            _setStatus($"Error regenerating spectrogram: {ex.Message}");
+        }
+        finally
+        {
+            IsGenerating = false;
+        }
+    }
+
     private bool CanAnalyze() => IsFileLoaded && IsModelLoaded && !IsAnalyzing;
 
     [RelayCommand]
@@ -324,5 +356,23 @@ public partial class SingleAnalysisViewModel : ObservableObject
         _playbackCts?.Cancel();
         _playbackService.Stop();
         IsPlaying = false;
+    }
+}
+
+public class HalfValueConverter : IValueConverter
+{
+    public static readonly HalfValueConverter Instance = new();
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is int intVal) return intVal / 2.0;
+        if (value is double dVal) return dVal / 2.0;
+        return 24000.0;
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (value is double dVal) return (int)(dVal * 2);
+        return 48000;
     }
 }

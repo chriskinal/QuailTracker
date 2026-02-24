@@ -42,12 +42,14 @@ public class SpectrogramService
         [1000, 2000, 4000, 6000, 8000, 12000, 16000, 20000];
 
     public Task<WriteableBitmap> GenerateAsync(
-        string filePath, int imageWidth, int imageHeight, CancellationToken ct = default)
+        string filePath, int imageWidth, int imageHeight,
+        double maxFreqHz = 0, CancellationToken ct = default)
     {
-        return Task.Run(() => Generate(filePath, imageWidth, imageHeight, ct), ct);
+        return Task.Run(() => Generate(filePath, imageWidth, imageHeight, maxFreqHz, ct), ct);
     }
 
-    private WriteableBitmap Generate(string filePath, int imageWidth, int imageHeight, CancellationToken ct)
+    private WriteableBitmap Generate(string filePath, int imageWidth, int imageHeight,
+        double maxFreqHz, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
 
@@ -56,6 +58,11 @@ public class SpectrogramService
         int totalFrames = Math.Max(1, (samples.Length - FftSize) / HopSize + 1);
         int numBins = FftSize / 2 + 1;
         double nyquist = sampleRate / 2.0;
+
+        // Limit displayed frequency range
+        if (maxFreqHz <= 0 || maxFreqHz > nyquist)
+            maxFreqHz = nyquist;
+        int maxBin = Math.Clamp((int)(maxFreqHz / nyquist * (numBins - 1)), 1, numBins - 1);
 
         var window = MakeHannWindow(FftSize);
         var fftBuffer = new Complex[FftSize];
@@ -99,9 +106,9 @@ public class SpectrogramService
         for (int y = 0; y < imageHeight; y++)
         {
             int bin = imageHeight > 1
-                ? (int)((long)(imageHeight - 1 - y) * (numBins - 1) / (imageHeight - 1))
+                ? (int)((long)(imageHeight - 1 - y) * maxBin / (imageHeight - 1))
                 : 0;
-            bin = Math.Clamp(bin, 0, numBins - 1);
+            bin = Math.Clamp(bin, 0, maxBin);
 
             for (int x = 0; x < imageWidth; x++)
             {
@@ -120,9 +127,9 @@ public class SpectrogramService
         // Draw frequency gridlines
         foreach (int freq in GridlineFrequencies)
         {
-            if (freq > nyquist) break;
+            if (freq > maxFreqHz) break;
 
-            double yFrac = freq / nyquist;
+            double yFrac = freq / maxFreqHz;
             int y = (int)(imageHeight * (1.0 - yFrac));
             y = Math.Clamp(y, 0, imageHeight - 1);
 

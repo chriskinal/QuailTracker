@@ -70,7 +70,8 @@ public partial class SingleAnalysisView : UserControl
     {
         if (e.PropertyName is nameof(SingleAnalysisViewModel.SpectrogramImage)
             or nameof(SingleAnalysisViewModel.SampleRate)
-            or nameof(SingleAnalysisViewModel.FileDuration))
+            or nameof(SingleAnalysisViewModel.FileDuration)
+            or nameof(SingleAnalysisViewModel.MaxFrequencyHz))
         {
             UpdateAxisLabels();
             UpdateDetectionMarkers();
@@ -103,7 +104,9 @@ public partial class SingleAnalysisView : UserControl
 
         if (_currentVm == null || _currentVm.SampleRate <= 0) return;
 
-        double nyquist = _currentVm.SampleRate / 2.0;
+        double maxFreq = _currentVm.MaxFrequencyHz;
+        if (maxFreq <= 0) maxFreq = _currentVm.SampleRate / 2.0;
+
         double canvasHeight = SpectrogramImageControl.Bounds.Height;
         if (canvasHeight <= 0) return;
 
@@ -112,9 +115,9 @@ public partial class SingleAnalysisView : UserControl
 
         foreach (int freq in FrequencyMarks)
         {
-            if (freq > nyquist) break;
+            if (freq > maxFreq) break;
 
-            double yFrac = freq / nyquist;
+            double yFrac = freq / maxFreq;
             double y = canvasHeight * (1.0 - yFrac);
 
             string label = freq >= 1000 ? $"{freq / 1000}k" : freq.ToString();
