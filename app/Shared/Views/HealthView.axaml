@@ -128,19 +128,10 @@
                 </StackPanel>
             </Border>
 
-            <!-- Stream + Refresh Button -->
+            <!-- Refresh Button -->
             <Border Classes="CardPanel">
-                <Grid ColumnDefinitions="Auto,8,Auto,*,Auto">
-                    <ToggleSwitch IsChecked="{Binding StreamEnabled}"
-                                  OnContent="Live" OffContent="Live"
-                                  VerticalAlignment="Center" />
-                    <ComboBox Grid.Column="2"
-                              ItemsSource="{Binding StreamIntervalOptions}"
-                              SelectedItem="{Binding SelectedStreamInterval}"
-                              IsEnabled="{Binding StreamEnabled}"
-                              VerticalAlignment="Center"
-                              MinWidth="80" />
-                    <Button Grid.Column="4"
+                <Grid ColumnDefinitions="*,Auto">
+                    <Button Grid.Column="1"
                             Classes="ToolbarButton"
                             Command="{Binding RefreshCommand}">
                         <StackPanel Orientation="Horizontal" Spacing="8">

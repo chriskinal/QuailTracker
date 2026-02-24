@@ -60,7 +60,19 @@ public partial class ConfigViewModel : ObservableObject
         OnPropertyChanged(nameof(IsGateMode));
     }
 
-    // Audio Level (live from StatusReceived)
+    partial void OnAmplitudeTriggerEnabledChanged(bool value)
+    {
+        if (!value && AudioStreamEnabled)
+            AudioStreamEnabled = false;
+    }
+
+    partial void OnAudioStreamEnabledChanged(bool value)
+    {
+        _ = _bluetoothService.SetStreamAudioAsync(value ? 200 : 0);
+    }
+
+    // Audio Level streaming (live from StatusReceived)
+    [ObservableProperty] private bool _audioStreamEnabled = false;
     [ObservableProperty] private int _audioLevel = 0;
     [ObservableProperty] private string _peakLevel = "-- dB";
 
@@ -88,7 +100,8 @@ public partial class ConfigViewModel : ObservableObject
         PropertyChanged += (s, e) =>
         {
             if (e.PropertyName is not (nameof(HasChanges) or nameof(StatusMessage)
-                or nameof(AudioLevel) or nameof(PeakLevel) or nameof(ActivityRatio)))
+                or nameof(AudioLevel) or nameof(PeakLevel) or nameof(ActivityRatio)
+                or nameof(AudioStreamEnabled)))
             {
                 HasChanges = true;
             }

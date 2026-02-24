@@ -19,6 +19,7 @@
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using QuailTracker.Shared.Models;
 using QuailTracker.Shared.Services;
 
 namespace QuailTracker.Shared.ViewModels;
@@ -26,6 +27,8 @@ namespace QuailTracker.Shared.ViewModels;
 public partial class MainWindowViewModel : ObservableObject
 {
     private readonly IBluetoothService _bluetoothService;
+
+    private bool _deviceIsRecording;
 
     [ObservableProperty]
     private string _connectionStatus = "Not Connected";
@@ -66,8 +69,20 @@ public partial class MainWindowViewModel : ObservableObject
         _scheduleViewModel = new ScheduleViewModel(bluetoothService);
         _configViewModel = new ConfigViewModel(bluetoothService);
 
-        // Subscribe to connection state changes
         _bluetoothService.ConnectionStateChanged += OnConnectionStateChanged;
+        _bluetoothService.StatusReceived += OnStatusReceived;
+    }
+
+    private void OnStatusReceived(object? sender, DeviceStatus status)
+    {
+        var wasRecording = _deviceIsRecording;
+        _deviceIsRecording = status.IsRecording;
+
+        // Auto-start/stop rec stream when recording state changes
+        if (wasRecording != status.IsRecording)
+        {
+            _ = _bluetoothService.SetStreamRecAsync(status.IsRecording ? 1000 : 0);
+        }
     }
 
     private void OnConnectionStateChanged(object? sender, ConnectionState state)

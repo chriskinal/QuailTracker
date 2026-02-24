@@ -103,8 +103,6 @@ typedef struct {
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define FW_VERSION "0.7.7"
-
 #define OTA_PAGE_SIZE     8192
 #define OTA_BANK2_BASE    0x08100000
 #define OTA_CONFIG_PAGE   127
@@ -157,9 +155,11 @@ static volatile int16_t audioPeakLevel = 0;
 #define PEAK_LIMITER_THRESHOLD  28000
 uint32_t limiterClipCount = 0;  /* total clipped samples this recording */
 
-/* BLE status streaming: 0 = off, otherwise push interval in ms */
-static uint32_t streamInterval = 0;
-static uint32_t lastStreamTick = 0;
+/* BLE status streaming: independent audio-level and recording streams */
+static uint32_t streamAudioInterval = 0;
+static uint32_t streamRecInterval = 0;
+static uint32_t lastAudioTick = 0;
+static uint32_t lastRecTick = 0;
 
 /* BLE log forwarding — ring buffer fed by _write(), drained by BLE task */
 #define BLE_LOG_RING_SIZE 512
@@ -306,7 +306,8 @@ static void bleHandleCommand(const char *cmd);
 static void bleHandleStatusEx(const char *tag);
 static inline void bleHandleStatus(void) { bleHandleStatusEx("$STATUS"); }
 static void bleHandleStatusPage(int page);
-static void bleHandleStreamCompact(void);
+static void bleHandleStreamAudio(void);
+static void bleHandleStreamRec(void);
 static void bleHandleConfig(void);
 static void bleHandleSd(const char *arg);
 static void bleHandleSet(const char *args);
@@ -567,8 +568,30 @@ void StartAudioTask(void *argument)
         }
       }
     } else {
-      /* Not recording — discard ring data */
-      ringTail = ringHead;
+      /* Not recording — drain ring and track peak for live audio monitor.
+       * Apply HPF to remove DC offset / LF noise (same as recording path)
+       * using separate state so recording init doesn't conflict. */
+      static int32_t monHpfPrevIn = 0, monHpfPrevOut = 0;
+      int32_t alpha = computeHpfAlpha(cfg.bpfLow);
+      while ((ringHead - ringTail) >= (AUDIO_BUF_SIZE / 2)) {
+        const int blockLen = AUDIO_BUF_SIZE / 2;
+        uint32_t t = ringTail;
+        int16_t blockPeak = 0;
+        for (int i = 0; i < blockLen; i++) {
+          int16_t raw = pcmRing[t & PCM_RING_MASK];
+          t++;
+          if (alpha > 0) {
+            int32_t out = (int32_t)(((int64_t)alpha * (monHpfPrevOut + raw - monHpfPrevIn)) >> 16);
+            monHpfPrevIn = raw;
+            monHpfPrevOut = out;
+            raw = (int16_t)out;
+          }
+          int16_t a = raw < 0 ? -raw : raw;
+          if (a > blockPeak) blockPeak = a;
+        }
+        ringTail = t;
+        if (blockPeak > audioPeakLevel) audioPeakLevel = blockPeak;
+      }
     }
   }
   /* USER CODE END audioTask */
@@ -1219,7 +1242,8 @@ static void StartBleTask(void *argument)
                         printf("BLE: Connected\r\n");
                     } else if (strncmp(buf, "OK+LOST", 7) == 0) {
                         bleConnected = 0;
-                        streamInterval = 0;  /* stop streaming on disconnect */
+                        streamAudioInterval = 0;  /* stop streaming on disconnect */
+                        streamRecInterval = 0;
                         bleLogEnabled = 0;
                         printf("BLE: Disconnected\r\n");
                     }
@@ -1233,11 +1257,17 @@ static void StartBleTask(void *argument)
             }
         }
 
-        /* Push status if streaming is enabled and interval has elapsed */
-        if (streamInterval > 0 && bleConnected &&
-            (HAL_GetTick() - lastStreamTick) >= streamInterval) {
-            lastStreamTick = HAL_GetTick();
-            bleHandleStreamCompact();
+        /* Push audio level stream (Config tab — fast, ~5 Hz) */
+        if (streamAudioInterval > 0 && bleConnected &&
+            (HAL_GetTick() - lastAudioTick) >= streamAudioInterval) {
+            lastAudioTick = HAL_GetTick();
+            bleHandleStreamAudio();
+        }
+        /* Push recording stats stream (Ops tab — ~1 Hz) */
+        if (streamRecInterval > 0 && bleConnected &&
+            (HAL_GetTick() - lastRecTick) >= streamRecInterval) {
+            lastRecTick = HAL_GetTick();
+            bleHandleStreamRec();
         }
 
         /* Drain log ring buffer over BLE */
@@ -1681,23 +1711,26 @@ static void bleHandleStatusPage(int page)
     bleSendLine("$END");
 }
 
-static void bleHandleStreamCompact(void)
+static void bleHandleStreamAudio(void)
 {
     int16_t peak = audioPeakLevel;
     audioPeakLevel = 0;
 
     bleSendLine("$STREAM");
+    bleSendLine("aud_peak=%d", (int)peak);
+    bleSendLine("act_ratio=%d", (int)actRatio);
+    bleSendLine("$END");
+}
+
+static void bleHandleStreamRec(void)
+{
+    bleSendLine("$STREAM");
     bleSendLine("rec=%d", isRecording ? 1 : 0);
-    bleSendLine("rec_dur=%lu",
-                (unsigned long)(isRecording ? totalDataBytes / (SAMPLE_RATE * 2) : 0));
     bleSendLine("rec_bytes=%lu", (unsigned long)totalDataBytes);
     bleSendLine("rec_ovf=%lu", (unsigned long)ringOverruns);
-    bleSendLine("aud_peak=%d", (int)peak);
+    bleSendLine("aud_buf=%lu", (unsigned long)(ringHead - ringTail));
+    bleSendLine("aud_cap=%d", PCM_RING_SIZE);
     bleSendLine("aud_clip=%lu", (unsigned long)limiterClipCount);
-    bleSendLine("act_ratio=%d", (int)actRatio);
-    bleSendLine("gps_sats=%d", gpsData.satellites);
-    bleSendLine("pps=%d", ppsSynced ? 1 : 0);
-    bleSendLine("bat_pct=0");
     if (sdMounted) {
         FATFS *fs;
         DWORD fre_clust;
@@ -1962,12 +1995,29 @@ static void bleHandleSet(const char *args)
         }
         return; /* no additional flash save needed */
     } else if (strcmp(key, "STREAM") == 0) {
-        /* Runtime-only: set status push interval in ms (0=off, 100-30000) */
-        int v = atoi(val);
-        if (v != 0 && (v < 100 || v > 30000)) { bleSendLine("$ERR,BADARG"); return; }
-        streamInterval = (uint32_t)v;
-        lastStreamTick = HAL_GetTick();
-        printf("BLE: Stream interval = %d ms\r\n", v);
+        /* $SET,STREAM,0          → stop all streams
+         * $SET,STREAM,AUDIO,<ms> → audio level stream
+         * $SET,STREAM,REC,<ms>   → recording stats stream */
+        if (strcmp(val, "0") == 0) {
+            streamAudioInterval = 0;
+            streamRecInterval = 0;
+            printf("BLE: All streams off\r\n");
+        } else if (strncmp(val, "AUDIO,", 6) == 0) {
+            int v = atoi(val + 6);
+            if (v != 0 && (v < 100 || v > 30000)) { bleSendLine("$ERR,BADARG"); return; }
+            streamAudioInterval = (uint32_t)v;
+            if (v > 0) lastAudioTick = HAL_GetTick();
+            printf("BLE: Audio stream = %d ms\r\n", v);
+        } else if (strncmp(val, "REC,", 4) == 0) {
+            int v = atoi(val + 4);
+            if (v != 0 && (v < 100 || v > 30000)) { bleSendLine("$ERR,BADARG"); return; }
+            streamRecInterval = (uint32_t)v;
+            if (v > 0) lastRecTick = HAL_GetTick();
+            printf("BLE: Rec stream = %d ms\r\n", v);
+        } else {
+            bleSendLine("$ERR,BADARG");
+            return;
+        }
         bleSendLine("$OK");
         return; /* no flash save needed */
     } else {
@@ -2357,7 +2407,9 @@ static void bleHandleCommand(const char *cmd)
         bleSendLine("$SET,BPFHIGH,<0-24000> - set LPF cutoff Hz");
         bleSendLine("$SET,FORMAT,<WAV|FLAC>");
         bleSendLine("$LOGS              - toggle log forwarding");
-        bleSendLine("$SET,STREAM,<ms>   - status push (0=off)");
+        bleSendLine("$SET,STREAM,AUDIO,<ms> - audio level push");
+        bleSendLine("$SET,STREAM,REC,<ms>   - rec stats push");
+        bleSendLine("$SET,STREAM,0          - stop all streams");
         bleSendLine("$SET,SURVEY,START  - begin 5-min survey");
         bleSendLine("$SET,SURVEY,STOP   - stop survey early");
         bleSendLine("$SET,SURVEY,CLEAR  - reset survey data");

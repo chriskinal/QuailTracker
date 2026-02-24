@@ -64,38 +64,11 @@ public partial class HealthViewModel : ObservableObject
     // Last Update
     [ObservableProperty] private string _lastUpdated = "Never";
 
-    // Streaming
-    [ObservableProperty] private bool _streamEnabled;
-    [ObservableProperty] private string _selectedStreamInterval = "2s";
-
-    public string[] StreamIntervalOptions { get; } = ["1s", "2s", "5s", "10s", "30s"];
-
     public HealthViewModel(IBluetoothService bluetoothService)
     {
         _bluetoothService = bluetoothService;
         _bluetoothService.StatusReceived += OnStatusReceived;
         _bluetoothService.ConnectionStateChanged += OnConnectionStateChanged;
-    }
-
-    partial void OnStreamEnabledChanged(bool value)
-    {
-        _ = ApplyStreamSettingAsync();
-    }
-
-    partial void OnSelectedStreamIntervalChanged(string value)
-    {
-        if (StreamEnabled)
-            _ = ApplyStreamSettingAsync();
-    }
-
-    private int ParseIntervalMs() =>
-        int.TryParse(SelectedStreamInterval.TrimEnd('s'), out var s) ? s * 1000 : 2000;
-
-    private async Task ApplyStreamSettingAsync()
-    {
-        if (_bluetoothService.CurrentState != ConnectionState.Connected) return;
-        var ms = StreamEnabled ? ParseIntervalMs() : 0;
-        await _bluetoothService.SetStreamAsync(ms);
     }
 
     private void OnConnectionStateChanged(object? sender, ConnectionState state)
@@ -111,11 +84,6 @@ public partial class HealthViewModel : ObservableObject
         BleDeviceName = state == ConnectionState.Connected
             ? _bluetoothService.ConnectedDeviceName ?? "QuailTracker"
             : "--";
-
-        if (state == ConnectionState.Connected && StreamEnabled)
-        {
-            _ = ApplyStreamSettingAsync();
-        }
     }
 
     private void OnStatusReceived(object? sender, DeviceStatus status)

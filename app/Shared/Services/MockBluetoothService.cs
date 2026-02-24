@@ -186,17 +186,32 @@ public class MockBluetoothService : IBluetoothService
         await RequestStatusAsync();
     }
 
-    private CancellationTokenSource? _streamCts;
+    private CancellationTokenSource? _streamAudioCts;
+    private CancellationTokenSource? _streamRecCts;
 
-    public async Task SetStreamAsync(int intervalMs)
+    public async Task SetStreamAudioAsync(int intervalMs)
     {
-        _streamCts?.Cancel();
-        _streamCts = null;
+        _streamAudioCts?.Cancel();
+        _streamAudioCts = null;
 
         if (intervalMs > 0 && CurrentState == ConnectionState.Connected)
         {
-            _streamCts = new CancellationTokenSource();
-            _ = MockStreamLoop(intervalMs, _streamCts.Token);
+            _streamAudioCts = new CancellationTokenSource();
+            _ = MockStreamLoop(intervalMs, _streamAudioCts.Token);
+        }
+
+        await Task.CompletedTask;
+    }
+
+    public async Task SetStreamRecAsync(int intervalMs)
+    {
+        _streamRecCts?.Cancel();
+        _streamRecCts = null;
+
+        if (intervalMs > 0 && CurrentState == ConnectionState.Connected)
+        {
+            _streamRecCts = new CancellationTokenSource();
+            _ = MockStreamLoop(intervalMs, _streamRecCts.Token);
         }
 
         await Task.CompletedTask;

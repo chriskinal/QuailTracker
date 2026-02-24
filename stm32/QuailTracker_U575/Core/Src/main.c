@@ -155,8 +155,6 @@ static void MX_ADF1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-#define FW_VERSION "0.7.6"
-
 /* Survey accessors from app_freertos.c */
 extern uint32_t configGetSurveyCount(void);
 extern float configGetSurveyLat(void);

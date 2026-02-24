@@ -62,6 +62,10 @@ public class BluetoothService : IBluetoothService
     // Paginated status: stores lines from last completed $STATUS,N page
     private List<string>? _lastMultiLines;
 
+    // Last full status from $STATUS pages — used as base for merging $STREAM fields.
+    // $STREAM is a compact subset; missing keys inherit from the last full status.
+    private Dictionary<string, string>? _lastFullStatusDict;
+
     private CancellationTokenSource? _scanCts;
 
     public ConnectionState CurrentState { get; private set; } = ConnectionState.Disconnected;
@@ -206,7 +210,9 @@ public class BluetoothService : IBluetoothService
 
         if (allLines.Count > 0)
         {
-            var status = ParseStatus(allLines);
+            var dict = LinesToDict(allLines);
+            _lastFullStatusDict = dict;
+            var status = ParseStatus(dict);
             StatusReceived?.Invoke(this, status);
         }
     }
@@ -317,13 +323,27 @@ public class BluetoothService : IBluetoothService
         }
     }
 
-    public async Task SetStreamAsync(int intervalMs)
+    public async Task SetStreamAudioAsync(int intervalMs)
     {
         if (CurrentState != ConnectionState.Connected) return;
 
         try
         {
-            await SendRawAsync($"$SET,STREAM,{intervalMs}");
+            await SendRawAsync($"$SET,STREAM,AUDIO,{intervalMs}");
+        }
+        catch
+        {
+            // Timeout — non-fatal
+        }
+    }
+
+    public async Task SetStreamRecAsync(int intervalMs)
+    {
+        if (CurrentState != ConnectionState.Connected) return;
+
+        try
+        {
+            await SendRawAsync($"$SET,STREAM,REC,{intervalMs}");
         }
         catch
         {
@@ -462,7 +482,27 @@ public class BluetoothService : IBluetoothService
                 }
                 else if (type is "$STATUS" or "$STREAM")
                 {
-                    var status = ParseStatus(lines);
+                    Dictionary<string, string> dict;
+                    if (type == "$STREAM" && _lastFullStatusDict != null)
+                    {
+                        // $STREAM is a compact subset — merge its fields on top
+                        // of the last full status so missing keys keep their
+                        // previous values instead of defaulting to false/0.
+                        dict = new Dictionary<string, string>(_lastFullStatusDict, StringComparer.Ordinal);
+                        foreach (var streamLine in lines)
+                        {
+                            var eq = streamLine.IndexOf('=');
+                            if (eq > 0)
+                                dict[streamLine.Substring(0, eq)] = streamLine.Substring(eq + 1);
+                        }
+                    }
+                    else
+                    {
+                        dict = LinesToDict(lines);
+                        if (type == "$STATUS")
+                            _lastFullStatusDict = dict;
+                    }
+                    var status = ParseStatus(dict);
                     StatusReceived?.Invoke(this, status);
                     if (type == "$STATUS")
                         _responseTcs?.TrySetResult("$STATUS");
@@ -597,9 +637,8 @@ public class BluetoothService : IBluetoothService
     private static bool GetBool(Dictionary<string, string> d, string key) =>
         d.TryGetValue(key, out var v) && v == "1";
 
-    private static DeviceStatus ParseStatus(List<string> lines)
+    private static DeviceStatus ParseStatus(Dictionary<string, string> d)
     {
-        var d = LinesToDict(lines);
 
         var sdTotal = GetLong(d, "sd_tot") * 1024; // firmware sends KB
         var sdFree = GetLong(d, "sd_free") * 1024;

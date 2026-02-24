@@ -104,10 +104,16 @@ public interface IBluetoothService
     Task SendSdCommandAsync(string operation);
 
     /// <summary>
-    /// Enable or disable firmware status push streaming.
+    /// Start or stop audio level streaming (peak + activity ratio).
     /// </summary>
     /// <param name="intervalMs">Push interval in ms (0=off, 100-30000)</param>
-    Task SetStreamAsync(int intervalMs);
+    Task SetStreamAudioAsync(int intervalMs);
+
+    /// <summary>
+    /// Start or stop recording stats streaming (buffer, file size, clips, overflows).
+    /// </summary>
+    /// <param name="intervalMs">Push interval in ms (0=off, 100-30000)</param>
+    Task SetStreamRecAsync(int intervalMs);
 
     /// <summary>
     /// Send a survey-in command (START, STOP, CLEAR).

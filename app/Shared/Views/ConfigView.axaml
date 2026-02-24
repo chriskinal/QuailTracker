@@ -155,8 +155,19 @@
                                       OnContent="On" OffContent="Off" />
                     </Grid>
 
+                    <!-- Live Audio Stream Toggle -->
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Text="Live Audio" Classes="DataLabel"
+                                   VerticalAlignment="Center" />
+                        <ToggleSwitch Grid.Column="1"
+                                      IsChecked="{Binding AudioStreamEnabled}"
+                                      IsEnabled="{Binding AmplitudeTriggerEnabled}"
+                                      OnContent="On" OffContent="Off" />
+                    </Grid>
+
                     <!-- Live Audio Level -->
-                    <StackPanel Spacing="4">
+                    <StackPanel Spacing="4"
+                                IsVisible="{Binding AudioStreamEnabled}">
                         <Grid ColumnDefinitions="*,Auto">
                             <TextBlock Text="Audio Level" Classes="DataLabel" />
                             <TextBlock Grid.Column="1" Text="{Binding PeakLevel}" Classes="DataLabel" />
