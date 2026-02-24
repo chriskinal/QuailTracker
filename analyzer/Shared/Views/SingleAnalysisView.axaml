@@ -1,0 +1,237 @@
+<!--
+QuailTracker - GPS-synchronized Autonomous Recording Unit
+Copyright (C) 2026 QuailTracker Project
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+-->
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:QuailTracker.Analyzer.Shared.ViewModels"
+             x:Class="QuailTracker.Analyzer.Shared.Views.SingleAnalysisView"
+             x:DataType="vm:SingleAnalysisViewModel">
+
+    <Grid RowDefinitions="Auto,2*,Auto,*" Margin="8">
+
+        <!-- Row 0: File Bar -->
+        <Border Grid.Row="0"
+                Classes="CardPanel"
+                Margin="0,0,0,8">
+            <Grid ColumnDefinitions="Auto,*,Auto">
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                    <PathIcon Data="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"
+                              Width="20" Height="20"
+                              Foreground="#757575" />
+                    <TextBlock Text="{Binding FileName}"
+                               VerticalAlignment="Center"
+                               FontWeight="SemiBold" />
+                </StackPanel>
+                <TextBlock Grid.Column="1"
+                           Text="{Binding FileInfo}"
+                           VerticalAlignment="Center"
+                           Margin="16,0"
+                           Foreground="#757575" />
+                <Button Grid.Column="2"
+                        Content="Open File..."
+                        Classes="SecondaryButton"
+                        Click="OnOpenFileClick" />
+            </Grid>
+        </Border>
+
+        <!-- Row 1: Spectrogram -->
+        <Border Grid.Row="1"
+                Classes="DarkCardPanel"
+                Margin="0,0,0,8">
+            <Grid ColumnDefinitions="44,*" RowDefinitions="*,24">
+                <!-- Placeholder when no file loaded -->
+                <TextBlock Grid.ColumnSpan="2" Grid.RowSpan="2"
+                           Text="Open an audio file to view its spectrogram"
+                           IsVisible="{Binding !IsFileLoaded}"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           Foreground="#757575" />
+
+                <!-- Loading indicator -->
+                <StackPanel Grid.ColumnSpan="2" Grid.RowSpan="2"
+                            IsVisible="{Binding IsGenerating}"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            Spacing="8">
+                    <ProgressBar IsIndeterminate="True" Width="200" />
+                    <TextBlock Text="Generating spectrogram..."
+                               HorizontalAlignment="Center"
+                               Foreground="#AAAAAA" />
+                </StackPanel>
+
+                <!-- Frequency labels (left axis) -->
+                <Canvas Grid.Row="0" Grid.Column="0"
+                        x:Name="FreqLabelCanvas"
+                        IsVisible="{Binding IsFileLoaded}"
+                        ClipToBounds="True" />
+
+                <!-- Spectrogram image + detection markers overlay -->
+                <Image Grid.Row="0" Grid.Column="1"
+                       Source="{Binding SpectrogramImage}"
+                       Stretch="Fill"
+                       IsVisible="{Binding IsFileLoaded}"
+                       x:Name="SpectrogramImageControl" />
+                <Canvas Grid.Row="0" Grid.Column="1"
+                        x:Name="DetectionMarkerCanvas"
+                        IsVisible="{Binding IsFileLoaded}"
+                        ClipToBounds="True"
+                        IsHitTestVisible="False" />
+
+                <!-- Time labels (bottom axis) -->
+                <Canvas Grid.Row="1" Grid.Column="1"
+                        x:Name="TimeLabelCanvas"
+                        IsVisible="{Binding IsFileLoaded}"
+                        ClipToBounds="True" />
+
+                <!-- Frequency axis title -->
+                <TextBlock Grid.Row="1" Grid.Column="0"
+                           Text="Hz"
+                           IsVisible="{Binding IsFileLoaded}"
+                           FontSize="10"
+                           Foreground="#757575"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center" />
+            </Grid>
+        </Border>
+
+        <!-- Row 2: Analysis Controls -->
+        <Border Grid.Row="2"
+                Classes="CardPanel"
+                Margin="0,0,0,8">
+            <Grid RowDefinitions="Auto,Auto,Auto">
+                <!-- Model Row -->
+                <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,8">
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                        <PathIcon Data="M21,16.5C21,16.88 20.79,17.21 20.47,17.38L12.57,21.82C12.41,21.94 12.21,22 12,22C11.79,22 11.59,21.94 11.43,21.82L3.53,17.38C3.21,17.21 3,16.88 3,16.5V7.5C3,7.12 3.21,6.79 3.53,6.62L11.43,2.18C11.59,2.06 11.79,2 12,2C12.21,2 12.41,2.06 12.57,2.18L20.47,6.62C20.79,6.79 21,7.12 21,7.5V16.5M12,4.15L5,8.09V15.91L12,19.85L19,15.91V8.09L12,4.15Z"
+                                  Width="18" Height="18"
+                                  Foreground="#757575" />
+                        <TextBlock Text="Model:" VerticalAlignment="Center" FontWeight="SemiBold" />
+                        <TextBlock Text="Not Loaded"
+                                   IsVisible="{Binding !IsModelLoaded}"
+                                   VerticalAlignment="Center"
+                                   Foreground="#F44336" />
+                        <TextBlock Text="Loaded"
+                                   IsVisible="{Binding IsModelLoaded}"
+                                   VerticalAlignment="Center"
+                                   Foreground="#4CAF50" />
+                    </StackPanel>
+                    <TextBlock Grid.Column="1"
+                               Text="{Binding ModelPath}"
+                               VerticalAlignment="Center"
+                               Margin="12,0"
+                               TextTrimming="CharacterEllipsis"
+                               Foreground="#757575" />
+                    <Button Grid.Column="2"
+                            Content="Load Model..."
+                            Classes="SecondaryButton"
+                            Click="OnLoadModelClick" />
+                </Grid>
+
+                <!-- Settings Row -->
+                <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="16">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Confidence:" VerticalAlignment="Center" />
+                        <Slider Value="{Binding ConfidenceThreshold}"
+                                Minimum="0.1"
+                                Maximum="0.99"
+                                Width="120"
+                                VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding ConfidenceThreshold, StringFormat='{}{0:P0}'}"
+                                   Width="40"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Sensitivity:" VerticalAlignment="Center" />
+                        <Slider Value="{Binding Sensitivity}"
+                                Minimum="0.5"
+                                Maximum="1.5"
+                                Width="120"
+                                VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding Sensitivity, StringFormat='{}{0:F1}'}"
+                                   Width="30"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- Action Row -->
+                <StackPanel Grid.Row="2"
+                            Orientation="Horizontal"
+                            Spacing="8"
+                            Margin="0,12,0,0">
+                    <Button Content="Analyze"
+                            Classes="PrimaryButton"
+                            Command="{Binding AnalyzeCommand}"
+                            IsVisible="{Binding !IsAnalyzing}" />
+                    <Button Content="Cancel"
+                            Classes="DangerButton"
+                            Command="{Binding CancelAnalysisCommand}"
+                            IsVisible="{Binding IsAnalyzing}" />
+                    <ProgressBar IsVisible="{Binding IsAnalyzing}"
+                                 Minimum="0"
+                                 Maximum="{Binding AnalysisTotalSegments}"
+                                 Value="{Binding AnalysisProgress}"
+                                 Width="200"
+                                 VerticalAlignment="Center"
+                                 Margin="8,0" />
+                    <Button Content="Stop"
+                            Classes="ToolbarButton"
+                            IsVisible="{Binding IsPlaying}"
+                            Click="OnStopPlaybackClick" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Row 3: Detections DataGrid -->
+        <Grid Grid.Row="3" RowDefinitions="Auto,*">
+            <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,0,0,8">
+                <TextBlock Text="Detections" Classes="SectionHeader" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="1"
+                           Text="{Binding Detections.Count, StringFormat='{}{0} detections'}"
+                           VerticalAlignment="Center"
+                           Foreground="#757575" />
+            </Grid>
+
+            <DataGrid Grid.Row="1"
+                      ItemsSource="{Binding Detections}"
+                      AutoGenerateColumns="False"
+                      IsReadOnly="True"
+                      GridLinesVisibility="Horizontal"
+                      BorderBrush="#E0E0E0"
+                      BorderThickness="1">
+                <DataGrid.Columns>
+                    <DataGridTemplateColumn Header="" Width="50">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <Button Content="&#9654;"
+                                        Padding="6,2"
+                                        FontSize="12"
+                                        Classes="ToolbarButton"
+                                        Click="OnPlayDetectionClick"
+                                        Tag="{Binding}" />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTextColumn Header="Start" Binding="{Binding OffsetSeconds, StringFormat='{}{0:F1}s'}" Width="70" />
+                    <DataGridTextColumn Header="Duration" Binding="{Binding DurationSeconds, StringFormat='{}{0:F1}s'}" Width="70" />
+                    <DataGridTextColumn Header="Common Name" Binding="{Binding CommonName}" Width="2*" />
+                    <DataGridTextColumn Header="Scientific Name" Binding="{Binding ScientificName}" Width="2*" />
+                    <DataGridTextColumn Header="Confidence" Binding="{Binding ConfidencePercent}" Width="*" />
+                </DataGrid.Columns>
+            </DataGrid>
+        </Grid>
+    </Grid>
+</UserControl>

@@ -31,6 +31,8 @@ public partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     private string _statusMessage = "Ready";
 
+    public ConfigService ConfigService { get; }
+
     // Shared data collections
     public ObservableCollection<AudioFile> AudioFiles { get; } = [];
     public ObservableCollection<Station> Stations { get; } = [];
@@ -38,6 +40,9 @@ public partial class MainWindowViewModel : ObservableObject
     public ObservableCollection<Localization> Localizations { get; } = [];
 
     // Child ViewModels
+    [ObservableProperty]
+    private SingleAnalysisViewModel _singleAnalysisViewModel;
+
     [ObservableProperty]
     private ImportViewModel _importViewModel;
 
@@ -61,7 +66,9 @@ public partial class MainWindowViewModel : ObservableObject
             new MapService(),
             new KmlExportService(),
             new PopulationService(),
-            new WeatherService())
+            new WeatherService(),
+            ConfigService.Load(),
+            new AppStateService())
     {
     }
 
@@ -72,8 +79,21 @@ public partial class MainWindowViewModel : ObservableObject
         IMapService mapService,
         IKmlExportService kmlExportService,
         IPopulationService populationService,
-        IWeatherService weatherService)
+        IWeatherService weatherService,
+        ConfigService configService,
+        AppStateService appState)
     {
+        ConfigService = configService;
+
+        _singleAnalysisViewModel = new SingleAnalysisViewModel(
+            audioFileService,
+            birdNetService,
+            new SpectrogramService(),
+            new AudioPlaybackService(),
+            configService,
+            appState,
+            status => StatusMessage = status);
+
         _importViewModel = new ImportViewModel(
             audioFileService,
             AudioFiles,
