@@ -1,4 +1,4 @@
-# STM32U575 Production Board — Netlist / Wiring Guide
+# STM32U575 Production Board — Netlist / Wiring Guide (V2)
 
 All components placed in EasyEDA. Wire using **net port labels** — no long wires across the sheet.
 Each named net lists every component pin that should carry that net port label.
@@ -22,7 +22,7 @@ Cross-reference: `stm32u575_pinout.md` (pin assignments), `stm32u575_bom_lcsc.cs
 | Net Port | Description | Connected Pins |
 |----------|-------------|----------------|
 | **VBAT+** | Battery positive rail | CN1.1, Q1.VIN(1), Q1.CE(3), C16.+, R7.1 |
-| **3V3** | 3.3V regulated rail | Q1.VOUT(5), C15.+, C11.+, U1 VDD pins (11, 28, 50, 75, 100), U1.VDDA(22), U1.VREF+(21), U1.VDDUSB(73), U1.VBAT(6), C1.+, C2.+, C3.+, C4.+, C5.+, C6.+, C7.+, C8.+, C9.+, C13.+, C14.+, R1.1, R3.1, R4.1, Q2.Source, COMM1.VCC, CARD1.VDD, CN2.3, H1.1, H2.1 |
+| **3V3** | 3.3V regulated rail | Q1.VOUT(5), C15.+, C11.+, U1 VDD pins (11, 28, 50, 75, 100), U1.VDDA(22), U1.VREF+(21), U1.VDDUSB(73), U1.VBAT(6), C1.+, C2.+, C3.+, C4.+, C5.+, C6.+, C7.+, C8.+, C9.+, C13.+, C14.+, R1.1, R3.1, R4.1, Q2.Source, COMM1.VCC, CARD1.VDD, CN2.3, H1.1, H2.1, SW2.1 |
 | **GND** | Ground | *(see dedicated GND table below)* |
 | **GPS_VCC** | Switched 3.3V to GPS module | Q2.Drain, U2.VCC |
 | **VBAT_SENSE** | Battery ADC midpoint | R7.2, R8.1, U1.pin15 (PC0/ADC1_IN1) |
@@ -37,7 +37,7 @@ Place the **GND** net port label on every pin listed below.
 | MCU VSS | U1.pin10, U1.pin19 (VSSA), U1.pin20 (VREF-), U1.pin27, U1.pin49, U1.pin74, U1.pin99 |
 | LDO | Q1.VSS(2) |
 | Decoupling caps (−) | C1.−, C2.−, C3.−, C4.−, C5.−, C6.−, C7.−, C8.−, C9.−, C10.−, C11.−, C12.−, C13.−, C14.−, C15.−, C16.− |
-| Connectors | CN1.2, CN2.4, CARD1.VSS, COMM1.GND, H1.2, H2.2 |
+| Connectors | CN1.2, CN2.4, CARD1.VSS, COMM1.GND, H1.2, H2.2, SW1.2 |
 | GPS module | U2.GND |
 | Transistors | Q3.Emitter |
 | Divider low side | R8.2 |
@@ -124,14 +124,38 @@ H1 (1x4 header): pin 1 = 3V3, pin 2 = GND, pin 3 = SCL, pin 4 = SDA.
 
 ---
 
-## Signal Nets — Debug (SWD) Block
+## Signal Nets — Debug Block (SWD + SWO + UART)
 
 | Net Port | Description | Connected Pins |
 |----------|-------------|----------------|
 | **SWDIO** | SWD data | H2.3, U1.pin72 (PA13, AF0) |
 | **SWCLK** | SWD clock | H2.4, U1.pin76 (PA14, AF0) |
+| **SWO** | Serial Wire Output trace | H2.5, U1.pin89 (PB3, AF0 TRACESWO) |
+| **DBG_TX** | Debug UART out (MCU→host) | H2.6, U1.pin55 (PD8 / USART3_TX, AF7) |
+| **DBG_RX** | Debug UART in (host→MCU) | H2.7, U1.pin56 (PD9 / USART3_RX, AF7) |
 
-H2 (1x4 header): pin 1 = 3V3, pin 2 = GND, pin 3 = SWDIO, pin 4 = SWCLK.
+H2 (1x7 header): pin 1 = 3V3, pin 2 = GND, pin 3 = SWDIO, pin 4 = SWCLK, pin 5 = SWO, pin 6 = DBG_TX, pin 7 = DBG_RX.
+
+Three debug paths on one header:
+- **SWD** (pins 1-4): J-Link, ST-Link, or any SWD probe
+- **SWO** (pin 5): ITM trace output — works with ST-Link V2+ and J-Link
+- **UART** (pins 6-7): Serial console via any USB-UART adapter (CP2102, CH340, FTDI)
+
+---
+
+## Buttons — RESET and BOOT0 (DFU Entry)
+
+| Component | Function | Pin 1 | Pin 2 | Notes |
+|-----------|----------|-------|-------|-------|
+| **SW1** | RESET | U1.pin14 (NRST) | GND | Internal pull-up on NRST, no external resistor needed |
+| **SW2** | BOOT0 | 3V3 | U1.pin94 (PH3/BOOT0) | R6 (10k) pulls BOOT0 low for normal boot |
+
+**DFU entry procedure:** Hold SW2 (BOOT0), tap SW1 (RESET), release SW2.
+Board enters STM32 system bootloader — supports USB DFU, UART (USART1/2/3), I2C, SPI.
+No debugger required — just a USB cable and `dfu-util` or STM32CubeProgrammer.
+
+**Recovery use case:** If bad firmware bricks the board, BOOT0+RESET always gets back to
+the system bootloader regardless of flash contents.
 
 ---
 
@@ -157,6 +181,10 @@ These connections are short enough to wire directly — no net port label needed
 | Q3.Emitter | GND | Via GND net port |
 | R6.1 | U1.pin94 (PH3/BOOT0) | BOOT0 pull-down |
 | R6.2 | GND | Via GND net port |
+| SW2.2 | U1.pin94 (PH3/BOOT0) | BOOT0 button (same node as R6.1) |
+| SW2.1 | 3V3 | Via 3V3 net port |
+| SW1.1 | U1.pin14 (NRST) | Reset button (same node as C10.1) |
+| SW1.2 | GND | Via GND net port |
 | C10.1 | U1.pin14 (NRST) | Reset filter cap |
 | C10.2 | GND | Via GND net port |
 
@@ -208,8 +236,8 @@ Only pins with net port connections are listed — all others are unused (config
 | 33 | PC4 | SD_CD | GPIO input (card detect) |
 | 40 | PE9 | PDM_CLK | ADF1_CCK0 (AF3) |
 | 41 | PE10 | PDM_DATA | ADF1_SDI0 (AF3) |
-| 55 | PD8 | — | USART3_TX (optional debug) |
-| 56 | PD9 | — | USART3_RX (optional debug) |
+| 55 | PD8 | DBG_TX | USART3_TX (AF7) |
+| 56 | PD9 | DBG_RX | USART3_RX (AF7) |
 | 59 | PD12 | GPS_EN | GPIO output |
 | 60 | PD13 | LED_OUT | GPIO output |
 | 61 | PD14 | GPS_WAKE | GPIO output |
@@ -218,6 +246,7 @@ Only pins with net port connections are listed — all others are unused (config
 | 69 | PA10 | GPS_TX | USART1_RX (AF7) |
 | 72 | PA13 | SWDIO | SWD (AF0) |
 | 76 | PA14 | SWCLK | SWD (AF0) |
+| 89 | PB3 | SWO | TRACESWO (AF0) |
 | 92 | PB6 | I2C_SCL | I2C1_SCL (AF4) |
 | 93 | PB7 | I2C_SDA | I2C1_SDA (AF4) |
 
@@ -263,8 +292,10 @@ Added VCAP cap (C12) for internal LDO bypass.
 - [ ] GPS: U2.VCC on GPS_VCC (switched), U2.pin3 on GPS_PPS
 - [ ] I2C: R3/R4 pull-ups between 3V3 and I2C_SCL/I2C_SDA
 - [ ] Battery divider: R7 (VBAT+→midpoint), R8 (midpoint→GND), midpoint=VBAT_SENSE
-- [ ] BOOT0 (PH3 pin 94): R6 pull-down to GND
-- [ ] NRST (pin 14): C10 to GND
+- [ ] BOOT0 (PH3 pin 94): R6 pull-down to GND, SW2 to 3V3
+- [ ] NRST (pin 14): C10 to GND, SW1 to GND
+- [ ] SWO (PB3 pin 89): routed to H2.5
+- [ ] Debug UART: PD8 (USART3_TX) → H2.6, PD9 (USART3_RX) → H2.7
 - [ ] LSE crystal: X1 between OSC32_IN and OSC32_OUT (no external load caps — using internal)
 - [ ] Pin numbers match DS13737 Figure 15 (LQFP100 non-SMPS), NOT Figure 14
 - [ ] EasyEDA DRC: 0 errors, 0 unconnected pins

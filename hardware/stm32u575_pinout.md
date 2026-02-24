@@ -1,4 +1,4 @@
-# STM32U575VGT6 Production Board — Pin Assignments
+# STM32U575VGT6 Production Board — Pin Assignments (V2)
 
 MCU: STM32U575VGT6, LQFP-100, non-SMPS (LDO) variant
 Datasheet: DS13737 Rev 10 (July 2024), **Figure 15 — LQFP100 pinout**
@@ -6,6 +6,9 @@ LCSC: C5270988
 
 Note: The SMPS variant (Q suffix, Figure 14) has a different pinout.
 C5270988 is the non-SMPS variant — uses internal LDO, no external inductor.
+
+**V2 changes:** Added SWO trace output (PB3), expanded debug header to 7-pin
+(SWD + SWO + UART), added RESET and BOOT0 tactile buttons for DFU mode.
 
 ## Pin Assignment Summary
 
@@ -17,8 +20,8 @@ C5270988 is the non-SMPS variant — uses internal LDO, no external inductor.
 | GPS UART RX | PA10 | 69 | AF7 | USART1_RX | From L76K TX |
 | BLE UART TX | PA2 | 25 | AF7 | USART2_TX | To PB-03F RX |
 | BLE UART RX | PA3 | 26 | AF7 | USART2_RX | From PB-03F TX |
-| Debug UART TX | PD8 | 55 | AF7 | USART3_TX | Optional debug serial |
-| Debug UART RX | PD9 | 56 | AF7 | USART3_RX | Optional debug serial |
+| Debug UART TX | PD8 | 55 | AF7 | USART3_TX | Debug serial on H2 header |
+| Debug UART RX | PD9 | 56 | AF7 | USART3_RX | Debug serial on H2 header |
 | SD Card SCK | PA5 | 30 | AF5 | SPI1_SCK | SPI mode SD |
 | SD Card MISO | PA6 | 31 | AF5 | SPI1_MISO | SPI mode SD |
 | SD Card MOSI | PA7 | 32 | AF5 | SPI1_MOSI | SPI mode SD |
@@ -32,6 +35,7 @@ C5270988 is the non-SMPS variant — uses internal LDO, no external inductor.
 | GPS RESET | PD15 | 62 | GPIO | Output, active low | L76K RESET pin |
 | GPS Power EN | PD12 | 59 | GPIO | Output | HIGH=GPS on, LOW=GPS off |
 | Status LED | PD13 | 60 | GPIO | Output | Via 1k R9 to LED1 |
+| SWO Trace | PB3 | 89 | AF0 | TRACESWO | Serial Wire Output for debug trace |
 | SWDIO | PA13 | 72 | AF0 | SWD debug | Default after reset |
 | SWCLK | PA14 | 76 | AF0 | SWD debug | Default after reset |
 | LSE Crystal | PC14 | 8 | - | OSC32_IN | 32.768kHz |
@@ -86,7 +90,7 @@ Low-power modes (Stop 2, Standby, Shutdown) are similar between LDO and SMPS.
 ### ADF1 — PDM Microphone (IM73D122)
 
 Selected PE9/PE10 over PB3/PB4 because:
-- PB3 = JTDO after reset (requires JTAG release in firmware)
+- PB3 = JTDO/TRACESWO after reset — now used for SWO debug trace output
 - PB4 = NJTRST after reset (same issue)
 - PE9/PE10 are clean GPIOs, adjacent pins, no boot-time conflicts
 
@@ -147,7 +151,7 @@ Divider current: ~2uA continuous (acceptable for battery life).
 Available GPIOs not assigned (configure as analog input for lowest leakage):
 
 PE0-PE6, PE7, PE8, PE11-PE15, PA0, PA1, PA11, PA12, PA15,
-PB0-PB5, PB8-PB10, PB12-PB15, PC1, PC2, PC3, PC5-PC9, PC10-PC12,
+PB0-PB2, PB4, PB5, PB8-PB10, PB12-PB15, PC1, PC2, PC3, PC5-PC9, PC10-PC12,
 PD0-PD7, PD10, PD11, PH0, PH1
 
 Note: PB11 is NOT bonded out on LQFP100 (neither SMPS nor non-SMPS variant).
@@ -161,9 +165,10 @@ Note: PB11 is NOT bonded out on LQFP100 (neither SMPS nor non-SMPS variant).
 5. **Storage** — CARD1 (MicroSD slot), SPI1 on PA4-PA7
 6. **BLE** — COMM1 (PB-03F module), USART2 on PA2/PA3
 7. **Sensor** — H1 (4-pin header to off-board SHT30), R3/R4 (I2C pull-ups)
-8. **Debug** — H2 (SWD 4-pin header: SWDIO, SWCLK, 3.3V, GND)
+8. **Debug** — H2 (7-pin header: 3V3, GND, SWDIO, SWCLK, SWO, DBG_TX, DBG_RX)
 9. **Battery** — R7/R8 (1M divider to PC0), CN1 (JST 2-pin)
 10. **Status** — LED1 (green 0805), R9 (1k current limit)
+11. **Buttons** — SW1 (RESET tactile), SW2 (BOOT0 tactile)
 
 ## PCB Layout Notes
 
