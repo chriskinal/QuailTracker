@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 #include "fatfs.h"
 #include "user_diskio.h"
 #include "flac_encoder.h"
@@ -45,7 +46,7 @@ typedef struct {
 
 /* ---- Flash-persisted device configuration ---- */
 #define CONFIG_MAGIC      0x51544346   /* "QTCF" */
-#define CONFIG_VERSION    3
+#define CONFIG_VERSION    5
 #define CONFIG_FLASH_ADDR 0x081FE000   /* Bank 2, page 127 (last 8KB page of 2MB) */
 
 typedef struct __attribute__((packed, aligned(16))) {
@@ -53,7 +54,8 @@ typedef struct __attribute__((packed, aligned(16))) {
     uint8_t  version;
     char     stationId[16];   /* null-terminated */
     uint8_t  gain;            /* 0-4 */
-    uint8_t  hpf;             /* 0=off, 1=8Hz, 2=48Hz */
+    uint16_t bpfLow;          /* HPF cutoff Hz, 0=off, default 150 */
+    uint16_t bpfHigh;         /* LPF cutoff Hz, 0=off, default 8000 */
     uint8_t  recFormat;       /* 0=FLAC, 1=WAV */
     uint8_t  sunriseEnabled;  /* 0/1 */
     uint16_t sunriseBefore;   /* minutes before sunrise */
@@ -69,11 +71,15 @@ typedef struct __attribute__((packed, aligned(16))) {
     uint8_t  trigPost;        /* 0-60 seconds */
     uint8_t  lowBatPct;       /* 0-100 */
     uint8_t  autoStop;        /* 0/1 */
+    uint8_t  activityMode;    /* 0=off, 1=monitor, 2=squelch, 3=gate */
+    uint8_t  activityMinPct;  /* 1-50, default 5 */
+    uint8_t  activityMaxPct;  /* 50-99, default 80 */
+    uint8_t  activityHoldSec; /* 1-30, gate mode holdoff, default 3 */
     float    surveyLat;       /* averaged latitude (decimal degrees) */
     float    surveyLon;       /* averaged longitude (decimal degrees) */
     float    surveyAlt;       /* averaged altitude (meters) */
     uint32_t surveyCount;     /* number of GPS fixes averaged */
-    uint8_t  _pad[128 - 89 - 4]; /* pad to 128 bytes: 89 pre-pad + 35 pad + 4 crc */
+    uint8_t  _pad[128 - 96 - 4]; /* pad to 128 bytes: 96 pre-pad + 28 pad + 4 crc */
     uint32_t crc32;           /* CRC-32 over bytes 0..123 */
 } device_config_t;
 
@@ -97,7 +103,7 @@ typedef struct {
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define FW_VERSION "0.7.2"
+#define FW_VERSION "0.7.7"
 
 #define OTA_PAGE_SIZE     8192
 #define OTA_BANK2_BASE    0x08100000
@@ -120,10 +126,15 @@ typedef struct {
 #define AUDIO_BUF_SIZE 1024
 #define SAMPLE_RATE    48000
 
-extern int32_t audioBuffer[];
-extern volatile uint8_t halfComplete;
-extern volatile uint8_t fullComplete;
 extern int16_t pcmBuffer[];
+
+/* PCM ring buffer — defined in main.c, written by DMA ISR callbacks */
+#define PCM_RING_SIZE  16384
+#define PCM_RING_MASK  (PCM_RING_SIZE - 1)
+extern int16_t pcmRing[];
+extern volatile uint32_t ringHead;
+extern uint32_t ringTail;
+extern uint32_t ringOverruns;
 
 extern FIL wavFile;
 extern uint8_t isRecording;
@@ -139,6 +150,12 @@ extern char deviceStationId[16];
 
 /* Live audio peak level (updated by audioTask, read by bleTask for $STATUS) */
 static volatile int16_t audioPeakLevel = 0;
+
+/* Peak limiter: hard-clip samples above this threshold.
+ * Prevents ADF Sinc4 saturation artifacts on loud close-range calls.
+ * Set to ~85% of int16 max to leave headroom while preserving dynamics. */
+#define PEAK_LIMITER_THRESHOLD  28000
+uint32_t limiterClipCount = 0;  /* total clipped samples this recording */
 
 /* BLE status streaming: 0 = off, otherwise push interval in ms */
 static uint32_t streamInterval = 0;
@@ -204,6 +221,35 @@ static char bleLiveProbeResp[64];
 /* Flash-persisted device config (loaded at BLE task start) */
 static device_config_t cfg;
 
+/* ---- BPF filter state (reset on recording start) ---- */
+static int32_t  hpfPrevIn  = 0;
+static int32_t  hpfPrevOut = 0;
+static uint32_t hpfAlpha   = 0;   /* computed from bpfLow, Q16 */
+static int32_t  lpfPrevOut = 0;
+static uint32_t lpfAlpha   = 0;   /* computed from bpfHigh, Q16 */
+
+/* Compute Q16 HPF alpha from cutoff frequency: alpha = e^(-2*pi*fc/fs) * 65536 */
+static uint32_t computeHpfAlpha(uint16_t fc) {
+    if (fc == 0) return 0;
+    return (uint32_t)(expf(-6.2831853f * (float)fc / (float)SAMPLE_RATE) * 65536.0f);
+}
+
+/* Compute Q16 LPF alpha from cutoff frequency: alpha = (1 - e^(-2*pi*fc/fs)) * 65536 */
+static uint32_t computeLpfAlpha(uint16_t fc) {
+    if (fc == 0) return 0;
+    return (uint32_t)((1.0f - expf(-6.2831853f * (float)fc / (float)SAMPLE_RATE)) * 65536.0f);
+}
+
+/* ---- Activity filter state ---- */
+static volatile uint8_t actRatio = 0;     /* last computed activity % (read by BLE) */
+static int32_t  actMean  = 0;             /* running mean(|sample|), Q0 */
+static int32_t  actMad   = 0;             /* running MAD, Q0 */
+static uint32_t actAbove = 0;             /* above-threshold count in current window */
+static uint32_t actTotal = 0;             /* total samples in current window */
+static uint8_t  actSquelch   = 0;         /* 1 = current window is uninteresting */
+static uint8_t  actHolddown  = 0;         /* gate mode holdoff countdown (seconds) */
+static uint8_t  actGateOpen  = 1;         /* gate mode: 1 = recording allowed */
+
 /* OTA firmware update context (~8.2KB BSS) */
 static ota_ctx_t ota;
 /* USER CODE END Variables */
@@ -259,6 +305,8 @@ static void bleSendLine(const char *fmt, ...);
 static void bleHandleCommand(const char *cmd);
 static void bleHandleStatusEx(const char *tag);
 static inline void bleHandleStatus(void) { bleHandleStatusEx("$STATUS"); }
+static void bleHandleStatusPage(int page);
+static void bleHandleStreamCompact(void);
 static void bleHandleConfig(void);
 static void bleHandleSd(const char *arg);
 static void bleHandleSet(const char *args);
@@ -287,8 +335,12 @@ void MX_FREERTOS_Init(void) {
   audioDmaSemHandle = osSemaphoreNew(1, 1, &audioDmaSem_attributes);
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
-  /* Consume initial count so first acquire blocks until DMA ISR signals */
-  osSemaphoreAcquire(audioDmaSemHandle, 0);
+  /* Override CubeMX binary semaphore (max=1) with counting semaphore (max=16).
+   * A binary semaphore silently drops DMA callbacks when FLAC encode + SD write
+   * takes longer than 10.67ms (one DMA half-period), causing audio glitches.
+   * Counting semaphore ensures no callbacks are lost. */
+  osSemaphoreDelete(audioDmaSemHandle);
+  audioDmaSemHandle = osSemaphoreNew(16, 0, &audioDmaSem_attributes);
   /* USER CODE END RTOS_SEMAPHORES */
 
   /* USER CODE BEGIN RTOS_TIMERS */
@@ -342,46 +394,144 @@ void StartAudioTask(void *argument)
   /* USER CODE BEGIN audioTask */
   for (;;)
   {
-    /* Block until DMA half/full callback releases semaphore */
+    /* Block until ISR has pushed data into ring buffer */
     osSemaphoreAcquire(audioDmaSemHandle, osWaitForever);
 
     /* Check for start/stop commands from CLI task */
     uint8_t cmd;
     while (osMessageQueueGet(audioCmdQueueHandle, &cmd, NULL, 0) == osOK) {
-      if (cmd == CMD_START_REC) startRecording();
+      if (cmd == CMD_START_REC) {
+        /* Compute BPF filter coefficients and reset state */
+        hpfAlpha = computeHpfAlpha(cfg.bpfLow);
+        lpfAlpha = computeLpfAlpha(cfg.bpfHigh);
+        hpfPrevIn = 0; hpfPrevOut = 0; lpfPrevOut = 0;
+        /* Reset activity filter state */
+        actMean = 0; actMad = 0;
+        actAbove = 0; actTotal = 0;
+        actRatio = 0; actSquelch = 0;
+        actHolddown = 0; actGateOpen = 1;
+        startRecording();
+      }
       else if (cmd == CMD_STOP_REC) stopRecording();
     }
 
-    /* Always consume DMA flags and track peak level (even when not recording) */
-    int32_t *src = NULL;
+    /* Drain ring buffer into encoder/file writer.
+     * The ISR copies DMA data into the ring immediately on each half-complete,
+     * so no data is lost even if this task is blocked on f_sync for 100ms+. */
+    if (isRecording) {
+      while ((ringHead - ringTail) >= (AUDIO_BUF_SIZE / 2)) {
+        const int blockLen = AUDIO_BUF_SIZE / 2;
 
-    if (halfComplete) {
-      halfComplete = 0;
-      src = &audioBuffer[0];
-    } else if (fullComplete) {
-      fullComplete = 0;
-      src = &audioBuffer[AUDIO_BUF_SIZE / 2];
-    }
+        /* Step 1: Copy from ring buffer into pcmBuffer */
+        uint32_t t = ringTail;
+        for (int i = 0; i < blockLen; i++) {
+          pcmBuffer[i] = pcmRing[t & PCM_RING_MASK];
+          t++;
+        }
+        ringTail = t;
 
-    if (src) {
-      /* MDF DFLTDR is left-justified: 25-bit Sinc4 output in bits [31:7].
-       * >> 16 extracts bits [31:16] = top 16 bits. */
-      int16_t blockPeak = 0;
-      for (int i = 0; i < AUDIO_BUF_SIZE / 2; i++) {
-        int16_t s = (int16_t)(src[i] >> 16);
-        pcmBuffer[i] = s;
-        int16_t a = s < 0 ? -s : s;
-        if (a > blockPeak) blockPeak = a;
-      }
-      /* Update global peak (max of current peak and this block) */
-      if (blockPeak > audioPeakLevel) audioPeakLevel = blockPeak;
+        /* Step 2a: Apply HPF if configured (bpfLow) */
+        if (hpfAlpha > 0) {
+          for (int i = 0; i < blockLen; i++) {
+            int32_t in = pcmBuffer[i];
+            int32_t out = (int32_t)(((int64_t)hpfAlpha * (hpfPrevOut + in - hpfPrevIn)) >> 16);
+            hpfPrevIn = in;
+            hpfPrevOut = out;
+            pcmBuffer[i] = (int16_t)out;
+          }
+        }
 
-      if (isRecording) {
+        /* Step 2b: Apply LPF if configured (bpfHigh) */
+        if (lpfAlpha > 0) {
+          for (int i = 0; i < blockLen; i++) {
+            int32_t in = pcmBuffer[i];
+            lpfPrevOut = (int32_t)(((int64_t)lpfAlpha * in + (int64_t)(65536 - lpfAlpha) * lpfPrevOut) >> 16);
+            pcmBuffer[i] = (int16_t)lpfPrevOut;
+          }
+        }
+
+        /* Step 3: Peak limiter + peak level tracking */
+        int16_t blockPeak = 0;
+        for (int i = 0; i < blockLen; i++) {
+          int16_t s = pcmBuffer[i];
+          if (s > PEAK_LIMITER_THRESHOLD) { s = PEAK_LIMITER_THRESHOLD; limiterClipCount++; }
+          else if (s < -PEAK_LIMITER_THRESHOLD) { s = -PEAK_LIMITER_THRESHOLD; limiterClipCount++; }
+          pcmBuffer[i] = s;
+          int16_t a = s < 0 ? -s : s;
+          if (a > blockPeak) blockPeak = a;
+        }
+        if (blockPeak > audioPeakLevel) audioPeakLevel = blockPeak;
+
+        /* Step 4: Activity filter analysis */
+        if (cfg.activityMode > 0) {
+          int32_t blockAbsSum = 0;
+          int32_t blockDevSum = 0;
+          uint32_t blockAbove = 0;
+          int32_t threshold = actMean + 2 * actMad;
+          for (int i = 0; i < blockLen; i++) {
+            int32_t a = pcmBuffer[i] < 0 ? -pcmBuffer[i] : pcmBuffer[i];
+            blockAbsSum += a;
+            int32_t dev = a - actMean;
+            blockDevSum += (dev < 0 ? -dev : dev);
+            if (a > threshold) blockAbove++;
+          }
+          /* Exponential smoothing: mean = (15*mean + blockMean) / 16 */
+          int32_t blockMean = blockAbsSum / blockLen;
+          int32_t blockMad  = blockDevSum / blockLen;
+          actMean = (15 * actMean + blockMean) >> 4;
+          actMad  = (15 * actMad  + blockMad)  >> 4;
+          actAbove += blockAbove;
+          actTotal += blockLen;
+
+          /* Every 1 second (48000 samples): evaluate activity ratio */
+          if (actTotal >= SAMPLE_RATE) {
+            uint8_t ratio = (uint8_t)(actAbove * 100 / actTotal);
+            actRatio = ratio;
+            uint8_t interesting = (ratio >= cfg.activityMinPct &&
+                                   ratio <= cfg.activityMaxPct) ? 1 : 0;
+
+            /* Squelch mode: flag for this window */
+            if (cfg.activityMode == 2) {
+              actSquelch = interesting ? 0 : 1;
+            }
+
+            /* Gate mode: start/stop recording based on activity */
+            if (cfg.activityMode == 3) {
+              if (interesting) {
+                actHolddown = cfg.activityHoldSec;
+                if (!actGateOpen) {
+                  actGateOpen = 1;
+                  /* Re-start recording */
+                  uint8_t c = CMD_START_REC;
+                  osMessageQueuePut(audioCmdQueueHandle, &c, 0, 0);
+                }
+              } else {
+                if (actHolddown > 0) {
+                  actHolddown--;
+                } else if (actGateOpen) {
+                  actGateOpen = 0;
+                  /* Stop recording */
+                  uint8_t c = CMD_STOP_REC;
+                  osMessageQueuePut(audioCmdQueueHandle, &c, 0, 0);
+                }
+              }
+            }
+
+            actAbove = 0;
+            actTotal = 0;
+          }
+        }
+
+        /* Step 5: Squelch — zero out uninteresting audio */
+        if (cfg.activityMode == 2 && actSquelch) {
+          memset(pcmBuffer, 0, blockLen * sizeof(int16_t));
+        }
+
+        /* Step 6: Encode + write */
         if (recFormat == REC_FMT_WAV) {
-          /* Raw PCM write */
           osMutexAcquire(fileMtxHandle, osWaitForever);
           UINT bw;
-          FRESULT fres = f_write(&wavFile, pcmBuffer, AUDIO_BUF_SIZE / 2 * sizeof(int16_t), &bw);
+          FRESULT fres = f_write(&wavFile, pcmBuffer, blockLen * sizeof(int16_t), &bw);
           if (fres != FR_OK) {
             printf("f_write FAILED: %d at %lu bytes\r\n", fres, (unsigned long)totalDataBytes);
             f_close(&wavFile);
@@ -390,13 +540,13 @@ void StartAudioTask(void *argument)
           totalDataBytes += bw;
 
           /* Sync every ~1 second */
-          if ((totalDataBytes % (SAMPLE_RATE * 2)) < (AUDIO_BUF_SIZE / 2 * sizeof(int16_t))) {
+          if ((totalDataBytes % (SAMPLE_RATE * 2)) < (blockLen * sizeof(int16_t))) {
             f_sync(&wavFile);
           }
           osMutexRelease(fileMtxHandle);
         } else {
-          /* FLAC encode — accumulates 8 DMA callbacks into one 4096-sample block */
-          uint32_t encoded = flac_enc_process(&flacEncoder, pcmBuffer, AUDIO_BUF_SIZE / 2);
+          /* FLAC encode — accumulates 8 calls into one 4096-sample block */
+          uint32_t encoded = flac_enc_process(&flacEncoder, pcmBuffer, blockLen);
           if (encoded > 0) {
             osMutexAcquire(fileMtxHandle, osWaitForever);
             UINT bw;
@@ -416,6 +566,9 @@ void StartAudioTask(void *argument)
           }
         }
       }
+    } else {
+      /* Not recording — discard ring data */
+      ringTail = ringHead;
     }
   }
   /* USER CODE END audioTask */
@@ -1084,7 +1237,7 @@ static void StartBleTask(void *argument)
         if (streamInterval > 0 && bleConnected &&
             (HAL_GetTick() - lastStreamTick) >= streamInterval) {
             lastStreamTick = HAL_GetTick();
-            bleHandleStatusEx("$STREAM");
+            bleHandleStreamCompact();
         }
 
         /* Drain log ring buffer over BLE */
@@ -1114,7 +1267,8 @@ static void configSetDefaults(device_config_t *c)
     c->version = CONFIG_VERSION;
     strncpy(c->stationId, "QT001", sizeof(c->stationId));
     c->gain = 2;
-    c->hpf = 0;
+    c->bpfLow = 150;
+    c->bpfHigh = 8000;
     c->recFormat = REC_FMT_FLAC;
     c->sunriseEnabled = 1;
     c->sunriseBefore = 30;
@@ -1130,6 +1284,10 @@ static void configSetDefaults(device_config_t *c)
     c->trigPost = 5;
     c->lowBatPct = 10;
     c->autoStop = 1;
+    c->activityMode = 0;
+    c->activityMinPct = 5;
+    c->activityMaxPct = 80;
+    c->activityHoldSec = 3;
     c->surveyLat = 0.0f;
     c->surveyLon = 0.0f;
     c->surveyAlt = 0.0f;
@@ -1372,14 +1530,14 @@ static void bleHandleStatusEx(const char *tag)
     bleSendLine("rec_bytes=%lu", (unsigned long)totalDataBytes);
     bleSendLine("rec_dur=%lu",
                 (unsigned long)(isRecording ? totalDataBytes / (SAMPLE_RATE * 2) : 0));
-    bleSendLine("rec_ovf=0");
+    bleSendLine("rec_ovf=%lu", (unsigned long)ringOverruns);
 
     /* Audio buffer stats — read and reset peak */
     int16_t peak = audioPeakLevel;
     audioPeakLevel = 0;
     bleSendLine("aud_peak=%d", (int)peak);
-    bleSendLine("aud_buf=0");
-    bleSendLine("aud_cap=%d", AUDIO_BUF_SIZE / 2);
+    bleSendLine("aud_buf=%lu", (unsigned long)(ringHead - ringTail));
+    bleSendLine("aud_cap=%d", PCM_RING_SIZE);
 
     /* BLE module info */
     bleSendLine("ble_ready=%d", bleReady ? 1 : 0);
@@ -1402,12 +1560,165 @@ static void bleHandleStatusEx(const char *tag)
     bleSendLine("$END");
 }
 
+static void bleHandleStatusPage(int page)
+{
+    extern MDF_FilterConfigTypeDef AdfFilterConfig0;
+
+    bleSendLine("$STATUS,%d", page);
+
+    switch (page) {
+    case 0: /* Device + battery */
+        bleSendLine("id=%s", cfg.stationId);
+        bleSendLine("fw=" FW_VERSION);
+        bleSendLine("bat_v=0");
+        bleSendLine("bat_pct=0");
+        bleSendLine("bat_lvl=0");
+        bleSendLine("ble_ready=%d", bleReady ? 1 : 0);
+        bleSendLine("ble_name=%s", bleName);
+        bleSendLine("ble_addr=%s", bleAddr);
+        bleSendLine("ble_conn=%d", bleConnected ? 1 : 0);
+        break;
+
+    case 1: { /* GPS + PPS */
+        bleSendLine("gps_valid=%d", gpsData.valid);
+        bleSendLine("gps_sats=%d", gpsData.satellites);
+        int32_t lat7 = (int32_t)(gpsData.latitude * 10000000.0f);
+        int32_t lon7 = (int32_t)(gpsData.longitude * 10000000.0f);
+        bleSendLine("gps_lat=%ld", (long)lat7);
+        bleSendLine("gps_lon=%ld", (long)lon7);
+        {
+            int32_t alt_mm = (int32_t)(gpsData.altitude * 1000.0f);
+            bleSendLine("gps_alt=%ld", (long)alt_mm);
+        }
+        if (ppsSynced && ppsUtcDate != 0) {
+            uint32_t dd = ppsUtcDate / 10000;
+            uint32_t mm = (ppsUtcDate / 100) % 100;
+            uint32_t yy = ppsUtcDate % 100;
+            uint32_t hh = ppsUtcTime / 10000;
+            uint32_t mn = (ppsUtcTime / 100) % 100;
+            uint32_t ss = ppsUtcTime % 100;
+            bleSendLine("gps_time=20%02lu%02lu%02lu%02lu%02lu%02lu",
+                        (unsigned long)yy, (unsigned long)mm, (unsigned long)dd,
+                        (unsigned long)hh, (unsigned long)mn, (unsigned long)ss);
+        } else {
+            bleSendLine("gps_time=");
+        }
+        bleSendLine("gps_fix=%d", gpsData.fix);
+        if (gpsData.utc_date != 0) {
+            uint32_t dd = gpsData.utc_date / 10000;
+            uint32_t mm = (gpsData.utc_date / 100) % 100;
+            uint32_t yy = gpsData.utc_date % 100;
+            bleSendLine("gps_date=20%02lu-%02lu-%02lu",
+                        (unsigned long)yy, (unsigned long)mm, (unsigned long)dd);
+        } else {
+            bleSendLine("gps_date=");
+        }
+        bleSendLine("pps=%d", ppsSynced ? 1 : 0);
+        bleSendLine("pps_count=%lu", (unsigned long)ppsCount);
+        bleSendLine("pps_ms=%lu", (unsigned long)(HAL_GetTick() - ppsTick));
+        break;
+    }
+
+    case 2: /* SD + recording */
+        bleSendLine("sd=%d", sdMounted ? 1 : 0);
+        if (sdMounted) {
+            FATFS *fs;
+            DWORD fre_clust;
+            if (osMutexAcquire(fileMtxHandle, 200) == osOK) {
+                if (f_getfree("", &fre_clust, &fs) == FR_OK) {
+                    DWORD tot_sect = (fs->n_fatent - 2) * fs->csize;
+                    DWORD fre_sect = fre_clust * fs->csize;
+                    bleSendLine("sd_tot=%lu", (unsigned long)(tot_sect / 2));
+                    bleSendLine("sd_free=%lu", (unsigned long)(fre_sect / 2));
+                } else {
+                    bleSendLine("sd_tot=0");
+                    bleSendLine("sd_free=0");
+                }
+                osMutexRelease(fileMtxHandle);
+            } else {
+                bleSendLine("sd_tot=0");
+                bleSendLine("sd_free=0");
+            }
+        } else {
+            bleSendLine("sd_tot=0");
+            bleSendLine("sd_free=0");
+        }
+        bleSendLine("rec=%d", isRecording ? 1 : 0);
+        bleSendLine("rec_fmt=%s", recFormat == REC_FMT_WAV ? "WAV" : "FLAC");
+        bleSendLine("rec_file=%s", recFilename);
+        bleSendLine("rec_bytes=%lu", (unsigned long)totalDataBytes);
+        bleSendLine("rec_dur=%lu",
+                    (unsigned long)(isRecording ? totalDataBytes / (SAMPLE_RATE * 2) : 0));
+        bleSendLine("rec_ovf=%lu", (unsigned long)ringOverruns);
+        break;
+
+    case 3: { /* Audio + survey */
+        int16_t peak = audioPeakLevel;
+        audioPeakLevel = 0;
+        bleSendLine("aud_peak=%d", (int)peak);
+        bleSendLine("aud_buf=%lu", (unsigned long)(ringHead - ringTail));
+        bleSendLine("aud_cap=%d", PCM_RING_SIZE);
+        bleSendLine("aud_clip=%lu", (unsigned long)limiterClipCount);
+        bleSendLine("temp=0");
+        bleSendLine("hum=0");
+        int32_t slat7 = (int32_t)(cfg.surveyLat * 10000000.0f);
+        int32_t slon7 = (int32_t)(cfg.surveyLon * 10000000.0f);
+        int32_t salt_mm = (int32_t)(cfg.surveyAlt * 1000.0f);
+        bleSendLine("survey_lat=%ld", (long)slat7);
+        bleSendLine("survey_lon=%ld", (long)slon7);
+        bleSendLine("survey_alt=%ld", (long)salt_mm);
+        bleSendLine("survey_count=%lu", (unsigned long)cfg.surveyCount);
+        bleSendLine("survey_active=%d", surveyActive ? 1 : 0);
+        bleSendLine("act_ratio=%d", (int)actRatio);
+        break;
+    }
+
+    default:
+        bleSendLine("$ERR,BADARG");
+        return;
+    }
+
+    bleSendLine("$END");
+}
+
+static void bleHandleStreamCompact(void)
+{
+    int16_t peak = audioPeakLevel;
+    audioPeakLevel = 0;
+
+    bleSendLine("$STREAM");
+    bleSendLine("rec=%d", isRecording ? 1 : 0);
+    bleSendLine("rec_dur=%lu",
+                (unsigned long)(isRecording ? totalDataBytes / (SAMPLE_RATE * 2) : 0));
+    bleSendLine("rec_bytes=%lu", (unsigned long)totalDataBytes);
+    bleSendLine("rec_ovf=%lu", (unsigned long)ringOverruns);
+    bleSendLine("aud_peak=%d", (int)peak);
+    bleSendLine("aud_clip=%lu", (unsigned long)limiterClipCount);
+    bleSendLine("act_ratio=%d", (int)actRatio);
+    bleSendLine("gps_sats=%d", gpsData.satellites);
+    bleSendLine("pps=%d", ppsSynced ? 1 : 0);
+    bleSendLine("bat_pct=0");
+    if (sdMounted) {
+        FATFS *fs;
+        DWORD fre_clust;
+        if (osMutexAcquire(fileMtxHandle, 200) == osOK) {
+            if (f_getfree("", &fre_clust, &fs) == FR_OK) {
+                DWORD fre_sect = fre_clust * fs->csize;
+                bleSendLine("sd_free=%lu", (unsigned long)(fre_sect / 2));
+            }
+            osMutexRelease(fileMtxHandle);
+        }
+    }
+    bleSendLine("$END");
+}
+
 static void bleHandleConfig(void)
 {
     bleSendLine("$CONFIG");
     bleSendLine("id=%s", cfg.stationId);
     bleSendLine("gain=%d", cfg.gain);
-    bleSendLine("hpf=%d", cfg.hpf);
+    bleSendLine("bpf_low=%d", (int)cfg.bpfLow);
+    bleSendLine("bpf_high=%d", (int)cfg.bpfHigh);
     bleSendLine("rate=%lu", (unsigned long)SAMPLE_RATE);
     bleSendLine("fmt=%s", cfg.recFormat == REC_FMT_WAV ? "WAV" : "FLAC");
     bleSendLine("sunrise=%d", cfg.sunriseEnabled);
@@ -1432,6 +1743,10 @@ static void bleHandleConfig(void)
     bleSendLine("trig_post=%d", cfg.trigPost);
     bleSendLine("lowbat=%d", cfg.lowBatPct);
     bleSendLine("autostop=%d", cfg.autoStop);
+    bleSendLine("act_mode=%d", cfg.activityMode);
+    bleSendLine("act_min=%d", cfg.activityMinPct);
+    bleSendLine("act_max=%d", cfg.activityMaxPct);
+    bleSendLine("act_hold=%d", cfg.activityHoldSec);
 
     /* Survey-in config */
     {
@@ -1522,10 +1837,14 @@ static void bleHandleSet(const char *args)
         int32_t newGain = (int32_t)v * 6;
         HAL_MDF_SetGain(&AdfHandle0, newGain);
         printf("BLE: ADF gain set to %ld\r\n", (long)newGain);
-    } else if (strcmp(key, "HPF") == 0) {
-        int v = val[0] - '0';
-        if (v < 0 || v > 2) { bleSendLine("$ERR,BADARG"); return; }
-        cfg.hpf = (uint8_t)v;
+    } else if (strcmp(key, "BPFLOW") == 0) {
+        int v = atoi(val);
+        if (v < 0 || v > 1500) { bleSendLine("$ERR,BADARG"); return; }
+        cfg.bpfLow = (uint16_t)v;
+    } else if (strcmp(key, "BPFHIGH") == 0) {
+        int v = atoi(val);
+        if (v < 0 || v > 24000) { bleSendLine("$ERR,BADARG"); return; }
+        cfg.bpfHigh = (uint16_t)v;
     } else if (strcmp(key, "FORMAT") == 0) {
         if (isRecording) { bleSendLine("$ERR,BUSY"); return; }
         if (strcmp(val, "WAV") == 0) {
@@ -1590,6 +1909,22 @@ static void bleHandleSet(const char *args)
         int v = val[0] - '0';
         if (v < 0 || v > 1) { bleSendLine("$ERR,BADARG"); return; }
         cfg.autoStop = (uint8_t)v;
+    } else if (strcmp(key, "ACTMODE") == 0) {
+        int v = val[0] - '0';
+        if (v < 0 || v > 3) { bleSendLine("$ERR,BADARG"); return; }
+        cfg.activityMode = (uint8_t)v;
+    } else if (strcmp(key, "ACTMIN") == 0) {
+        int v = atoi(val);
+        if (v < 1 || v > 50) { bleSendLine("$ERR,BADARG"); return; }
+        cfg.activityMinPct = (uint8_t)v;
+    } else if (strcmp(key, "ACTMAX") == 0) {
+        int v = atoi(val);
+        if (v < 50 || v > 99) { bleSendLine("$ERR,BADARG"); return; }
+        cfg.activityMaxPct = (uint8_t)v;
+    } else if (strcmp(key, "ACTHOLD") == 0) {
+        int v = atoi(val);
+        if (v < 1 || v > 30) { bleSendLine("$ERR,BADARG"); return; }
+        cfg.activityHoldSec = (uint8_t)v;
     } else if (strcmp(key, "SURVEY") == 0) {
         if (strcmp(val, "START") == 0) {
             if (gpsData.satellites < SURVEY_MIN_SATS || gpsData.fix < 1) {
@@ -2008,7 +2343,7 @@ static void bleHandleCommand(const char *cmd)
         bleSendLine("$MENU");
         bleSendLine("$PING              - connection test");
         bleSendLine("$VER               - firmware version");
-        bleSendLine("$STATUS            - full device status");
+        bleSendLine("$STATUS,<0-3>      - device status page");
         bleSendLine("$CONFIG            - current configuration");
         bleSendLine("$REC,START         - start recording");
         bleSendLine("$REC,STOP          - stop recording");
@@ -2018,7 +2353,8 @@ static void bleHandleCommand(const char *cmd)
         bleSendLine("$SD,FORMAT         - format SD card");
         bleSendLine("$SET,STATION,<id>  - set station ID");
         bleSendLine("$SET,GAIN,<0-4>    - set mic gain");
-        bleSendLine("$SET,HPF,<0-2>     - set high-pass filter");
+        bleSendLine("$SET,BPFLOW,<0-1500> - set HPF cutoff Hz");
+        bleSendLine("$SET,BPFHIGH,<0-24000> - set LPF cutoff Hz");
         bleSendLine("$SET,FORMAT,<WAV|FLAC>");
         bleSendLine("$LOGS              - toggle log forwarding");
         bleSendLine("$SET,STREAM,<ms>   - status push (0=off)");
@@ -2053,7 +2389,10 @@ static void bleHandleCommand(const char *cmd)
         printf("BLE: Log forwarding = %s\r\n", bleLogEnabled ? "ON" : "OFF");
         bleSendLine("$OK,%s", bleLogEnabled ? "ON" : "OFF");
     } else if (strcmp(cmd, "$STATUS") == 0) {
-        bleHandleStatus();
+        bleHandleStatusPage(0);  /* bare $STATUS returns page 0 */
+    } else if (strncmp(cmd, "$STATUS,", 8) == 0) {
+        int page = atoi(cmd + 8);
+        bleHandleStatusPage(page);
     } else if (strcmp(cmd, "$CONFIG") == 0) {
         bleHandleConfig();
     } else if (strcmp(cmd, "$REC,START") == 0) {

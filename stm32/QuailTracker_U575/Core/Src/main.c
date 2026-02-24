@@ -64,11 +64,19 @@ SPI_HandleTypeDef hspi1;
 #define SAMPLE_RATE    48000
 
 int32_t audioBuffer[AUDIO_BUF_SIZE];
-volatile uint8_t halfComplete = 0;
-volatile uint8_t fullComplete = 0;
 
 /* Conversion buffer: 512 samples -> 512 int16 samples = 1024 bytes */
 int16_t pcmBuffer[AUDIO_BUF_SIZE / 2];
+
+/* PCM ring buffer — written by DMA ISR, read by audio task.
+ * Must be in main.c so ISR callbacks can access it directly.
+ * Power-of-2 size for fast masking.  16384 samples = 341ms at 48kHz. */
+#define PCM_RING_SIZE  16384
+#define PCM_RING_MASK  (PCM_RING_SIZE - 1)
+int16_t pcmRing[PCM_RING_SIZE];
+volatile uint32_t ringHead = 0;   /* ISR writes here */
+uint32_t ringTail = 0;            /* audio task reads here */
+uint32_t ringOverruns = 0;
 
 /* FLAC encoder instance (shared with app_freertos.c audio task) */
 flac_enc_t flacEncoder;
@@ -147,7 +155,7 @@ static void MX_ADF1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-#define FW_VERSION "0.7.2"
+#define FW_VERSION "0.7.6"
 
 /* Survey accessors from app_freertos.c */
 extern uint32_t configGetSurveyCount(void);
@@ -184,7 +192,6 @@ int getCharBle(uint32_t timeoutMs)
     return -1;
 }
 
-/* Send string to BLE module via USART3 */
 void bleSend(const char *s)
 {
     HAL_UART_Transmit(&husart3, (const uint8_t *)s, strlen(s), 100);
@@ -494,6 +501,7 @@ void printStatus(void)
     }
     printf("  Sample Rate: %lu Hz\r\n", (unsigned long)SAMPLE_RATE);
     printf("  DMA Buffer: %d x 32-bit\r\n", AUDIO_BUF_SIZE);
+    printf("  Ring Overruns: %lu\r\n", (unsigned long)ringOverruns);
 
     printf("Recording:\r\n");
     printf("  Format: %s\r\n", recFormat == REC_FMT_WAV ? "WAV" : "FLAC");
@@ -611,6 +619,8 @@ void startRecording(void)
     f_sync(&wavFile);
 
     totalDataBytes = 0;
+    extern uint32_t limiterClipCount;
+    limiterClipCount = 0;
     isRecording = 1;
     fileCounter++;
 
@@ -1270,12 +1280,28 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-/* ADF1 DMA callbacks — signal audio task via semaphore */
+/* ADF1 DMA callbacks — copy PCM data into ring buffer directly from ISR.
+ * This runs in ~5µs at 160MHz (512 shift+store ops) and guarantees data is
+ * captured before the circular DMA overwrites the buffer.  The previous
+ * approach (boolean flags + task-level copy) lost data when f_sync blocked
+ * the audio task for >10.67ms — the flags couldn't track multiple callbacks
+ * and the DMA buffer got overwritten before the task could read it. */
 void HAL_MDF_AcqHalfCpltCallback(MDF_HandleTypeDef *hmdf)
 {
     dmaCallbackCount++;
     dmaCallbackTick = HAL_GetTick();
-    halfComplete = 1;
+
+    uint32_t h = ringHead;
+    if ((h - ringTail) + (AUDIO_BUF_SIZE / 2) > PCM_RING_SIZE) {
+        ringOverruns++;
+    } else {
+        const int32_t *src = &audioBuffer[0];
+        for (int i = 0; i < AUDIO_BUF_SIZE / 2; i++) {
+            pcmRing[h & PCM_RING_MASK] = (int16_t)(src[i] >> 16);
+            h++;
+        }
+        ringHead = h;
+    }
     osSemaphoreRelease(audioDmaSemHandle);
 }
 
@@ -1283,7 +1309,18 @@ void HAL_MDF_AcqCpltCallback(MDF_HandleTypeDef *hmdf)
 {
     dmaCallbackCount++;
     dmaCallbackTick = HAL_GetTick();
-    fullComplete = 1;
+
+    uint32_t h = ringHead;
+    if ((h - ringTail) + (AUDIO_BUF_SIZE / 2) > PCM_RING_SIZE) {
+        ringOverruns++;
+    } else {
+        const int32_t *src = &audioBuffer[AUDIO_BUF_SIZE / 2];
+        for (int i = 0; i < AUDIO_BUF_SIZE / 2; i++) {
+            pcmRing[h & PCM_RING_MASK] = (int16_t)(src[i] >> 16);
+            h++;
+        }
+        ringHead = h;
+    }
     osSemaphoreRelease(audioDmaSemHandle);
 }
 

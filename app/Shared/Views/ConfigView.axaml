@@ -32,10 +32,31 @@
                     </StackPanel>
 
                     <StackPanel Spacing="4">
-                        <TextBlock Text="High-Pass Filter" Classes="DataLabel" />
-                        <ComboBox ItemsSource="{Binding HighPassOptions}"
-                                  SelectedIndex="{Binding SelectedHighPassIndex}"
-                                  HorizontalAlignment="Stretch" />
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Text="Low Cutoff (HPF)" Classes="DataLabel" />
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding BandPassLowHz, StringFormat={}{0} Hz}"
+                                       Classes="DataLabel" />
+                        </Grid>
+                        <Slider Value="{Binding BandPassLowHz}"
+                                Minimum="0" Maximum="1500"
+                                TickFrequency="10" IsSnapToTickEnabled="True" />
+                        <TextBlock Text="0 = disabled" Classes="DataLabel"
+                                   FontSize="11" Opacity="0.6" />
+                    </StackPanel>
+
+                    <StackPanel Spacing="4">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Text="High Cutoff (LPF)" Classes="DataLabel" />
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding BandPassHighHz, StringFormat={}{0} Hz}"
+                                       Classes="DataLabel" />
+                        </Grid>
+                        <Slider Value="{Binding BandPassHighHz}"
+                                Minimum="1000" Maximum="24000"
+                                TickFrequency="500" IsSnapToTickEnabled="True" />
+                        <TextBlock Text="0 = disabled" Classes="DataLabel"
+                                   FontSize="11" Opacity="0.6" />
                     </StackPanel>
 
                     <Grid ColumnDefinitions="*,12,*">
@@ -52,6 +73,75 @@
                                       HorizontalAlignment="Stretch" />
                         </StackPanel>
                     </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- Activity Filter -->
+            <Border Classes="CardPanel">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="Activity Filter" Classes="SectionHeader" />
+
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Mode" Classes="DataLabel" />
+                        <ComboBox ItemsSource="{Binding ActivityModeOptions}"
+                                  SelectedIndex="{Binding SelectedActivityModeIndex}"
+                                  HorizontalAlignment="Stretch" />
+                    </StackPanel>
+
+                    <!-- Live activity ratio (visible when mode > Off) -->
+                    <StackPanel Spacing="4"
+                                IsVisible="{Binding IsActivityFilterEnabled}">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Text="Activity Ratio" Classes="DataLabel" />
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding ActivityRatio, StringFormat={}{0}%}"
+                                       Classes="DataLabel" />
+                        </Grid>
+                        <ProgressBar Value="{Binding ActivityRatio}" Maximum="100"
+                                     Height="16" CornerRadius="4"
+                                     Foreground="#FF9800" />
+                    </StackPanel>
+
+                    <StackPanel Spacing="12"
+                                IsEnabled="{Binding IsActivityFilterEnabled}">
+                        <StackPanel Spacing="4">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Text="Min Activity %" Classes="DataLabel" />
+                                <TextBlock Grid.Column="1"
+                                           Text="{Binding ActivityMinPercent, StringFormat={}{0}%}"
+                                           Classes="DataLabel" />
+                            </Grid>
+                            <Slider Value="{Binding ActivityMinPercent}"
+                                    Minimum="1" Maximum="50"
+                                    TickFrequency="1" IsSnapToTickEnabled="True" />
+                            <TextBlock Text="Below = silence, skip" Classes="DataLabel"
+                                       FontSize="11" Opacity="0.6" />
+                        </StackPanel>
+
+                        <StackPanel Spacing="4">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Text="Max Activity %" Classes="DataLabel" />
+                                <TextBlock Grid.Column="1"
+                                           Text="{Binding ActivityMaxPercent, StringFormat={}{0}%}"
+                                           Classes="DataLabel" />
+                            </Grid>
+                            <Slider Value="{Binding ActivityMaxPercent}"
+                                    Minimum="50" Maximum="99"
+                                    TickFrequency="1" IsSnapToTickEnabled="True" />
+                            <TextBlock Text="Above = broadband noise, skip" Classes="DataLabel"
+                                       FontSize="11" Opacity="0.6" />
+                        </StackPanel>
+
+                        <StackPanel Spacing="4"
+                                    IsVisible="{Binding IsGateMode}">
+                            <TextBlock Text="Hold Time (sec)" Classes="DataLabel" />
+                            <NumericUpDown Value="{Binding ActivityHoldSeconds}"
+                                           Minimum="1" Maximum="30"
+                                           Increment="1" />
+                            <TextBlock Text="Delay before stopping in gate mode" Classes="DataLabel"
+                                       FontSize="11" Opacity="0.6" />
+                        </StackPanel>
+                    </StackPanel>
                 </StackPanel>
             </Border>
 

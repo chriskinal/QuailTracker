@@ -30,7 +30,8 @@ public record DeviceConfig
 
     // Audio Settings
     public GainLevel Gain { get; init; } = GainLevel.Medium;
-    public HighPassFilter HighPassFilter { get; init; } = HighPassFilter.Hz8;
+    public int BandPassLowHz { get; init; } = 150;
+    public int BandPassHighHz { get; init; } = 8000;
     public int SampleRate { get; init; } = 48000;
     public RecordingFormat Format { get; init; } = RecordingFormat.FLAC;
 
@@ -55,6 +56,12 @@ public record DeviceConfig
     public int LowBatteryThresholdPercent { get; init; } = 10;
     public bool AutoStopOnLowBattery { get; init; } = true;
 
+    // Activity Filter
+    public ActivityFilterMode ActivityMode { get; init; } = ActivityFilterMode.Off;
+    public int ActivityMinPercent { get; init; } = 5;
+    public int ActivityMaxPercent { get; init; } = 80;
+    public int ActivityHoldSeconds { get; init; } = 3;
+
     // Surveyed Position
     public double SurveyLatitude { get; init; }
     public double SurveyLongitude { get; init; }
@@ -71,11 +78,12 @@ public enum GainLevel
     High
 }
 
-public enum HighPassFilter
+public enum ActivityFilterMode
 {
-    Disabled,
-    Hz8,
-    Hz48
+    Off,
+    Monitor,
+    Squelch,
+    Gate
 }
 
 public enum RecordingFormat

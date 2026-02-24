@@ -17,7 +17,7 @@
                             <TextBlock Text="{Binding RecordingStatus}" Foreground="White" FontSize="12" />
                         </Border>
                     </Grid>
-                    <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto">
+                    <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto">
                         <StackPanel>
                             <TextBlock Text="File" Classes="DataLabel" />
                             <TextBlock Text="{Binding CurrentFile}" FontSize="14" TextTrimming="CharacterEllipsis" Foreground="White" />
@@ -33,6 +33,10 @@
                         <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,8,0,0">
                             <TextBlock Text="Overflows" Classes="DataLabel" />
                             <TextBlock Text="{Binding Overflows}" FontSize="14" Foreground="White" />
+                        </StackPanel>
+                        <StackPanel Grid.Row="2" Grid.ColumnSpan="2" Margin="0,8,0,0">
+                            <TextBlock Text="Limiter Clips" Classes="DataLabel" />
+                            <TextBlock Text="{Binding LimiterClips}" FontSize="14" Foreground="White" />
                         </StackPanel>
                     </Grid>
 

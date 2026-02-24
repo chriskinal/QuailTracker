@@ -34,7 +34,8 @@ public partial class ConfigViewModel : ObservableObject
 
     // Audio Settings
     [ObservableProperty] private int _selectedGainIndex = 2; // Medium
-    [ObservableProperty] private int _selectedHighPassIndex = 1; // 8 Hz
+    [ObservableProperty] private int _bandPassLowHz = 150;
+    [ObservableProperty] private int _bandPassHighHz = 8000;
     [ObservableProperty] private int _selectedSampleRateIndex = 0; // 48kHz
     [ObservableProperty] private int _selectedFormatIndex = 0; // FLAC
 
@@ -43,6 +44,21 @@ public partial class ConfigViewModel : ObservableObject
     [ObservableProperty] private int _amplitudeThreshold = -40;
     [ObservableProperty] private int _preTriggerSeconds = 2;
     [ObservableProperty] private int _postTriggerSeconds = 5;
+
+    // Activity Filter
+    [ObservableProperty] private int _selectedActivityModeIndex = 0;
+    [ObservableProperty] private int _activityMinPercent = 5;
+    [ObservableProperty] private int _activityMaxPercent = 80;
+    [ObservableProperty] private int _activityHoldSeconds = 3;
+    [ObservableProperty] private int _activityRatio = 0;
+    public bool IsActivityFilterEnabled => SelectedActivityModeIndex > 0;
+    public bool IsGateMode => SelectedActivityModeIndex == 3;
+
+    partial void OnSelectedActivityModeIndexChanged(int value)
+    {
+        OnPropertyChanged(nameof(IsActivityFilterEnabled));
+        OnPropertyChanged(nameof(IsGateMode));
+    }
 
     // Audio Level (live from StatusReceived)
     [ObservableProperty] private int _audioLevel = 0;
@@ -58,7 +74,7 @@ public partial class ConfigViewModel : ObservableObject
 
     // Options for ComboBoxes
     public string[] GainOptions { get; } = ["Low", "Low-Medium", "Medium", "Medium-High", "High"];
-    public string[] HighPassOptions { get; } = ["Disabled", "8 Hz", "48 Hz"];
+    public string[] ActivityModeOptions { get; } = ["Off", "Monitor", "Squelch", "Gate"];
     public string[] SampleRateOptions { get; } = ["48 kHz", "44.1 kHz", "32 kHz", "16 kHz"];
     public string[] FormatOptions { get; } = ["FLAC", "WAV"];
 
@@ -72,7 +88,7 @@ public partial class ConfigViewModel : ObservableObject
         PropertyChanged += (s, e) =>
         {
             if (e.PropertyName is not (nameof(HasChanges) or nameof(StatusMessage)
-                or nameof(AudioLevel) or nameof(PeakLevel)))
+                or nameof(AudioLevel) or nameof(PeakLevel) or nameof(ActivityRatio)))
             {
                 HasChanges = true;
             }
@@ -83,6 +99,7 @@ public partial class ConfigViewModel : ObservableObject
     {
         AudioLevel = Math.Clamp(status.PeakLevel * 100 / 32768, 0, 100);
         PeakLevel = $"{20 * Math.Log10(Math.Max(1, status.PeakLevel) / 32768.0):F0} dB";
+        ActivityRatio = status.ActivityRatio;
     }
 
     private void OnConfigReceived(object? sender, DeviceConfig config)
@@ -90,7 +107,8 @@ public partial class ConfigViewModel : ObservableObject
         StationId = config.StationId;
 
         SelectedGainIndex = (int)config.Gain;
-        SelectedHighPassIndex = (int)config.HighPassFilter;
+        BandPassLowHz = config.BandPassLowHz;
+        BandPassHighHz = config.BandPassHighHz;
         SelectedFormatIndex = (int)config.Format;
         SelectedSampleRateIndex = config.SampleRate switch
         {
@@ -108,6 +126,11 @@ public partial class ConfigViewModel : ObservableObject
 
         LowBatteryThreshold = config.LowBatteryThresholdPercent;
         AutoStopOnLowBattery = config.AutoStopOnLowBattery;
+
+        SelectedActivityModeIndex = (int)config.ActivityMode;
+        ActivityMinPercent = config.ActivityMinPercent;
+        ActivityMaxPercent = config.ActivityMaxPercent;
+        ActivityHoldSeconds = config.ActivityHoldSeconds;
 
         HasChanges = false;
         StatusMessage = "Configuration loaded";
@@ -129,7 +152,8 @@ public partial class ConfigViewModel : ObservableObject
         {
             StationId = StationId,
             Gain = (GainLevel)SelectedGainIndex,
-            HighPassFilter = (HighPassFilter)SelectedHighPassIndex,
+            BandPassLowHz = BandPassLowHz,
+            BandPassHighHz = BandPassHighHz,
             Format = (RecordingFormat)SelectedFormatIndex,
             SampleRate = SelectedSampleRateIndex switch
             {
@@ -144,7 +168,11 @@ public partial class ConfigViewModel : ObservableObject
             PreTriggerSeconds = PreTriggerSeconds,
             PostTriggerSeconds = PostTriggerSeconds,
             LowBatteryThresholdPercent = LowBatteryThreshold,
-            AutoStopOnLowBattery = AutoStopOnLowBattery
+            AutoStopOnLowBattery = AutoStopOnLowBattery,
+            ActivityMode = (ActivityFilterMode)SelectedActivityModeIndex,
+            ActivityMinPercent = ActivityMinPercent,
+            ActivityMaxPercent = ActivityMaxPercent,
+            ActivityHoldSeconds = ActivityHoldSeconds
         };
 
         var success = await _bluetoothService.SendConfigAsync(config);
@@ -165,7 +193,8 @@ public partial class ConfigViewModel : ObservableObject
     {
         StationId = "QT001";
         SelectedGainIndex = 2;
-        SelectedHighPassIndex = 1;
+        BandPassLowHz = 150;
+        BandPassHighHz = 8000;
         SelectedSampleRateIndex = 0;
         SelectedFormatIndex = 0;
         AmplitudeTriggerEnabled = false;
@@ -174,6 +203,10 @@ public partial class ConfigViewModel : ObservableObject
         PostTriggerSeconds = 5;
         LowBatteryThreshold = 10;
         AutoStopOnLowBattery = true;
+        SelectedActivityModeIndex = 0;
+        ActivityMinPercent = 5;
+        ActivityMaxPercent = 80;
+        ActivityHoldSeconds = 3;
 
         HasChanges = true;
         StatusMessage = "Reset to defaults";

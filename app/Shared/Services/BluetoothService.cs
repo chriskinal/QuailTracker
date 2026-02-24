@@ -59,6 +59,9 @@ public class BluetoothService : IBluetoothService
     private List<string>? _multiLines;
     private string? _multiLineType;
 
+    // Paginated status: stores lines from last completed $STATUS,N page
+    private List<string>? _lastMultiLines;
+
     private CancellationTokenSource? _scanCts;
 
     public ConnectionState CurrentState { get; private set; } = ConnectionState.Disconnected;
@@ -182,14 +185,29 @@ public class BluetoothService : IBluetoothService
     {
         if (CurrentState != ConnectionState.Connected) return;
 
-        try
+        var allLines = new List<string>();
+
+        for (var page = 0; page < 4; page++)
         {
-            await SendRawAsync("$STATUS");
-            // Response handled in multi-line parser → fires StatusReceived
+            try
+            {
+                await SendRawAsync($"$STATUS,{page}");
+                if (_lastMultiLines != null)
+                {
+                    allLines.AddRange(_lastMultiLines);
+                    _lastMultiLines = null;
+                }
+            }
+            catch
+            {
+                // Page timed out — continue with whatever we have
+            }
         }
-        catch
+
+        if (allLines.Count > 0)
         {
-            // Timeout or disconnect — caller sees no StatusReceived event
+            var status = ParseStatus(allLines);
+            StatusReceived?.Invoke(this, status);
         }
     }
 
@@ -216,7 +234,8 @@ public class BluetoothService : IBluetoothService
         {
             $"$SET,STATION,{config.StationId}",
             $"$SET,GAIN,{(int)config.Gain}",
-            $"$SET,HPF,{(int)config.HighPassFilter}",
+            $"$SET,BPFLOW,{config.BandPassLowHz}",
+            $"$SET,BPFHIGH,{config.BandPassHighHz}",
             $"$SET,FORMAT,{config.Format}",
             $"$SET,TRIG,{(config.AmplitudeTriggerEnabled ? 1 : 0)}",
             $"$SET,TRIGDB,{config.AmplitudeThresholdDb}",
@@ -224,6 +243,10 @@ public class BluetoothService : IBluetoothService
             $"$SET,TRIGPOST,{config.PostTriggerSeconds}",
             $"$SET,LOWBAT,{config.LowBatteryThresholdPercent}",
             $"$SET,AUTOSTOP,{(config.AutoStopOnLowBattery ? 1 : 0)}",
+            $"$SET,ACTMODE,{(int)config.ActivityMode}",
+            $"$SET,ACTMIN,{config.ActivityMinPercent}",
+            $"$SET,ACTMAX,{config.ActivityMaxPercent}",
+            $"$SET,ACTHOLD,{config.ActivityHoldSeconds}",
         };
 
         foreach (var cmd in commands)
@@ -431,11 +454,16 @@ public class BluetoothService : IBluetoothService
                 _multiLines = null;
                 _multiLineType = null;
 
-                if (type is "$STATUS" or "$STREAM")
+                if (type != null && type.StartsWith("$STATUS,", StringComparison.Ordinal))
+                {
+                    // Paginated status page — store lines for RequestStatusAsync to collect
+                    _lastMultiLines = lines;
+                    _responseTcs?.TrySetResult(type);
+                }
+                else if (type is "$STATUS" or "$STREAM")
                 {
                     var status = ParseStatus(lines);
                     StatusReceived?.Invoke(this, status);
-                    // Only complete TCS for solicited $STATUS, not unsolicited $STREAM
                     if (type == "$STATUS")
                         _responseTcs?.TrySetResult("$STATUS");
                 }
@@ -446,15 +474,43 @@ public class BluetoothService : IBluetoothService
                     _responseTcs?.TrySetResult("$CONFIG");
                 }
             }
+            else if (line is "$STATUS" or "$CONFIG" or "$STREAM" ||
+                     line.StartsWith("$STATUS,", StringComparison.Ordinal))
+            {
+                // New multi-line block started before previous $END arrived.
+                // The previous block was corrupted (dropped BLE packet) — discard
+                // it and start fresh.
+                _multiLineType = line;
+                _multiLines = new List<string>();
+            }
+            else if (line.StartsWith("$OK", StringComparison.Ordinal) ||
+                     line.StartsWith("$ERR", StringComparison.Ordinal) ||
+                     line.StartsWith("$PONG", StringComparison.Ordinal))
+            {
+                // Single-line response arrived while accumulating a multi-line
+                // block — the block's $END was lost. Discard the incomplete block
+                // and deliver the single-line response so commands don't hang.
+                _multiLines = null;
+                _multiLineType = null;
+                _responseTcs?.TrySetResult(line);
+            }
             else
             {
                 _multiLines.Add(line);
+                // Safety: if we've accumulated too many lines without $END,
+                // the block is corrupt — discard and reset.
+                if (_multiLines.Count > 60)
+                {
+                    _multiLines = null;
+                    _multiLineType = null;
+                }
             }
             return;
         }
 
         // Start of multi-line block
-        if (line is "$STATUS" or "$CONFIG" or "$STREAM")
+        if (line is "$STATUS" or "$CONFIG" or "$STREAM" ||
+            line.StartsWith("$STATUS,", StringComparison.Ordinal))
         {
             _multiLineType = line;
             _multiLines = new List<string>();
@@ -594,6 +650,8 @@ public class BluetoothService : IBluetoothService
             PeakLevel = GetInt(d, "aud_peak"),
             BufferUsed = GetInt(d, "aud_buf"),
             BufferCapacity = GetInt(d, "aud_cap"),
+            LimiterClipCount = (uint)GetInt(d, "aud_clip"),
+            ActivityRatio = GetInt(d, "act_ratio"),
 
             BleModuleReady = GetBool(d, "ble_ready"),
             BleModuleName = Get(d, "ble_name"),
@@ -618,7 +676,8 @@ public class BluetoothService : IBluetoothService
         {
             StationId = Get(d, "id", "QT001"),
             Gain = (GainLevel)GetInt(d, "gain"),
-            HighPassFilter = (HighPassFilter)GetInt(d, "hpf"),
+            BandPassLowHz = GetInt(d, "bpf_low", 150),
+            BandPassHighHz = GetInt(d, "bpf_high", 8000),
             SampleRate = GetInt(d, "rate", 48000),
             Format = Get(d, "fmt") == "WAV" ? RecordingFormat.WAV : RecordingFormat.FLAC,
             SunriseEnabled = GetBool(d, "sunrise"),
@@ -634,6 +693,11 @@ public class BluetoothService : IBluetoothService
             PostTriggerSeconds = GetInt(d, "trig_post", 5),
             LowBatteryThresholdPercent = GetInt(d, "lowbat", 10),
             AutoStopOnLowBattery = GetBool(d, "autostop"),
+
+            ActivityMode = (ActivityFilterMode)GetInt(d, "act_mode"),
+            ActivityMinPercent = GetInt(d, "act_min", 5),
+            ActivityMaxPercent = GetInt(d, "act_max", 80),
+            ActivityHoldSeconds = GetInt(d, "act_hold", 3),
 
             SurveyLatitude = GetLong(d, "survey_lat") / 1e7,
             SurveyLongitude = GetLong(d, "survey_lon") / 1e7,

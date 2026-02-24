@@ -38,6 +38,7 @@ public partial class OperationsViewModel : ObservableObject
     [ObservableProperty] private string _fileSize = "0 KB";
     [ObservableProperty] private string _bufferStatus = "0 / 0";
     [ObservableProperty] private string _overflows = "0";
+    [ObservableProperty] private string _limiterClips = "0";
 
     // SD Card
     [ObservableProperty] private string _sdStatus = "Not Mounted";
@@ -95,6 +96,7 @@ public partial class OperationsViewModel : ObservableObject
         FileSize = FormatFileSize(status.CurrentFileSize);
         BufferStatus = $"{status.BufferUsed} / {status.BufferCapacity}";
         Overflows = status.BufferOverflows.ToString();
+        LimiterClips = status.LimiterClipCount.ToString();
 
         // SD Card
         SdStatus = status.SdCardMounted ? "Mounted" : "Not Mounted";

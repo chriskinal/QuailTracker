@@ -68,6 +68,8 @@ public record DeviceStatus
     public int PeakLevel { get; init; }
     public int BufferUsed { get; init; }
     public int BufferCapacity { get; init; }
+    public uint LimiterClipCount { get; init; }
+    public int ActivityRatio { get; init; }
 
     // BLE Module
     public bool BleModuleReady { get; init; }
