@@ -124,12 +124,12 @@ typedef struct {
 #define AUDIO_BUF_SIZE 1024
 #define SAMPLE_RATE    48000
 
-extern int16_t pcmBuffer[];
+extern int32_t pcmBuffer[];
 
 /* PCM ring buffer — defined in main.c, written by DMA ISR callbacks */
 #define PCM_RING_SIZE  16384
 #define PCM_RING_MASK  (PCM_RING_SIZE - 1)
-extern int16_t pcmRing[];
+extern int32_t pcmRing[];
 extern volatile uint32_t ringHead;
 extern uint32_t ringTail;
 extern uint32_t ringOverruns;
@@ -147,12 +147,12 @@ extern flac_enc_t flacEncoder;
 extern char deviceStationId[16];
 
 /* Live audio peak level (updated by audioTask, read by bleTask for $STATUS) */
-static volatile int16_t audioPeakLevel = 0;
+static volatile int32_t audioPeakLevel = 0;
 
 /* Peak limiter: hard-clip samples above this threshold.
  * Prevents ADF Sinc4 saturation artifacts on loud close-range calls.
  * Set to ~85% of int16 max to leave headroom while preserving dynamics. */
-#define PEAK_LIMITER_THRESHOLD  28000
+#define PEAK_LIMITER_THRESHOLD  7168000
 uint32_t limiterClipCount = 0;  /* total clipped samples this recording */
 
 /* BLE status streaming: independent audio-level and recording streams */
@@ -438,7 +438,7 @@ void StartAudioTask(void *argument)
             int32_t out = (int32_t)(((int64_t)hpfAlpha * (hpfPrevOut + in - hpfPrevIn)) >> 16);
             hpfPrevIn = in;
             hpfPrevOut = out;
-            pcmBuffer[i] = (int16_t)out;
+            pcmBuffer[i] = out;
           }
         }
 
@@ -447,26 +447,26 @@ void StartAudioTask(void *argument)
           for (int i = 0; i < blockLen; i++) {
             int32_t in = pcmBuffer[i];
             lpfPrevOut = (int32_t)(((int64_t)lpfAlpha * in + (int64_t)(65536 - lpfAlpha) * lpfPrevOut) >> 16);
-            pcmBuffer[i] = (int16_t)lpfPrevOut;
+            pcmBuffer[i] = lpfPrevOut;
           }
         }
 
         /* Step 3: Peak limiter + peak level tracking */
-        int16_t blockPeak = 0;
+        int32_t blockPeak = 0;
         for (int i = 0; i < blockLen; i++) {
-          int16_t s = pcmBuffer[i];
+          int32_t s = pcmBuffer[i];
           if (s > PEAK_LIMITER_THRESHOLD) { s = PEAK_LIMITER_THRESHOLD; limiterClipCount++; }
           else if (s < -PEAK_LIMITER_THRESHOLD) { s = -PEAK_LIMITER_THRESHOLD; limiterClipCount++; }
           pcmBuffer[i] = s;
-          int16_t a = s < 0 ? -s : s;
+          int32_t a = s < 0 ? -s : s;
           if (a > blockPeak) blockPeak = a;
         }
         if (blockPeak > audioPeakLevel) audioPeakLevel = blockPeak;
 
         /* Step 4: Activity filter analysis */
         if (cfg.activityMode > 0) {
-          int32_t blockAbsSum = 0;
-          int32_t blockDevSum = 0;
+          int64_t blockAbsSum = 0;
+          int64_t blockDevSum = 0;
           uint32_t blockAbove = 0;
           int32_t threshold = actMean + 2 * actMad;
           for (int i = 0; i < blockLen; i++) {
@@ -525,14 +525,22 @@ void StartAudioTask(void *argument)
 
         /* Step 5: Squelch — zero out uninteresting audio */
         if (cfg.activityMode == 2 && actSquelch) {
-          memset(pcmBuffer, 0, blockLen * sizeof(int16_t));
+          memset(pcmBuffer, 0, blockLen * sizeof(int32_t));
         }
 
         /* Step 6: Encode + write */
         if (recFormat == REC_FMT_WAV) {
+          /* Pack int32 samples into 24-bit LE (3 bytes/sample) for WAV */
+          uint8_t packed[512 * 3];
+          for (int i = 0; i < blockLen; i++) {
+            uint32_t v = (uint32_t)pcmBuffer[i];
+            packed[i * 3 + 0] = (uint8_t)(v);
+            packed[i * 3 + 1] = (uint8_t)(v >> 8);
+            packed[i * 3 + 2] = (uint8_t)(v >> 16);
+          }
           osMutexAcquire(fileMtxHandle, osWaitForever);
           UINT bw;
-          FRESULT fres = f_write(&wavFile, pcmBuffer, blockLen * sizeof(int16_t), &bw);
+          FRESULT fres = f_write(&wavFile, packed, blockLen * 3, &bw);
           if (fres != FR_OK) {
             printf("f_write FAILED: %d at %lu bytes\r\n", fres, (unsigned long)totalDataBytes);
             f_close(&wavFile);
@@ -541,7 +549,7 @@ void StartAudioTask(void *argument)
           totalDataBytes += bw;
 
           /* Sync every ~1 second */
-          if ((totalDataBytes % (SAMPLE_RATE * 2)) < (blockLen * sizeof(int16_t))) {
+          if ((totalDataBytes % (SAMPLE_RATE * 3)) < (uint32_t)(blockLen * 3)) {
             f_sync(&wavFile);
           }
           osMutexRelease(fileMtxHandle);
@@ -576,17 +584,17 @@ void StartAudioTask(void *argument)
       while ((ringHead - ringTail) >= (AUDIO_BUF_SIZE / 2)) {
         const int blockLen = AUDIO_BUF_SIZE / 2;
         uint32_t t = ringTail;
-        int16_t blockPeak = 0;
+        int32_t blockPeak = 0;
         for (int i = 0; i < blockLen; i++) {
-          int16_t raw = pcmRing[t & PCM_RING_MASK];
+          int32_t raw = pcmRing[t & PCM_RING_MASK];
           t++;
           if (alpha > 0) {
             int32_t out = (int32_t)(((int64_t)alpha * (monHpfPrevOut + raw - monHpfPrevIn)) >> 16);
             monHpfPrevIn = raw;
             monHpfPrevOut = out;
-            raw = (int16_t)out;
+            raw = out;
           }
-          int16_t a = raw < 0 ? -raw : raw;
+          int32_t a = raw < 0 ? -raw : raw;
           if (a > blockPeak) blockPeak = a;
         }
         ringTail = t;
@@ -1559,11 +1567,11 @@ static void bleHandleStatusEx(const char *tag)
     bleSendLine("rec_file=%s", recFilename);
     bleSendLine("rec_bytes=%lu", (unsigned long)totalDataBytes);
     bleSendLine("rec_dur=%lu",
-                (unsigned long)(isRecording ? totalDataBytes / (SAMPLE_RATE * 2) : 0));
+                (unsigned long)(isRecording ? totalDataBytes / (SAMPLE_RATE * 3) : 0));
     bleSendLine("rec_ovf=%lu", (unsigned long)ringOverruns);
 
     /* Audio buffer stats — read and reset peak */
-    int16_t peak = audioPeakLevel;
+    int32_t peak = audioPeakLevel;
     audioPeakLevel = 0;
     bleSendLine("aud_peak=%d", (int)peak);
     bleSendLine("aud_buf=%lu", (unsigned long)(ringHead - ringTail));
@@ -1678,12 +1686,12 @@ static void bleHandleStatusPage(int page)
         bleSendLine("rec_file=%s", recFilename);
         bleSendLine("rec_bytes=%lu", (unsigned long)totalDataBytes);
         bleSendLine("rec_dur=%lu",
-                    (unsigned long)(isRecording ? totalDataBytes / (SAMPLE_RATE * 2) : 0));
+                    (unsigned long)(isRecording ? totalDataBytes / (SAMPLE_RATE * 3) : 0));
         bleSendLine("rec_ovf=%lu", (unsigned long)ringOverruns);
         break;
 
     case 3: { /* Audio + survey */
-        int16_t peak = audioPeakLevel;
+        int32_t peak = audioPeakLevel;
         audioPeakLevel = 0;
         bleSendLine("aud_peak=%d", (int)peak);
         bleSendLine("aud_buf=%lu", (unsigned long)(ringHead - ringTail));
@@ -1713,7 +1721,7 @@ static void bleHandleStatusPage(int page)
 
 static void bleHandleStreamAudio(void)
 {
-    int16_t peak = audioPeakLevel;
+    int32_t peak = audioPeakLevel;
     audioPeakLevel = 0;
 
     bleSendLine("$STREAM");

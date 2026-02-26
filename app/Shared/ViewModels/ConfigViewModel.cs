@@ -110,8 +110,8 @@ public partial class ConfigViewModel : ObservableObject
 
     private void OnStatusReceived(object? sender, DeviceStatus status)
     {
-        AudioLevel = Math.Clamp(status.PeakLevel * 100 / 32768, 0, 100);
-        PeakLevel = $"{20 * Math.Log10(Math.Max(1, status.PeakLevel) / 32768.0):F0} dB";
+        AudioLevel = Math.Clamp(status.PeakLevel * 100 / 8388608, 0, 100);
+        PeakLevel = $"{20 * Math.Log10(Math.Max(1, status.PeakLevel) / 8388608.0):F0} dB";
         ActivityRatio = status.ActivityRatio;
     }
 

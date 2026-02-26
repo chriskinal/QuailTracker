@@ -65,15 +65,15 @@ SPI_HandleTypeDef hspi1;
 
 int32_t audioBuffer[AUDIO_BUF_SIZE];
 
-/* Conversion buffer: 512 samples -> 512 int16 samples = 1024 bytes */
-int16_t pcmBuffer[AUDIO_BUF_SIZE / 2];
+/* Conversion buffer: 512 samples -> 512 int32 samples (24-bit in int32) */
+int32_t pcmBuffer[AUDIO_BUF_SIZE / 2];
 
 /* PCM ring buffer — written by DMA ISR, read by audio task.
  * Must be in main.c so ISR callbacks can access it directly.
  * Power-of-2 size for fast masking.  16384 samples = 341ms at 48kHz. */
 #define PCM_RING_SIZE  16384
 #define PCM_RING_MASK  (PCM_RING_SIZE - 1)
-int16_t pcmRing[PCM_RING_SIZE];
+int32_t pcmRing[PCM_RING_SIZE];
 volatile uint32_t ringHead = 0;   /* ISR writes here */
 uint32_t ringTail = 0;            /* audio task reads here */
 uint32_t ringOverruns = 0;
@@ -200,7 +200,7 @@ void WAV_WriteHeader(FIL *fp, uint32_t sampleRate, uint32_t dataSize)
     uint8_t hdr[44];
     uint32_t fileSize = dataSize + 36;
     uint16_t channels = 1;
-    uint16_t bitsPerSample = 16;
+    uint16_t bitsPerSample = 24;
     uint32_t byteRate = sampleRate * channels * bitsPerSample / 8;
     uint16_t blockAlign = channels * bitsPerSample / 8;
 
@@ -505,7 +505,7 @@ void printStatus(void)
     printf("  Format: %s\r\n", recFormat == REC_FMT_WAV ? "WAV" : "FLAC");
     printf("  Active: %s\r\n", isRecording ? "Yes" : "No");
     if (isRecording) {
-        uint32_t seconds = totalDataBytes / (SAMPLE_RATE * 2);
+        uint32_t seconds = totalDataBytes / (SAMPLE_RATE * 3);
         printf("  Duration: %lus\r\n", (unsigned long)seconds);
         printf("  Size: %lu bytes\r\n", (unsigned long)totalDataBytes);
     }
@@ -651,7 +651,7 @@ void stopRecording(void)
 
         f_close(&wavFile);
 
-        uint32_t seconds = totalDataBytes / (SAMPLE_RATE * 2);
+        uint32_t seconds = totalDataBytes / (SAMPLE_RATE * 3);
         printf("Recording stopped: %lu bytes (%lus)\r\n",
             (unsigned long)totalDataBytes, (unsigned long)seconds);
     } else {
@@ -1295,7 +1295,7 @@ void HAL_MDF_AcqHalfCpltCallback(MDF_HandleTypeDef *hmdf)
     } else {
         const int32_t *src = &audioBuffer[0];
         for (int i = 0; i < AUDIO_BUF_SIZE / 2; i++) {
-            pcmRing[h & PCM_RING_MASK] = (int16_t)(src[i] >> 16);
+            pcmRing[h & PCM_RING_MASK] = (int32_t)(src[i] >> 8);
             h++;
         }
         ringHead = h;
@@ -1314,7 +1314,7 @@ void HAL_MDF_AcqCpltCallback(MDF_HandleTypeDef *hmdf)
     } else {
         const int32_t *src = &audioBuffer[AUDIO_BUF_SIZE / 2];
         for (int i = 0; i < AUDIO_BUF_SIZE / 2; i++) {
-            pcmRing[h & PCM_RING_MASK] = (int16_t)(src[i] >> 16);
+            pcmRing[h & PCM_RING_MASK] = (int32_t)(src[i] >> 8);
             h++;
         }
         ringHead = h;

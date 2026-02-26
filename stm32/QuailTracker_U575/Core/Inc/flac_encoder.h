@@ -10,15 +10,15 @@
 #include <stdint.h>
 
 #define FLAC_BLOCK_SIZE       4096
-#define FLAC_OUT_BUF_SIZE     12288  /* worst-case encoded frame */
+#define FLAC_OUT_BUF_SIZE     16384  /* worst-case encoded frame (verbatim 24-bit: 4096×3 + overhead) */
 #define FLAC_SAMPLE_RATE      48000
-#define FLAC_BITS_PER_SAMPLE  16
+#define FLAC_BITS_PER_SAMPLE  24
 #define FLAC_CHANNELS         1
 #define FLAC_HEADER_SIZE      42     /* "fLaC" + STREAMINFO block */
 
 typedef struct {
     /* PCM accumulation buffer */
-    int16_t  blockBuf[FLAC_BLOCK_SIZE];
+    int32_t  blockBuf[FLAC_BLOCK_SIZE];
 
     /* Encoded frame output buffer */
     uint8_t  outBuf[FLAC_OUT_BUF_SIZE];
@@ -41,7 +41,7 @@ uint32_t flac_enc_write_header(flac_enc_t *e, uint8_t *out);
 
 /* Feed PCM samples. Returns encoded bytes in e->outBuf when a block is
  * complete (caller must write to file), or 0 if still accumulating. */
-uint32_t flac_enc_process(flac_enc_t *e, const int16_t *pcm, uint32_t count);
+uint32_t flac_enc_process(flac_enc_t *e, const int32_t *pcm, uint32_t count);
 
 /* Encode remaining partial block. Returns bytes in e->outBuf, or 0. */
 uint32_t flac_enc_flush(flac_enc_t *e);

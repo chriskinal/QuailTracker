@@ -164,7 +164,7 @@ static void bw_align_byte(bitwriter_t *bw)
  * Fixed Predictor & Rice Parameter
  * ================================================================ */
 
-static int32_t compute_residual(const int16_t *s, uint32_t i, uint32_t order)
+static int32_t compute_residual(const int32_t *s, uint32_t i, uint32_t order)
 {
     switch (order) {
     case 0: return s[i];
@@ -177,7 +177,7 @@ static int32_t compute_residual(const int16_t *s, uint32_t i, uint32_t order)
 }
 
 /* Sum of zigzag-folded residuals — proxy for coding cost */
-static uint64_t compute_fixed_cost(const int16_t *s, uint32_t n, uint32_t order)
+static uint64_t compute_fixed_cost(const int32_t *s, uint32_t n, uint32_t order)
 {
     uint64_t sum = 0;
     for (uint32_t i = order; i < n; i++) {
@@ -249,8 +249,8 @@ static uint32_t encode_frame(flac_enc_t *e, uint32_t blockSize)
     /* Channel assignment (4 bits): 0 = mono */
     bw_write_bits(&bw, 4, 0);
 
-    /* Sample size (3 bits): 4 = 16-bit */
-    bw_write_bits(&bw, 3, 4);
+    /* Sample size (3 bits): 6 = 24-bit */
+    bw_write_bits(&bw, 3, 6);
 
     /* Reserved (1 bit) */
     bw_write_bits(&bw, 1, 0);
@@ -275,16 +275,16 @@ static uint32_t encode_frame(flac_enc_t *e, uint32_t blockSize)
         bw_write_bits(&bw, 1, 0);
 
         for (uint32_t i = 0; i < blockSize; i++)
-            bw_write_bits(&bw, 16, (uint32_t)(e->blockBuf[i] & 0xFFFF));
+            bw_write_bits(&bw, 24, (uint32_t)(e->blockBuf[i] & 0xFFFFFF));
     } else {
         /* Subframe header: pad(1) + type FIXED order N = 001|N(6) + wasted=0(1) */
         bw_write_bits(&bw, 1, 0);
         bw_write_bits(&bw, 6, 0x08 | bestOrder);  /* FIXED: 001xxx */
         bw_write_bits(&bw, 1, 0);
 
-        /* Warm-up samples (unencoded, 16 bits each) */
+        /* Warm-up samples (unencoded, 24 bits each) */
         for (uint32_t i = 0; i < bestOrder; i++)
-            bw_write_bits(&bw, 16, (uint32_t)(e->blockBuf[i] & 0xFFFF));
+            bw_write_bits(&bw, 24, (uint32_t)(e->blockBuf[i] & 0xFFFFFF));
 
         /* Residual coding: method 0 (4-bit Rice params), partition order 0 */
         bw_write_bits(&bw, 2, 0);     /* coding method */
@@ -370,11 +370,11 @@ static void write_streaminfo(uint8_t *out,
     out[17] = (uint8_t)(maxFrame);
 
     /* Packed: sample_rate(20) | channels-1(3) | bps-1(5) | total_samples(36)
-     * 48000=0x0BB80, ch-1=0, bps-1=15=0xF */
+     * 48000=0x0BB80, ch-1=0, bps-1=23=0x17 */
     out[18] = 0x0B;                                       /* sr[19:12] */
     out[19] = 0xB8;                                       /* sr[11:4]  */
-    out[20] = 0x00;                                       /* sr[3:0]=0 | ch[2:0]=0 | bps-1[4]=0 */
-    out[21] = (uint8_t)(0xF0 | ((totalSamples >> 32) & 0x0F)); /* bps[3:0]=F | ts[35:32] */
+    out[20] = 0x01;                                       /* sr[3:0]=0 | ch[2:0]=0 | bps-1[4]=1 */
+    out[21] = (uint8_t)(0x70 | ((totalSamples >> 32) & 0x0F)); /* bps[3:0]=7 | ts[35:32] */
     out[22] = (uint8_t)(totalSamples >> 24);
     out[23] = (uint8_t)(totalSamples >> 16);
     out[24] = (uint8_t)(totalSamples >> 8);
@@ -404,9 +404,9 @@ uint32_t flac_enc_write_header(flac_enc_t *e, uint8_t *out)
     return FLAC_HEADER_SIZE;
 }
 
-uint32_t flac_enc_process(flac_enc_t *e, const int16_t *pcm, uint32_t count)
+uint32_t flac_enc_process(flac_enc_t *e, const int32_t *pcm, uint32_t count)
 {
-    memcpy(&e->blockBuf[e->blockPos], pcm, count * sizeof(int16_t));
+    memcpy(&e->blockBuf[e->blockPos], pcm, count * sizeof(int32_t));
     e->blockPos += count;
 
     if (e->blockPos >= FLAC_BLOCK_SIZE)
