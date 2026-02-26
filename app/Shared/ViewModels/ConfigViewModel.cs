@@ -33,7 +33,7 @@ public partial class ConfigViewModel : ObservableObject
     [ObservableProperty] private string _stationId = "QT001";
 
     // Audio Settings
-    [ObservableProperty] private int _selectedGainIndex = 2; // Medium
+    [ObservableProperty] private int _selectedGainIndex = 2; // 6 dB
     [ObservableProperty] private int _bandPassLowHz = 150;
     [ObservableProperty] private int _bandPassHighHz = 8000;
     [ObservableProperty] private int _selectedSampleRateIndex = 0; // 48kHz
@@ -85,7 +85,7 @@ public partial class ConfigViewModel : ObservableObject
     [ObservableProperty] private string _statusMessage = "";
 
     // Options for ComboBoxes
-    public string[] GainOptions { get; } = ["Low", "Low-Medium", "Medium", "Medium-High", "High"];
+    public string[] GainOptions { get; } = ["0 dB", "3 dB", "6 dB", "9 dB", "12 dB", "15 dB", "18 dB", "21 dB", "24 dB"];
     public string[] ActivityModeOptions { get; } = ["Off", "Monitor", "Squelch", "Gate"];
     public string[] SampleRateOptions { get; } = ["48 kHz", "44.1 kHz", "32 kHz", "16 kHz"];
     public string[] FormatOptions { get; } = ["FLAC", "WAV"];
@@ -119,7 +119,7 @@ public partial class ConfigViewModel : ObservableObject
     {
         StationId = config.StationId;
 
-        SelectedGainIndex = (int)config.Gain;
+        SelectedGainIndex = config.GainDb / 3;
         BandPassLowHz = config.BandPassLowHz;
         BandPassHighHz = config.BandPassHighHz;
         SelectedFormatIndex = (int)config.Format;
@@ -164,7 +164,7 @@ public partial class ConfigViewModel : ObservableObject
         var config = new DeviceConfig
         {
             StationId = StationId,
-            Gain = (GainLevel)SelectedGainIndex,
+            GainDb = SelectedGainIndex * 3,
             BandPassLowHz = BandPassLowHz,
             BandPassHighHz = BandPassHighHz,
             Format = (RecordingFormat)SelectedFormatIndex,
@@ -205,7 +205,7 @@ public partial class ConfigViewModel : ObservableObject
     private void ResetToDefaults()
     {
         StationId = "QT001";
-        SelectedGainIndex = 2;
+        SelectedGainIndex = 2; // 6 dB
         BandPassLowHz = 150;
         BandPassHighHz = 8000;
         SelectedSampleRateIndex = 0;

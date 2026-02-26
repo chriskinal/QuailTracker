@@ -46,14 +46,14 @@ typedef struct {
 
 /* ---- Flash-persisted device configuration ---- */
 #define CONFIG_MAGIC      0x51544346   /* "QTCF" */
-#define CONFIG_VERSION    5
+#define CONFIG_VERSION    6
 #define CONFIG_FLASH_ADDR 0x081FE000   /* Bank 2, page 127 (last 8KB page of 2MB) */
 
 typedef struct __attribute__((packed, aligned(16))) {
     uint32_t magic;
     uint8_t  version;
     char     stationId[16];   /* null-terminated */
-    uint8_t  gain;            /* 0-4 */
+    uint8_t  gain;            /* 0-24 dB in 3dB steps */
     uint16_t bpfLow;          /* HPF cutoff Hz, 0=off, default 150 */
     uint16_t bpfHigh;         /* LPF cutoff Hz, 0=off, default 8000 */
     uint8_t  recFormat;       /* 0=FLAC, 1=WAV */
@@ -1155,7 +1155,7 @@ static void StartBleTask(void *argument)
 
     /* Apply persisted config to runtime state */
     extern MDF_FilterConfigTypeDef AdfFilterConfig0;
-    AdfFilterConfig0.Gain = (int32_t)cfg.gain * 6;  /* gain index 0-4 → 0,6,12,18,24 */
+    AdfFilterConfig0.Gain = (int32_t)cfg.gain;  /* raw dB value 0-24 */
     recFormat = cfg.recFormat;
 
     printf("BLE: Config loaded (station=%s, gain=%d, fmt=%s)\r\n",
@@ -1296,7 +1296,7 @@ static void configSetDefaults(device_config_t *c)
     c->magic = CONFIG_MAGIC;
     c->version = CONFIG_VERSION;
     strncpy(c->stationId, "QT001", sizeof(c->stationId));
-    c->gain = 2;
+    c->gain = 6;  /* 6 dB default */
     c->bpfLow = 150;
     c->bpfHigh = 8000;
     c->recFormat = REC_FMT_FLAC;
@@ -1862,14 +1862,13 @@ static void bleHandleSet(const char *args)
         strncpy(cfg.stationId, val, sizeof(cfg.stationId));
         strncpy(deviceStationId, cfg.stationId, sizeof(deviceStationId));
     } else if (strcmp(key, "GAIN") == 0) {
-        int v = val[0] - '0';
-        if (v < 0 || v > 4) { bleSendLine("$ERR,BADARG"); return; }
+        int v = atoi(val);
+        if (v < 0 || v > 24 || (v % 3) != 0) { bleSendLine("$ERR,BADARG"); return; }
         cfg.gain = (uint8_t)v;
         /* Apply to ADF filter immediately via HAL (writes hardware register) */
         extern MDF_HandleTypeDef AdfHandle0;
-        int32_t newGain = (int32_t)v * 6;
-        HAL_MDF_SetGain(&AdfHandle0, newGain);
-        printf("BLE: ADF gain set to %ld\r\n", (long)newGain);
+        HAL_MDF_SetGain(&AdfHandle0, (int32_t)v);
+        printf("BLE: ADF gain set to %d dB\r\n", v);
     } else if (strcmp(key, "BPFLOW") == 0) {
         int v = atoi(val);
         if (v < 0 || v > 1500) { bleSendLine("$ERR,BADARG"); return; }
@@ -2402,7 +2401,7 @@ static void bleHandleCommand(const char *cmd)
         bleSendLine("$SD,EJECT          - eject SD card");
         bleSendLine("$SD,FORMAT         - format SD card");
         bleSendLine("$SET,STATION,<id>  - set station ID");
-        bleSendLine("$SET,GAIN,<0-4>    - set mic gain");
+        bleSendLine("$SET,GAIN,<0-24>   - set mic gain (3dB steps)");
         bleSendLine("$SET,BPFLOW,<0-1500> - set HPF cutoff Hz");
         bleSendLine("$SET,BPFHIGH,<0-24000> - set LPF cutoff Hz");
         bleSendLine("$SET,FORMAT,<WAV|FLAC>");

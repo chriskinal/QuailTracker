@@ -29,7 +29,7 @@ public record DeviceConfig
     public string StationId { get; init; } = "QT001";
 
     // Audio Settings
-    public GainLevel Gain { get; init; } = GainLevel.Medium;
+    public int GainDb { get; init; } = 6;
     public int BandPassLowHz { get; init; } = 150;
     public int BandPassHighHz { get; init; } = 8000;
     public int SampleRate { get; init; } = 48000;
@@ -67,15 +67,6 @@ public record DeviceConfig
     public double SurveyLongitude { get; init; }
     public float SurveyAltitude { get; init; }
     public int SurveyCount { get; init; }
-}
-
-public enum GainLevel
-{
-    Low,
-    LowMedium,
-    Medium,
-    MediumHigh,
-    High
 }
 
 public enum ActivityFilterMode

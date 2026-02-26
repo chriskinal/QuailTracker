@@ -239,7 +239,7 @@ public class BluetoothService : IBluetoothService
         var commands = new[]
         {
             $"$SET,STATION,{config.StationId}",
-            $"$SET,GAIN,{(int)config.Gain}",
+            $"$SET,GAIN,{config.GainDb}",
             $"$SET,BPFLOW,{config.BandPassLowHz}",
             $"$SET,BPFHIGH,{config.BandPassHighHz}",
             $"$SET,FORMAT,{config.Format}",
@@ -714,7 +714,7 @@ public class BluetoothService : IBluetoothService
         return new DeviceConfig
         {
             StationId = Get(d, "id", "QT001"),
-            Gain = (GainLevel)GetInt(d, "gain"),
+            GainDb = GetInt(d, "gain"),
             BandPassLowHz = GetInt(d, "bpf_low", 150),
             BandPassHighHz = GetInt(d, "bpf_high", 8000),
             SampleRate = GetInt(d, "rate", 48000),
