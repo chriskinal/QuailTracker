@@ -147,6 +147,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
                 <!-- Settings Row -->
                 <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="16">
+                    <CheckBox Content="Noise Reduction"
+                              IsChecked="{Binding NoiseReductionEnabled}"
+                              VerticalAlignment="Center" />
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <TextBlock Text="Max Freq:" VerticalAlignment="Center" />
                         <Slider Value="{Binding MaxFrequencyHz}"

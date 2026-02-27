@@ -85,6 +85,57 @@ public class AudioPlaybackService : IDisposable
         CleanupTemp();
     }
 
+    public async Task PlaySamplesAsync(
+        float[] samples, int sampleRate, CancellationToken ct = default)
+    {
+        Stop();
+
+        _tempFile = Path.Combine(Path.GetTempPath(), $"qt_play_{Guid.NewGuid():N}.wav");
+        await Task.Run(() => WriteSamplesToWav(samples, sampleRate, _tempFile), ct);
+
+        ct.ThrowIfCancellationRequested();
+
+        var psi = new ProcessStartInfo
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+
+        if (OperatingSystem.IsMacOS())
+        {
+            psi.FileName = "afplay";
+            psi.Arguments = $"\"{_tempFile}\"";
+        }
+        else if (OperatingSystem.IsWindows())
+        {
+            psi.FileName = "powershell";
+            psi.Arguments = $"-NoProfile -c \"(New-Object Media.SoundPlayer '{_tempFile}').PlaySync()\"";
+        }
+        else
+        {
+            psi.FileName = "ffplay";
+            psi.Arguments = $"-nodisp -autoexit \"{_tempFile}\"";
+        }
+
+        _process = Process.Start(psi);
+
+        if (_process != null)
+        {
+            try
+            {
+                await _process.WaitForExitAsync(ct);
+            }
+            catch (OperationCanceledException)
+            {
+                // Stop was called or token was cancelled
+            }
+        }
+
+        CleanupTemp();
+    }
+
     public void Stop()
     {
         try
@@ -122,6 +173,14 @@ public class AudioPlaybackService : IDisposable
             // Non-critical cleanup
         }
         _tempFile = null;
+    }
+
+    private static void WriteSamplesToWav(float[] samples, int sampleRate, string outFile)
+    {
+        var outFormat = new WaveFormat(sampleRate, 16, 1);
+        using var writer = new WaveFileWriter(outFile, outFormat);
+        for (int i = 0; i < samples.Length; i++)
+            writer.WriteSample(samples[i]);
     }
 
     private static void WriteSegmentToWav(

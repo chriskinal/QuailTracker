@@ -85,11 +85,14 @@ public partial class MainWindowViewModel : ObservableObject
     {
         ConfigService = configService;
 
+        var noiseReduction = new NoiseReductionService();
+
         _singleAnalysisViewModel = new SingleAnalysisViewModel(
             audioFileService,
             birdNetService,
             new SpectrogramService(),
             new AudioPlaybackService(),
+            noiseReduction,
             configService,
             appState,
             status => StatusMessage = status);

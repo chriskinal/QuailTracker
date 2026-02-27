@@ -79,6 +79,7 @@ public interface IBirdNetService : IDisposable
         double sensitivity = 1.0,
         int mergeCount = 1,
         IProgress<(int segment, int total)>? progress = null,
+        Func<float[], float[]>? preprocessor = null,
         CancellationToken ct = default);
 
     /// <summary>

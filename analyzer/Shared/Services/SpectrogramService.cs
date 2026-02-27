@@ -41,19 +41,25 @@ public class SpectrogramService
     private static readonly int[] GridlineFrequencies =
         [1000, 2000, 4000, 6000, 8000, 12000, 16000, 20000];
 
+    public NoiseReductionService? NoiseReduction { get; set; }
+
     public Task<WriteableBitmap> GenerateAsync(
         string filePath, int imageWidth, int imageHeight,
-        double maxFreqHz = 0, CancellationToken ct = default)
+        double maxFreqHz = 0, bool noiseReduction = false,
+        CancellationToken ct = default)
     {
-        return Task.Run(() => Generate(filePath, imageWidth, imageHeight, maxFreqHz, ct), ct);
+        return Task.Run(() => Generate(filePath, imageWidth, imageHeight, maxFreqHz, noiseReduction, ct), ct);
     }
 
     private WriteableBitmap Generate(string filePath, int imageWidth, int imageHeight,
-        double maxFreqHz, CancellationToken ct)
+        double maxFreqHz, bool noiseReduction, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
 
         var (samples, sampleRate) = ReadAudioMono(filePath);
+
+        if (noiseReduction && NoiseReduction is { HasProfile: true })
+            samples = NoiseReduction.Apply(samples);
 
         int totalFrames = Math.Max(1, (samples.Length - FftSize) / HopSize + 1);
         int numBins = FftSize / 2 + 1;
@@ -180,7 +186,7 @@ public class SpectrogramService
         return bitmap;
     }
 
-    private static (float[] samples, int sampleRate) ReadAudioMono(string filePath)
+    internal static (float[] samples, int sampleRate) ReadAudioMono(string filePath)
     {
         using var reader = OpenAudioReader(filePath);
         var format = reader.WaveFormat;

@@ -37,6 +37,7 @@ public partial class SingleAnalysisViewModel : ObservableObject
     private readonly IBirdNetService _birdNetService;
     private readonly SpectrogramService _spectrogramService;
     private readonly AudioPlaybackService _playbackService;
+    private readonly NoiseReductionService _noiseReduction;
     private readonly ConfigService _configService;
     private readonly AppStateService _appState;
     private readonly Action<string> _setStatus;
@@ -93,6 +94,9 @@ public partial class SingleAnalysisViewModel : ObservableObject
     private double _maxFrequencyHz = 24000;
 
     [ObservableProperty]
+    private bool _noiseReductionEnabled;
+
+    [ObservableProperty]
     private bool _isPlaying;
 
     [ObservableProperty]
@@ -108,6 +112,7 @@ public partial class SingleAnalysisViewModel : ObservableObject
         IBirdNetService birdNetService,
         SpectrogramService spectrogramService,
         AudioPlaybackService playbackService,
+        NoiseReductionService noiseReduction,
         ConfigService configService,
         AppStateService appState,
         Action<string> setStatus)
@@ -116,6 +121,8 @@ public partial class SingleAnalysisViewModel : ObservableObject
         _birdNetService = birdNetService;
         _spectrogramService = spectrogramService;
         _playbackService = playbackService;
+        _noiseReduction = noiseReduction;
+        _spectrogramService.NoiseReduction = noiseReduction;
         _configService = configService;
         _appState = appState;
         _setStatus = setStatus;
@@ -180,6 +187,14 @@ public partial class SingleAnalysisViewModel : ObservableObject
             MaxFrequencyHz = _loadedFile.SampleRate / 2.0;
             IsFileLoaded = true;
 
+            // Estimate noise profile for noise reduction
+            _setStatus("Estimating noise profile...");
+            await Task.Run(() =>
+            {
+                var (samples, sr) = SpectrogramService.ReadAudioMono(path);
+                _noiseReduction.EstimateNoiseProfile(samples, sr);
+            });
+
             if (GenerateSpectrogram)
             {
                 _setStatus("Generating spectrogram...");
@@ -188,7 +203,7 @@ public partial class SingleAnalysisViewModel : ObservableObject
                 const int imageHeight = 500;
 
                 SpectrogramImage = await _spectrogramService.GenerateAsync(
-                    path, imageWidth, imageHeight, MaxFrequencyHz);
+                    path, imageWidth, imageHeight, MaxFrequencyHz, NoiseReductionEnabled);
             }
             else
             {
@@ -261,7 +276,7 @@ public partial class SingleAnalysisViewModel : ObservableObject
                 Sensitivity,
                 mergeCount: 1,
                 progress,
-                _analysisCts.Token);
+                ct: _analysisCts.Token);
 
             foreach (var detection in detections)
                 Detections.Add(detection);
@@ -284,6 +299,12 @@ public partial class SingleAnalysisViewModel : ObservableObject
         }
     }
 
+    partial void OnNoiseReductionEnabledChanged(bool value)
+    {
+        if (IsFileLoaded && GenerateSpectrogram && !string.IsNullOrEmpty(FilePath))
+            _ = RegenerateSpectrogramAsync();
+    }
+
     partial void OnMaxFrequencyHzChanged(double value)
     {
         if (IsFileLoaded && GenerateSpectrogram && !string.IsNullOrEmpty(FilePath))
@@ -298,7 +319,7 @@ public partial class SingleAnalysisViewModel : ObservableObject
             int imageWidth = Math.Clamp((int)(FileDuration.TotalSeconds * 20), 800, 3000);
             const int imageHeight = 500;
             SpectrogramImage = await _spectrogramService.GenerateAsync(
-                FilePath, imageWidth, imageHeight, MaxFrequencyHz);
+                FilePath, imageWidth, imageHeight, MaxFrequencyHz, NoiseReductionEnabled);
         }
         catch (Exception ex)
         {
@@ -330,9 +351,20 @@ public partial class SingleAnalysisViewModel : ObservableObject
         try
         {
             _setStatus($"Playing {detection.DisplayName} at {detection.OffsetSeconds:F1}s...");
-            await _playbackService.PlaySegmentAsync(
-                FilePath, detection.OffsetSeconds, detection.DurationSeconds,
-                _playbackCts.Token);
+
+            if (NoiseReductionEnabled && _noiseReduction.HasProfile)
+            {
+                var samples = await _audioFileService.ExtractSegmentAsync(
+                    FilePath, detection.OffsetSeconds, detection.DurationSeconds, _playbackCts.Token);
+                samples = _noiseReduction.Apply(samples);
+                await _playbackService.PlaySamplesAsync(samples, SampleRate, _playbackCts.Token);
+            }
+            else
+            {
+                await _playbackService.PlaySegmentAsync(
+                    FilePath, detection.OffsetSeconds, detection.DurationSeconds,
+                    _playbackCts.Token);
+            }
             _setStatus($"Loaded {FileName}");
         }
         catch (OperationCanceledException)

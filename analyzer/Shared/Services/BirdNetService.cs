@@ -196,6 +196,7 @@ public class BirdNetService : IBirdNetService
         double sensitivity = 1.0,
         int mergeCount = 1,
         IProgress<(int segment, int total)>? progress = null,
+        Func<float[], float[]>? preprocessor = null,
         CancellationToken ct = default)
     {
         var allDetections = new List<Detection>();
@@ -214,6 +215,9 @@ public class BirdNetService : IBirdNetService
                 audioFile.FilePath, offsetSeconds, SegmentDuration, ct);
 
             if (samples.Length == 0) continue;
+
+            if (preprocessor != null)
+                samples = preprocessor(samples);
 
             var detections = await AnalyzeSegmentAsync(
                 samples, audioFile, offsetSeconds, confidenceThreshold, sensitivity, ct);
@@ -267,7 +271,7 @@ public class BirdNetService : IBirdNetService
 
             var fileDetections = await AnalyzeFileAsync(
                 audioFile, audioService, confidenceThreshold, targetSpecies,
-                overlapSeconds, sensitivity, mergeCount, fileProgress, ct);
+                overlapSeconds, sensitivity, mergeCount, fileProgress, null, ct);
 
             allDetections.AddRange(fileDetections);
         }
