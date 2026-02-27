@@ -241,13 +241,9 @@ public class AudioFileService : IAudioFileService
         if (!audioFile.IsValid || audioFile.Duration.TotalSeconds <= 0)
             return 0;
 
-        // Short files (< one segment) still get processed — the model zero-pads them
-        if (audioFile.Duration.TotalSeconds < segmentDuration)
-            return 1;
-
         var step = segmentDuration - overlapSeconds;
         if (step <= 0) step = segmentDuration;
-        return (int)Math.Floor((audioFile.Duration.TotalSeconds - segmentDuration) / step) + 1;
+        return Math.Max(1, (int)Math.Ceiling(audioFile.Duration.TotalSeconds / step));
     }
 
     private static WaveStream OpenAudioReader(string filePath)

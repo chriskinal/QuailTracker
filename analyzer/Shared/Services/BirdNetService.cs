@@ -146,8 +146,8 @@ public class BirdNetService : IBirdNetService
             using var results = _session.Run(inputs);
             var output = results.First().AsEnumerable<float>().ToArray();
 
-            // Apply softmax
-            var probabilities = Softmax(output);
+            // Apply sigmoid (each class scored independently, matches BirdNET-Analyzer)
+            var probabilities = Sigmoid(output);
 
             // Apply sensitivity sigmoid (logit-scale, matches BirdNET-Analyzer)
             if (Math.Abs(sensitivity - 1.0) > 0.01)
@@ -354,11 +354,11 @@ public class BirdNetService : IBirdNetService
         return merged.OrderByDescending(d => d.Confidence).ToList();
     }
 
-    private static float[] Softmax(float[] input)
+    private static float[] Sigmoid(float[] input)
     {
-        var maxVal = input.Max();
-        var exp = input.Select(x => MathF.Exp(x - maxVal)).ToArray();
-        var sum = exp.Sum();
-        return exp.Select(x => x / sum).ToArray();
+        var result = new float[input.Length];
+        for (int i = 0; i < input.Length; i++)
+            result[i] = 1.0f / (1.0f + MathF.Exp(-input[i]));
+        return result;
     }
 }
