@@ -90,6 +90,19 @@
                                    Width="20"
                                    VerticalAlignment="Center" />
                     </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Threads:" VerticalAlignment="Center" />
+                        <Slider Value="{Binding MaxThreads}"
+                                Minimum="1"
+                                Maximum="{Binding MaxAvailableThreads}"
+                                IsSnapToTickEnabled="True"
+                                TickFrequency="1"
+                                Width="80"
+                                VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding MaxThreads}"
+                                   Width="20"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
                     <CheckBox Content="Quail species only"
                               IsChecked="{Binding FilterQuailOnly}"
                               VerticalAlignment="Center" />

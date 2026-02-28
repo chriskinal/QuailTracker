@@ -94,6 +94,7 @@ public interface IBirdNetService : IDisposable
         double sensitivity = 1.0,
         int mergeCount = 1,
         IProgress<BirdNetProgress>? progress = null,
+        int maxThreads = 0,
         CancellationToken ct = default);
 
     /// <summary>

@@ -79,6 +79,11 @@ public partial class ProcessingViewModel : ObservableObject
     private int _mergeCount = 1;
 
     [ObservableProperty]
+    private int _maxThreads = Math.Max(1, (int)(Environment.ProcessorCount * 0.8));
+
+    public int MaxAvailableThreads => Environment.ProcessorCount;
+
+    [ObservableProperty]
     private bool _filterQuailOnly = true;
 
     [ObservableProperty]
@@ -171,11 +176,11 @@ public partial class ProcessingViewModel : ObservableObject
             {
                 CurrentFile = p.CurrentFile;
                 TotalFiles = p.TotalFiles;
-                CurrentSegment = p.CurrentSegment;
-                TotalSegments = p.TotalSegments;
+                CurrentSegment = p.CurrentFile;
+                TotalSegments = p.TotalFiles;
                 CurrentFileName = p.CurrentFileName;
                 DetectionsFound = p.DetectionsFound;
-                _setStatus($"Processing {p.CurrentFileName} ({p.CurrentFile}/{p.TotalFiles})...");
+                _setStatus($"Processed {p.CurrentFile}/{p.TotalFiles} files ({p.DetectionsFound} detections)...");
             });
 
             var newDetections = await _birdNetService.AnalyzeBatchAsync(
@@ -187,6 +192,7 @@ public partial class ProcessingViewModel : ObservableObject
                 Sensitivity,
                 MergeCount,
                 progress,
+                MaxThreads,
                 _cts.Token);
 
             foreach (var detection in newDetections)

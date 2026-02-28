@@ -17,6 +17,7 @@
  */
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -245,38 +246,39 @@ public class BirdNetService : IBirdNetService
         double sensitivity = 1.0,
         int mergeCount = 1,
         IProgress<BirdNetProgress>? progress = null,
+        int maxThreads = 0,
         CancellationToken ct = default)
     {
-        var allDetections = new List<Detection>();
-        var totalFiles = audioFiles.Count;
+        var allDetections = new ConcurrentBag<IReadOnlyList<Detection>>();
+        var validFiles = audioFiles.Where(f => f.IsValid).ToList();
+        var totalFiles = validFiles.Count;
+        var filesCompleted = 0;
+        var detectionCount = 0;
+        var maxConcurrency = Math.Max(1, maxThreads > 0 ? maxThreads : (int)(Environment.ProcessorCount * 0.8));
 
-        for (var fileIndex = 0; fileIndex < totalFiles; fileIndex++)
-        {
-            ct.ThrowIfCancellationRequested();
-
-            var audioFile = audioFiles[fileIndex];
-            if (!audioFile.IsValid) continue;
-
-            var fileProgress = new Progress<(int segment, int total)>(p =>
+        await Parallel.ForEachAsync(validFiles,
+            new ParallelOptions { MaxDegreeOfParallelism = maxConcurrency, CancellationToken = ct },
+            async (audioFile, token) =>
             {
+                var fileDetections = await AnalyzeFileAsync(
+                    audioFile, audioService, confidenceThreshold, targetSpecies,
+                    overlapSeconds, sensitivity, mergeCount, null, null, token);
+
+                allDetections.Add(fileDetections);
+                var newDetectionCount = Interlocked.Add(ref detectionCount, fileDetections.Count);
+                var completed = Interlocked.Increment(ref filesCompleted);
+
                 progress?.Report(new BirdNetProgress(
-                    fileIndex + 1,
+                    completed,
                     totalFiles,
-                    p.segment,
-                    p.total,
+                    0,
+                    0,
                     audioFile.FileName,
-                    allDetections.Count
+                    newDetectionCount
                 ));
             });
 
-            var fileDetections = await AnalyzeFileAsync(
-                audioFile, audioService, confidenceThreshold, targetSpecies,
-                overlapSeconds, sensitivity, mergeCount, fileProgress, null, ct);
-
-            allDetections.AddRange(fileDetections);
-        }
-
-        return allDetections;
+        return allDetections.SelectMany(d => d).ToList();
     }
 
     public IReadOnlyList<string> GetSpeciesLabels()
