@@ -56,6 +56,9 @@ public partial class MainWindowViewModel : ObservableObject
     private PopulationViewModel _populationViewModel;
 
     [ObservableProperty]
+    private TrainingDataViewModel _trainingDataViewModel;
+
+    [ObservableProperty]
     private MapViewModel _mapViewModel;
 
     public MainWindowViewModel()
@@ -106,6 +109,12 @@ public partial class MainWindowViewModel : ObservableObject
         _processingViewModel = new ProcessingViewModel(
             audioFileService,
             birdNetService,
+            AudioFiles,
+            Detections,
+            status => StatusMessage = status);
+
+        _trainingDataViewModel = new TrainingDataViewModel(
+            audioFileService,
             AudioFiles,
             Detections,
             status => StatusMessage = status);

@@ -1,0 +1,170 @@
+<!--
+QuailTracker - GPS-synchronized Autonomous Recording Unit
+Copyright (C) 2026 QuailTracker Project
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+-->
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:QuailTracker.Analyzer.Shared.ViewModels"
+             x:Class="QuailTracker.Analyzer.Shared.Views.TrainingDataView"
+             x:DataType="vm:TrainingDataViewModel">
+
+    <Grid RowDefinitions="Auto,Auto,*,Auto" Margin="8">
+        <!-- Controls Section -->
+        <Border Grid.Row="0"
+                Classes="CardPanel"
+                Margin="0,0,0,8">
+            <StackPanel Spacing="8">
+                <StackPanel Orientation="Horizontal" Spacing="16">
+                    <Button Content="Populate from Detections"
+                            Classes="SecondaryButton"
+                            Command="{Binding PopulateCommand}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Min Confidence:" VerticalAlignment="Center" />
+                        <Slider Value="{Binding MinConfidence}"
+                                Minimum="0.1"
+                                Maximum="0.99"
+                                Width="120"
+                                VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding MinConfidence, StringFormat='{}{0:P0}'}"
+                                   Width="40"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                    <CheckBox Content="Include negatives"
+                              IsChecked="{Binding IncludeNegatives}"
+                              VerticalAlignment="Center" />
+                    <StackPanel Orientation="Horizontal" Spacing="8"
+                                IsVisible="{Binding IncludeNegatives}">
+                        <TextBlock Text="per file:" VerticalAlignment="Center" />
+                        <Slider Value="{Binding NegativesPerFile}"
+                                Minimum="0"
+                                Maximum="10"
+                                IsSnapToTickEnabled="True"
+                                TickFrequency="1"
+                                Width="80"
+                                VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding NegativesPerFile}"
+                                   Width="20"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- Summary -->
+                <StackPanel Orientation="Horizontal" Spacing="16">
+                    <TextBlock VerticalAlignment="Center" Foreground="#4CAF50">
+                        <TextBlock.Text>
+                            <MultiBinding StringFormat="{}{0} confirmed">
+                                <Binding Path="ConfirmedCount" />
+                            </MultiBinding>
+                        </TextBlock.Text>
+                    </TextBlock>
+                    <TextBlock VerticalAlignment="Center" Foreground="#F44336">
+                        <TextBlock.Text>
+                            <MultiBinding StringFormat="{}{0} rejected">
+                                <Binding Path="RejectedCount" />
+                            </MultiBinding>
+                        </TextBlock.Text>
+                    </TextBlock>
+                    <TextBlock VerticalAlignment="Center" Foreground="#FF9800">
+                        <TextBlock.Text>
+                            <MultiBinding StringFormat="{}{0} pending">
+                                <Binding Path="PendingCount" />
+                            </MultiBinding>
+                        </TextBlock.Text>
+                    </TextBlock>
+                    <TextBlock Text="{Binding Clips.Count, StringFormat='{}{0} total clips'}"
+                               VerticalAlignment="Center"
+                               Foreground="#757575" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- Review Buttons -->
+        <Border Grid.Row="1"
+                Classes="CardPanel"
+                Margin="0,0,0,8">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Content="Confirm"
+                        Classes="PrimaryButton"
+                        Command="{Binding ConfirmCommand}" />
+                <Button Content="Reject"
+                        Classes="DangerButton"
+                        Command="{Binding RejectCommand}" />
+                <Button Content="Skip"
+                        Classes="ToolbarButton"
+                        Command="{Binding SkipCommand}" />
+                <Border Width="1" Background="#DD475A6E" Margin="8,0" />
+                <Button Content="Confirm All Pending"
+                        Classes="AccentButton"
+                        Command="{Binding ConfirmAllFilteredCommand}" />
+            </StackPanel>
+        </Border>
+
+        <!-- Clip DataGrid -->
+        <DataGrid Grid.Row="2"
+                  ItemsSource="{Binding Clips}"
+                  SelectedItem="{Binding SelectedClip}"
+                  AutoGenerateColumns="False"
+                  IsReadOnly="True"
+                  GridLinesVisibility="Horizontal"
+                  BorderBrush="#E0E0E0"
+                  BorderThickness="1"
+                  Margin="0,0,0,8">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Status" Binding="{Binding StatusDisplay}" Width="90" />
+                <DataGridTextColumn Header="Species" Binding="{Binding CommonName}" Width="2*" />
+                <DataGridTextColumn Header="Scientific Name" Binding="{Binding ScientificName}" Width="2*" />
+                <DataGridTextColumn Header="Confidence" Binding="{Binding ConfidencePercent}" Width="*" />
+                <DataGridTextColumn Header="Station" Binding="{Binding StationId}" Width="*" />
+                <DataGridTextColumn Header="Time" Binding="{Binding Timestamp, StringFormat='{}{0:HH:mm:ss}'}" Width="*" />
+                <DataGridTextColumn Header="Offset" Binding="{Binding OffsetSeconds, StringFormat='{}{0:F1}s'}" Width="*" />
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <!-- Export Section -->
+        <Border Grid.Row="3"
+                Classes="CardPanel">
+            <Grid RowDefinitions="Auto,Auto">
+                <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="Export to:" VerticalAlignment="Center" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding ExportPath}"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"
+                               Foreground="#757575"
+                               MaxWidth="500" />
+                    <Button Content="Choose Folder..."
+                            Classes="SecondaryButton"
+                            Click="OnChooseExportFolderClick" />
+                    <Button Content="Export"
+                            Classes="PrimaryButton"
+                            Command="{Binding ExportCommand}" />
+                    <Button Content="Cancel"
+                            Classes="DangerButton"
+                            Command="{Binding CancelExportCommand}"
+                            IsVisible="{Binding IsExporting}" />
+                </StackPanel>
+
+                <!-- Export Progress -->
+                <Grid Grid.Row="1"
+                      Margin="0,8,0,0"
+                      IsVisible="{Binding IsExporting}">
+                    <ProgressBar Minimum="0"
+                                 Maximum="{Binding ExportTotal}"
+                                 Value="{Binding ExportProgress}" />
+                </Grid>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>
