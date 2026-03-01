@@ -113,6 +113,9 @@ def api_train():
     batch_size = int(data.get("batch_size", 32))
     augment = data.get("augment", True)
 
+    if not os.path.isdir(data_dir):
+        return jsonify({"error": f"Data directory not found: {data_dir}"}), 400
+
     def job():
         _set_status("running", "training")
         run_training(data_dir, output_dir, epochs=epochs,

@@ -23,11 +23,12 @@ def search_species(species_name, api_key, quality_min="B", max_recordings=50):
     Returns:
         List of recording metadata dicts.
     """
-    quality_map = {"A": "A", "B": ">B", "C": ">C"}
-    q_filter = quality_map.get(quality_min, ">B")
+    # q:">C" means better than C, i.e. A and B
+    quality_map = {"A": 'q:A', "B": 'q:">C"', "C": 'q:">D"'}
+    q_filter = quality_map.get(quality_min, 'q:">C"')
 
     params = {
-        "query": f'en:"{species_name}" q:{q_filter} type:song type:call',
+        "query": f'en:"{species_name}" {q_filter}',
         "key": api_key,
         "per_page": min(max_recordings, 500),
     }
