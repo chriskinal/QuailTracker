@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QuailTracker Training</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header>
+        <h1>QuailTracker Training</h1>
+        <p class="subtitle">Train custom species detection models for BLE deployment</p>
+    </header>
+
+    <nav class="tabs">
+        <button class="tab active" data-tab="quick">Quick Train</button>
+        <button class="tab" data-tab="full">Full Pipeline</button>
+    </nav>
+
+    <main>
+        <!-- Quick Train Tab -->
+        <section id="tab-quick" class="tab-content active">
+            <form id="form-quick" class="form-panel">
+                <div class="field">
+                    <label for="q-data-dir">Data directory</label>
+                    <input type="text" id="q-data-dir" value="/data/clips"
+                           placeholder="/data/clips">
+                    <span class="hint">Directory with species subdirectories containing WAV clips</span>
+                </div>
+                <div class="field">
+                    <label for="q-output-dir">Output directory</label>
+                    <input type="text" id="q-output-dir" value="/output">
+                </div>
+                <div class="field">
+                    <label for="q-epochs">Epochs: <span id="q-epochs-val">100</span></label>
+                    <input type="range" id="q-epochs" min="5" max="200" value="100">
+                </div>
+                <div class="field">
+                    <label for="q-batch-size">Batch size</label>
+                    <select id="q-batch-size">
+                        <option value="16">16</option>
+                        <option value="32" selected>32</option>
+                        <option value="64">64</option>
+                    </select>
+                </div>
+                <div class="field checkbox">
+                    <label>
+                        <input type="checkbox" id="q-augment" checked>
+                        Enable augmentation
+                    </label>
+                </div>
+                <button type="submit" class="btn-primary" id="btn-train">Train</button>
+            </form>
+        </section>
+
+        <!-- Full Pipeline Tab -->
+        <section id="tab-full" class="tab-content">
+            <form id="form-full" class="form-panel">
+                <div class="field">
+                    <label for="f-api-key">xeno-canto API key</label>
+                    <input type="password" id="f-api-key" placeholder="Enter API key">
+                    <span class="hint">Saved in browser localStorage</span>
+                </div>
+                <div class="field">
+                    <label>Species</label>
+                    <div class="species-input">
+                        <input type="text" id="f-species-input"
+                               placeholder="e.g. Northern Bobwhite">
+                        <button type="button" id="btn-add-species" class="btn-secondary">Add</button>
+                    </div>
+                    <div id="species-tags" class="tags"></div>
+                </div>
+                <div class="field">
+                    <label for="f-max-recordings">Max recordings per species: <span id="f-max-val">30</span></label>
+                    <input type="range" id="f-max-recordings" min="10" max="100" value="30">
+                </div>
+                <div class="field">
+                    <label for="f-quality">Quality filter</label>
+                    <select id="f-quality">
+                        <option value="A">A only</option>
+                        <option value="B" selected>A + B</option>
+                        <option value="C">A + B + C</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label for="f-noise-dir">Noise directory (optional)</label>
+                    <input type="text" id="f-noise-dir" value="/data/noise"
+                           placeholder="/data/noise">
+                </div>
+                <div class="field">
+                    <label for="f-output-dir">Output directory</label>
+                    <input type="text" id="f-output-dir" value="/output">
+                </div>
+                <div class="field">
+                    <label for="f-epochs">Epochs: <span id="f-epochs-val">100</span></label>
+                    <input type="range" id="f-epochs" min="5" max="200" value="100">
+                </div>
+                <div class="field">
+                    <label for="f-batch-size">Batch size</label>
+                    <select id="f-batch-size">
+                        <option value="16">16</option>
+                        <option value="32" selected>32</option>
+                        <option value="64">64</option>
+                    </select>
+                </div>
+                <div class="field checkbox">
+                    <label>
+                        <input type="checkbox" id="f-augment" checked>
+                        Enable augmentation
+                    </label>
+                </div>
+                <button type="submit" class="btn-primary" id="btn-full-pipeline">Download & Train</button>
+            </form>
+        </section>
+
+        <!-- Progress Panel -->
+        <section id="progress-panel" class="panel hidden">
+            <h2>Progress</h2>
+            <div id="stage-indicators" class="stages">
+                <span class="stage" data-stage="download">Download</span>
+                <span class="stage" data-stage="training">Train</span>
+                <span class="stage" data-stage="export">Export</span>
+                <span class="stage" data-stage="evaluate">Evaluate</span>
+            </div>
+            <div id="epoch-progress" class="epoch-bar hidden">
+                <div class="bar-track">
+                    <div class="bar-fill" id="epoch-bar-fill"></div>
+                </div>
+                <span id="epoch-text"></span>
+            </div>
+            <pre id="log-output"></pre>
+        </section>
+
+        <!-- Results Panel -->
+        <section id="results-panel" class="panel hidden">
+            <h2>Results</h2>
+            <div id="metrics" class="metrics"></div>
+            <div id="result-images" class="images"></div>
+            <div id="downloads" class="downloads"></div>
+        </section>
+    </main>
+
+    <script>
+    (function() {
+        // --- Tab switching ---
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+            });
+        });
+
+        // --- Slider labels ---
+        function bindSlider(sliderId, labelId) {
+            const s = document.getElementById(sliderId);
+            const l = document.getElementById(labelId);
+            s.addEventListener('input', () => { l.textContent = s.value; });
+        }
+        bindSlider('q-epochs', 'q-epochs-val');
+        bindSlider('f-epochs', 'f-epochs-val');
+        bindSlider('f-max-recordings', 'f-max-val');
+
+        // --- Species tags ---
+        const speciesList = [];
+        const tagsEl = document.getElementById('species-tags');
+
+        function renderTags() {
+            tagsEl.innerHTML = speciesList.map((s, i) =>
+                `<span class="tag">${s} <button type="button" data-idx="${i}">&times;</button></span>`
+            ).join('');
+            tagsEl.querySelectorAll('button').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    speciesList.splice(parseInt(btn.dataset.idx), 1);
+                    renderTags();
+                });
+            });
+        }
+
+        document.getElementById('btn-add-species').addEventListener('click', () => {
+            const input = document.getElementById('f-species-input');
+            const val = input.value.trim();
+            if (val && !speciesList.includes(val)) {
+                speciesList.push(val);
+                renderTags();
+                input.value = '';
+            }
+        });
+
+        document.getElementById('f-species-input').addEventListener('keydown', e => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                document.getElementById('btn-add-species').click();
+            }
+        });
+
+        // --- API key persistence ---
+        const apiKeyInput = document.getElementById('f-api-key');
+        apiKeyInput.value = localStorage.getItem('xc_api_key') || '';
+        apiKeyInput.addEventListener('change', () => {
+            localStorage.setItem('xc_api_key', apiKeyInput.value);
+        });
+
+        // --- Progress / SSE ---
+        const logOutput = document.getElementById('log-output');
+        const progressPanel = document.getElementById('progress-panel');
+        const resultsPanel = document.getElementById('results-panel');
+        let eventSource = null;
+
+        function resetUI() {
+            logOutput.textContent = '';
+            progressPanel.classList.remove('hidden');
+            resultsPanel.classList.add('hidden');
+            document.querySelectorAll('.stage').forEach(s => {
+                s.classList.remove('active', 'done');
+            });
+            document.getElementById('epoch-progress').classList.add('hidden');
+            document.querySelectorAll('.btn-primary').forEach(b => b.disabled = true);
+        }
+
+        function appendLog(text) {
+            logOutput.textContent += text + '\n';
+            logOutput.scrollTop = logOutput.scrollHeight;
+        }
+
+        function setStage(stageName) {
+            document.querySelectorAll('.stage').forEach(s => {
+                if (s.dataset.stage === stageName) {
+                    s.classList.add('active');
+                } else if (s.classList.contains('active')) {
+                    s.classList.remove('active');
+                    s.classList.add('done');
+                }
+            });
+        }
+
+        function startSSE() {
+            if (eventSource) eventSource.close();
+            eventSource = new EventSource('/api/progress');
+
+            eventSource.onmessage = function(e) {
+                const msg = e.data;
+                let parsed;
+                try { parsed = JSON.parse(msg); } catch { parsed = null; }
+
+                if (parsed) {
+                    if (parsed.done) {
+                        eventSource.close();
+                        document.querySelectorAll('.btn-primary').forEach(b => b.disabled = false);
+                        document.querySelectorAll('.stage.active').forEach(s => {
+                            s.classList.remove('active');
+                            s.classList.add('done');
+                        });
+                        loadResults();
+                        return;
+                    }
+                    if (parsed._status) {
+                        if (parsed.stage) setStage(parsed.stage);
+                        if (parsed._status === 'error') {
+                            appendLog('ERROR: ' + (parsed.error || 'Unknown error'));
+                        }
+                        return;
+                    }
+                    if (parsed.stage === 'training' && parsed.epoch) {
+                        const epochBar = document.getElementById('epoch-progress');
+                        epochBar.classList.remove('hidden');
+                        const pct = (parsed.epoch / parsed.total * 100).toFixed(0);
+                        document.getElementById('epoch-bar-fill').style.width = pct + '%';
+                        document.getElementById('epoch-text').textContent =
+                            `Epoch ${parsed.epoch}/${parsed.total} — val_auc: ${parsed.val_auc}`;
+                        setStage('training');
+                        return;
+                    }
+                    if (parsed.stage && parsed.status === 'started') {
+                        setStage(parsed.stage);
+                        return;
+                    }
+                    if (parsed.stage && parsed.status === 'complete') {
+                        appendLog(JSON.stringify(parsed, null, 2));
+                        return;
+                    }
+                    appendLog(JSON.stringify(parsed));
+                } else {
+                    appendLog(msg);
+                }
+            };
+
+            eventSource.onerror = function() {
+                eventSource.close();
+                document.querySelectorAll('.btn-primary').forEach(b => b.disabled = false);
+            };
+        }
+
+        function loadResults() {
+            fetch('/api/outputs').then(r => r.json()).then(data => {
+                const files = data.files || [];
+                if (files.length === 0) return;
+
+                resultsPanel.classList.remove('hidden');
+
+                // Metrics
+                const metricsEl = document.getElementById('metrics');
+                const metaFile = files.find(f => f.name === 'model_metadata.json');
+                const tfliteFile = files.find(f => f.name === 'quail_model.tflite');
+                let metricsHtml = '';
+                if (tfliteFile) {
+                    metricsHtml += `<div class="metric"><span class="label">Model size</span><span class="value">${(tfliteFile.size / 1024).toFixed(1)} KB</span></div>`;
+                }
+                metricsEl.innerHTML = metricsHtml;
+
+                // Images
+                const imagesEl = document.getElementById('result-images');
+                imagesEl.innerHTML = '';
+                const imgFiles = files.filter(f => f.name.endsWith('.png'));
+                imgFiles.forEach(f => {
+                    const img = document.createElement('img');
+                    img.src = '/api/outputs/' + f.name;
+                    img.alt = f.name;
+                    imagesEl.appendChild(img);
+                });
+
+                // Downloads
+                const dlEl = document.getElementById('downloads');
+                const dlFiles = files.filter(f =>
+                    f.name.endsWith('.tflite') || f.name === 'model_config.json'
+                );
+                dlEl.innerHTML = dlFiles.map(f =>
+                    `<a href="/api/outputs/${f.name}" class="btn-download" download>${f.name} (${(f.size / 1024).toFixed(1)} KB)</a>`
+                ).join('');
+            });
+        }
+
+        // --- Form submissions ---
+        document.getElementById('form-quick').addEventListener('submit', e => {
+            e.preventDefault();
+            resetUI();
+
+            fetch('/api/train', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    data_dir: document.getElementById('q-data-dir').value,
+                    output_dir: document.getElementById('q-output-dir').value,
+                    epochs: parseInt(document.getElementById('q-epochs').value),
+                    batch_size: parseInt(document.getElementById('q-batch-size').value),
+                    augment: document.getElementById('q-augment').checked,
+                }),
+            }).then(r => {
+                if (!r.ok) return r.json().then(d => { throw new Error(d.error); });
+                startSSE();
+            }).catch(err => {
+                appendLog('Error: ' + err.message);
+                document.querySelectorAll('.btn-primary').forEach(b => b.disabled = false);
+            });
+        });
+
+        document.getElementById('form-full').addEventListener('submit', e => {
+            e.preventDefault();
+            if (speciesList.length === 0) {
+                alert('Add at least one species.');
+                return;
+            }
+            resetUI();
+
+            fetch('/api/full-pipeline', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    species_list: speciesList,
+                    api_key: document.getElementById('f-api-key').value,
+                    output_dir: document.getElementById('f-output-dir').value,
+                    noise_dir: document.getElementById('f-noise-dir').value,
+                    max_recordings: parseInt(document.getElementById('f-max-recordings').value),
+                    quality_min: document.getElementById('f-quality').value,
+                    epochs: parseInt(document.getElementById('f-epochs').value),
+                    batch_size: parseInt(document.getElementById('f-batch-size').value),
+                    augment: document.getElementById('f-augment').checked,
+                }),
+            }).then(r => {
+                if (!r.ok) return r.json().then(d => { throw new Error(d.error); });
+                startSSE();
+            }).catch(err => {
+                appendLog('Error: ' + err.message);
+                document.querySelectorAll('.btn-primary').forEach(b => b.disabled = false);
+            });
+        });
+    })();
+    </script>
+</body>
+</html>

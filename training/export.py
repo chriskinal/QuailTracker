@@ -147,6 +147,46 @@ def generate_mel_config_header(metadata_path, header_path):
     print(f"Saved mel config header: {header_path}")
 
 
+def generate_model_config_json(metadata_path, tflite_path, json_path):
+    """Generate model_config.json for BLE deployment to device.
+
+    Contains mel params, normalization constants, and class labels so
+    firmware can configure inference without a rebuild.
+
+    Args:
+        metadata_path: Path to model_metadata.json from training.
+        tflite_path: Path to .tflite file (for size info).
+        json_path: Output .json file path.
+    """
+    with open(metadata_path, "r") as f:
+        metadata = json.load(f)
+
+    tflite_size = os.path.getsize(tflite_path)
+
+    config_json = {
+        "model_file": os.path.basename(tflite_path),
+        "model_size_bytes": tflite_size,
+        "audio_config": metadata["audio_config"],
+        "normalization": {
+            "mel_min": metadata["mel_min"],
+            "mel_max": metadata["mel_max"],
+        },
+        "labels": metadata["labels"],
+        "num_classes": metadata["num_classes"],
+        "training_info": {
+            "total_clips": metadata.get("total_clips", 0),
+            "epochs_trained": metadata.get("epochs_trained", 0),
+            "best_val_auc": metadata.get("best_val_auc", 0),
+        },
+    }
+
+    with open(json_path, "w") as f:
+        json.dump(config_json, f, indent=2)
+
+    print(f"Saved model config JSON: {json_path}")
+    return config_json
+
+
 def main():
     parser = argparse.ArgumentParser(description="Export model to TFLite + C headers")
     parser.add_argument(
@@ -190,11 +230,20 @@ def main():
         os.path.join(args.model_dir, "mel_config.h"),
     )
 
+    # Generate JSON config for BLE deployment
+    generate_model_config_json(
+        metadata_path,
+        tflite_path,
+        os.path.join(args.model_dir, "model_config.json"),
+    )
+
     print(f"\nExport complete! Files in {args.model_dir}/:")
     print(f"  quail_model.tflite  ({model_size / 1024:.1f} KB)")
     print(f"  quail_model.h       (C header with model bytes)")
     print(f"  mel_config.h        (C header with mel params + labels)")
+    print(f"  model_config.json   (JSON config for BLE deployment)")
     print(f"\nCopy headers to stm32/QuailTracker_U575/Core/Inc/ for firmware integration.")
+    print(f"Upload .tflite + model_config.json to device via BLE.")
 
 
 if __name__ == "__main__":
