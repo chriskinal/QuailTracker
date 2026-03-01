@@ -136,6 +136,18 @@ static uint64_t recPpsFirstSample = 0;   /* recording-relative sample at first P
 static uint64_t recPpsLastSample = 0;    /* recording-relative sample at last PPS */
 static uint32_t recPpsEdgesInRec = 0;    /* PPS edges observed during recording */
 
+/* ---- Inference engine buffers ---- */
+
+/* TFLite model loaded from SD /model/quail_model.tflite */
+uint8_t modelBuf[20 * 1024] __attribute__((aligned(16)));
+uint32_t modelBufSize = 0;
+
+/* TFLite Micro tensor arena */
+uint8_t tensorArena[48 * 1024] __attribute__((aligned(16)));
+
+/* Absolute sample counter (monotonically increasing, never reset) */
+volatile uint64_t absSampleCount = 0;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -1288,6 +1300,7 @@ void HAL_MDF_AcqHalfCpltCallback(MDF_HandleTypeDef *hmdf)
 {
     dmaCallbackCount++;
     dmaCallbackTick = HAL_GetTick();
+    absSampleCount += AUDIO_BUF_SIZE / 2;
 
     uint32_t h = ringHead;
     if ((h - ringTail) + (AUDIO_BUF_SIZE / 2) > PCM_RING_SIZE) {
@@ -1307,6 +1320,7 @@ void HAL_MDF_AcqCpltCallback(MDF_HandleTypeDef *hmdf)
 {
     dmaCallbackCount++;
     dmaCallbackTick = HAL_GetTick();
+    absSampleCount += AUDIO_BUF_SIZE / 2;
 
     uint32_t h = ringHead;
     if ((h - ringTail) + (AUDIO_BUF_SIZE / 2) > PCM_RING_SIZE) {

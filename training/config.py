@@ -9,14 +9,14 @@ from dataclasses import dataclass, field
 
 @dataclass
 class AudioConfig:
-    sample_rate: int = 22050
+    sample_rate: int = 24000  # 2:1 decimation from 48kHz capture
     duration: float = 3.0  # seconds per clip
     n_fft: int = 512  # CMSIS-DSP arm_rfft_q15_512 compatible
     hop_length: int = 256
     n_mels: int = 40  # standard for embedded audio
     fmin: float = 500.0  # Hz — below bobwhite fundamental
     fmax: float = 10000.0  # Hz — above bobwhite harmonics
-    # Derived: 3.0s * 22050 / 256 ≈ 258 frames, truncated/padded to 256
+    # Derived: 3.0s * 24000 / 256 = 281.25 frames, truncated to 256
     n_frames: int = 256
 
 

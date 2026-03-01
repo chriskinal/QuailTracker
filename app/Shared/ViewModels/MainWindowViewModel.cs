@@ -52,6 +52,9 @@ public partial class MainWindowViewModel : ObservableObject
     private OperationsViewModel _operationsViewModel;
 
     [ObservableProperty]
+    private DetectViewModel _detectViewModel;
+
+    [ObservableProperty]
     private ScheduleViewModel _scheduleViewModel;
 
     [ObservableProperty]
@@ -66,6 +69,7 @@ public partial class MainWindowViewModel : ObservableObject
         _bluetoothService = bluetoothService;
         _healthViewModel = new HealthViewModel(bluetoothService);
         _operationsViewModel = new OperationsViewModel(bluetoothService);
+        _detectViewModel = new DetectViewModel(bluetoothService);
         _scheduleViewModel = new ScheduleViewModel(bluetoothService);
         _configViewModel = new ConfigViewModel(bluetoothService);
 

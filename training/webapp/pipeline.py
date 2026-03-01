@@ -16,6 +16,7 @@ from export import (
     convert_to_tflite_int8,
     generate_model_header,
     generate_mel_config_header,
+    generate_mel_filterbank_header,
     generate_model_config_json,
 )
 from evaluate import (
@@ -249,6 +250,8 @@ def run_export(model_dir, progress_callback=None):
                           os.path.join(model_dir, "quail_model.h"))
     generate_mel_config_header(metadata_path,
                                os.path.join(model_dir, "mel_config.h"))
+    generate_mel_filterbank_header(metadata_path,
+                                   os.path.join(model_dir, "mel_filterbank.h"))
 
     # Generate JSON config for BLE deployment
     cb("Generating model_config.json...")

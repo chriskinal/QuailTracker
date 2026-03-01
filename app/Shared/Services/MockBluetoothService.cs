@@ -39,6 +39,7 @@ public class MockBluetoothService : IBluetoothService
     public event EventHandler<ConnectionState>? ConnectionStateChanged;
     public event EventHandler<DeviceStatus>? StatusReceived;
     public event EventHandler<DeviceConfig>? ConfigReceived;
+    public event EventHandler<DetectionEvent>? DetectionReceived;
 
     public async Task ScanAndConnectAsync()
     {
@@ -130,6 +131,14 @@ public class MockBluetoothService : IBluetoothService
             SurveyCount = 450,
             SurveyActive = false,
 
+            DetectionActive = _currentConfig.Mission != MissionMode.RecordOnly,
+            DetectionWindows = _random.Next(100, 5000),
+            DetectionHits = _random.Next(5, 50),
+            DetectionLastSpecies = "Northern Bobwhite",
+            ModelLoaded = true,
+            ModelSize = 18432,
+            ModelLabels = 3,
+
             LastUpdated = DateTime.Now
         };
 
@@ -184,6 +193,31 @@ public class MockBluetoothService : IBluetoothService
         if (CurrentState != ConnectionState.Connected) return;
         await Task.Delay(200);
         await RequestStatusAsync();
+    }
+
+    public async Task SendModelCommandAsync(string operation)
+    {
+        if (CurrentState != ConnectionState.Connected) return;
+        await Task.Delay(200);
+    }
+
+    public async Task SendDetectionCommandAsync(string operation)
+    {
+        if (CurrentState != ConnectionState.Connected) return;
+        await Task.Delay(200);
+    }
+
+    public async Task<bool> SendDetectionConfigAsync(DeviceConfig config)
+    {
+        if (CurrentState != ConnectionState.Connected) return false;
+        await Task.Delay(300);
+        _currentConfig = _currentConfig with
+        {
+            Mission = config.Mission,
+            DetectionThresholdPercent = config.DetectionThresholdPercent,
+            DetectionWindowStep = config.DetectionWindowStep,
+        };
+        return true;
     }
 
     private CancellationTokenSource? _streamAudioCts;

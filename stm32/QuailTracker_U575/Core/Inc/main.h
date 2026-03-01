@@ -63,7 +63,7 @@ void Error_Handler(void);
 #define SD_CS_GPIO_Port GPIOA
 
 /* USER CODE BEGIN Private defines */
-#define FW_VERSION "0.7.12"
+#define FW_VERSION "0.8.0"
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

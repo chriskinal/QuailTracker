@@ -67,6 +67,11 @@ public record DeviceConfig
     public double SurveyLongitude { get; init; }
     public float SurveyAltitude { get; init; }
     public int SurveyCount { get; init; }
+
+    // Detection / Inference
+    public MissionMode Mission { get; init; } = MissionMode.RecordOnly;
+    public int DetectionThresholdPercent { get; init; } = 70;
+    public int DetectionWindowStep { get; init; } = 3;
 }
 
 public enum ActivityFilterMode

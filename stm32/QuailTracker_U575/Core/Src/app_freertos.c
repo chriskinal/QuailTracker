@@ -29,6 +29,8 @@
 #include "fatfs.h"
 #include "user_diskio.h"
 #include "flac_encoder.h"
+#include "mel_spectrogram.h"
+#include "tflite_inference.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -46,7 +48,7 @@ typedef struct {
 
 /* ---- Flash-persisted device configuration ---- */
 #define CONFIG_MAGIC      0x51544346   /* "QTCF" */
-#define CONFIG_VERSION    6
+#define CONFIG_VERSION    7
 #define CONFIG_FLASH_ADDR 0x081FE000   /* Bank 2, page 127 (last 8KB page of 2MB) */
 
 typedef struct __attribute__((packed, aligned(16))) {
@@ -79,7 +81,10 @@ typedef struct __attribute__((packed, aligned(16))) {
     float    surveyLon;       /* averaged longitude (decimal degrees) */
     float    surveyAlt;       /* averaged altitude (meters) */
     uint32_t surveyCount;     /* number of GPS fixes averaged */
-    uint8_t  _pad[128 - 96 - 4]; /* pad to 128 bytes: 96 pre-pad + 28 pad + 4 crc */
+    uint8_t  missionMode;     /* 0=record, 1=detect, 2=both */
+    uint8_t  detConfThresh;   /* 0-100 confidence % threshold */
+    uint8_t  detWindowStep;   /* 1-3 seconds inference window step */
+    uint8_t  _pad[128 - 99 - 4]; /* pad to 128 bytes: 99 pre-pad + 25 pad + 4 crc */
     uint32_t crc32;           /* CRC-32 over bytes 0..123 */
 } device_config_t;
 
@@ -252,6 +257,45 @@ static uint8_t  actGateOpen  = 1;         /* gate mode: 1 = recording allowed */
 
 /* OTA firmware update context (~8.2KB BSS) */
 static ota_ctx_t ota;
+
+/* ---- Inference engine state ---- */
+#define MISSION_RECORD 0
+#define MISSION_DETECT 1
+#define MISSION_BOTH   2
+
+/* Inference buffers from main.c */
+extern uint8_t modelBuf[20 * 1024];
+extern uint32_t modelBufSize;
+extern uint8_t tensorArena[48 * 1024];
+extern volatile uint64_t absSampleCount;
+
+/* Inference task handle + notification */
+static osThreadId_t inferenceTaskHandle;
+
+/* Decimation buffer: 512 int32 → 256 int16 at 24kHz */
+static int16_t decimBuf[256];
+
+/* Inference state */
+static volatile uint8_t modelLoaded = 0;
+static volatile uint32_t detWindowsProcessed = 0;
+static volatile uint32_t detHits = 0;
+static char detLastSpecies[32] = "";
+static volatile uint8_t detLastConf = 0;
+static char detLastTime[20] = "";
+
+/* Model metadata (loaded from model_config.json) */
+static char modelLabels[TFLITE_MAX_CLASSES][32];
+static int modelNumLabels = 0;
+static float modelMelMin = -80.0f;
+static float modelMelMax = 0.0f;
+
+/* BLE detection streaming interval (0=off) */
+static uint32_t streamDetInterval = 0;
+static uint32_t lastDetTick = 0;
+
+/* Detection CSV filename for today */
+static char detCsvFilename[48] = "";
+static uint32_t detCsvDate = 0;  /* YYYYMMDD */
 /* USER CODE END Variables */
 /* Definitions for audioTask */
 osThreadId_t audioTaskHandle;
@@ -287,6 +331,7 @@ const osSemaphoreAttr_t audioDmaSem_attributes = {
 /* USER CODE BEGIN FunctionPrototypes */
 static void StartGpsTask(void *argument);
 static void StartBleTask(void *argument);
+static void StartInferenceTask(void *argument);
 static void printGpsStatus(void);
 static void printBleStatus(void);
 void printBleStatusBrief(void);
@@ -375,6 +420,14 @@ void MX_FREERTOS_Init(void) {
       .stack_size = 1024 * 4
     };
     osThreadNew(StartBleTask, NULL, &bleTask_attributes);
+  }
+  {
+    const osThreadAttr_t inferenceTask_attributes = {
+      .name = "inferTask",
+      .priority = (osPriority_t) osPriorityBelowNormal,
+      .stack_size = 2048 * 4
+    };
+    inferenceTaskHandle = osThreadNew(StartInferenceTask, NULL, &inferenceTask_attributes);
   }
   /* USER CODE END RTOS_THREADS */
 
@@ -528,7 +581,26 @@ void StartAudioTask(void *argument)
           memset(pcmBuffer, 0, blockLen * sizeof(int32_t));
         }
 
-        /* Step 6: Encode + write */
+        /* Step 5b: Mel spectrogram feed for inference (2:1 decimate 48kHz → 24kHz) */
+        if (cfg.missionMode != MISSION_RECORD && modelLoaded) {
+          /* Decimate: average pairs of int32 samples → int16 */
+          for (int i = 0; i < blockLen / 2; i++) {
+            int32_t avg = (pcmBuffer[i * 2] + pcmBuffer[i * 2 + 1]) / 2;
+            /* Scale int32 (24-bit in upper) down to int16 */
+            decimBuf[i] = (int16_t)(avg >> 16);
+          }
+          mel_process_frame(decimBuf);
+
+          /* When mel buffer is full (256 frames = 3s), notify inferenceTask */
+          if (mel_get_frame_count() >= MEL_FRAMES) {
+            if (inferenceTaskHandle != NULL) {
+              osThreadFlagsSet(inferenceTaskHandle, 0x01);
+            }
+          }
+        }
+
+        /* Step 6: Encode + write (skip if detect-only mode) */
+        if (cfg.missionMode == MISSION_DETECT) goto skip_write;
         if (recFormat == REC_FMT_WAV) {
           /* Pack int32 samples into 24-bit LE (3 bytes/sample) for WAV */
           uint8_t packed[512 * 3];
@@ -574,6 +646,8 @@ void StartAudioTask(void *argument)
             osMutexRelease(fileMtxHandle);
           }
         }
+skip_write:
+        (void)0; /* label requires a statement */
       }
     } else {
       /* Not recording — drain ring and track peak for live audio monitor.
@@ -810,6 +884,285 @@ void StartCliTask(void *argument)
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
+
+/* ========================= Inference Task ========================= */
+
+/* Load model from SD card /model/quail_model.tflite + /model/model_config.json */
+static int loadModelFromSD(void)
+{
+    FIL f;
+    UINT br;
+    FRESULT fres;
+
+    /* Load .tflite model binary */
+    osMutexAcquire(fileMtxHandle, osWaitForever);
+    fres = f_open(&f, "model/quail_model.tflite", FA_READ);
+    if (fres != FR_OK) {
+        osMutexRelease(fileMtxHandle);
+        printf("Inference: model/quail_model.tflite not found\r\n");
+        return -1;
+    }
+    DWORD fsize = f_size(&f);
+    if (fsize > sizeof(modelBuf)) {
+        f_close(&f);
+        osMutexRelease(fileMtxHandle);
+        printf("Inference: model too large (%lu > %u)\r\n",
+               (unsigned long)fsize, (unsigned)sizeof(modelBuf));
+        return -1;
+    }
+    fres = f_read(&f, modelBuf, fsize, &br);
+    f_close(&f);
+    if (fres != FR_OK || br != fsize) {
+        osMutexRelease(fileMtxHandle);
+        printf("Inference: model read error\r\n");
+        return -1;
+    }
+    modelBufSize = br;
+    printf("Inference: Loaded model (%lu bytes)\r\n", (unsigned long)modelBufSize);
+
+    /* Load model_config.json for labels + normalization */
+    fres = f_open(&f, "model/model_config.json", FA_READ);
+    if (fres == FR_OK) {
+        char jsonBuf[1024];
+        fres = f_read(&f, jsonBuf, sizeof(jsonBuf) - 1, &br);
+        f_close(&f);
+        if (fres == FR_OK) {
+            jsonBuf[br] = '\0';
+
+            /* Parse mel_min */
+            char *p = strstr(jsonBuf, "\"mel_min\"");
+            if (p) {
+                p = strchr(p, ':');
+                if (p) modelMelMin = strtof(p + 1, NULL);
+            }
+            /* Parse mel_max */
+            p = strstr(jsonBuf, "\"mel_max\"");
+            if (p) {
+                p = strchr(p, ':');
+                if (p) modelMelMax = strtof(p + 1, NULL);
+            }
+
+            /* Parse labels array (simple: find "labels" then extract quoted strings) */
+            modelNumLabels = 0;
+            p = strstr(jsonBuf, "\"labels\"");
+            if (p) {
+                p = strchr(p, '[');
+                if (p) {
+                    p++;
+                    while (modelNumLabels < TFLITE_MAX_CLASSES) {
+                        char *q1 = strchr(p, '"');
+                        if (!q1) break;
+                        q1++;
+                        char *q2 = strchr(q1, '"');
+                        if (!q2) break;
+                        int len = (int)(q2 - q1);
+                        if (len > 31) len = 31;
+                        memcpy(modelLabels[modelNumLabels], q1, len);
+                        modelLabels[modelNumLabels][len] = '\0';
+                        modelNumLabels++;
+                        p = q2 + 1;
+                        if (strchr(p, ']') && strchr(p, ']') < strchr(p, '"'))
+                            break;
+                    }
+                }
+            }
+            printf("Inference: %d labels, mel_min=%.2f, mel_max=%.2f\r\n",
+                   modelNumLabels, modelMelMin, modelMelMax);
+        }
+    } else {
+        printf("Inference: model_config.json not found (using defaults)\r\n");
+    }
+    osMutexRelease(fileMtxHandle);
+
+    /* Initialize TFLite Micro interpreter */
+    if (tflite_init(modelBuf, modelBufSize, tensorArena, sizeof(tensorArena)) != 0) {
+        printf("Inference: TFLite init FAILED\r\n");
+        return -1;
+    }
+
+    const tflite_info_t *info = tflite_get_info();
+    printf("Inference: TFLite ready — input=%d bytes, %d classes, arena=%d bytes\r\n",
+           info->input_size, info->output_classes, info->arena_used);
+
+    /* Initialize mel spectrogram */
+    mel_init(modelMelMin, modelMelMax);
+
+    modelLoaded = 1;
+    return 0;
+}
+
+/* Build detection CSV filename for today */
+static void detUpdateCsvFilename(void)
+{
+    if (!ppsSynced || ppsUtcDate == 0) return;
+
+    uint32_t dd = ppsUtcDate / 10000;
+    uint32_t mm = (ppsUtcDate / 100) % 100;
+    uint32_t yy = ppsUtcDate % 100;
+    uint32_t dateKey = (2000 + yy) * 10000 + mm * 100 + dd;
+
+    if (dateKey != detCsvDate) {
+        detCsvDate = dateKey;
+        snprintf(detCsvFilename, sizeof(detCsvFilename),
+                 "detections_%08lu_%s.csv",
+                 (unsigned long)dateKey, cfg.stationId);
+    }
+}
+
+/* Log a detection to the daily CSV file */
+static void detLogCsv(const char *species, float confidence,
+                       uint64_t windowStartSample)
+{
+    if (!sdMounted || detCsvFilename[0] == '\0') return;
+
+    FIL f;
+    osMutexAcquire(fileMtxHandle, osWaitForever);
+
+    /* Open or create CSV file */
+    FRESULT fres = f_open(&f, detCsvFilename, FA_WRITE | FA_OPEN_APPEND);
+    if (fres != FR_OK) {
+        /* Try creating directory first */
+        fres = f_open(&f, detCsvFilename, FA_WRITE | FA_CREATE_ALWAYS);
+        if (fres == FR_OK) {
+            /* Write CSV header */
+            f_printf(&f, "UTC_Timestamp,Species,Confidence,Latitude,Longitude,"
+                         "Altitude,StationId,PPS_Sync,Window_Start_Sample\n");
+        }
+    }
+
+    if (fres == FR_OK) {
+        /* Build UTC timestamp for window center */
+        char ts[24];
+        if (ppsSynced && ppsUtcDate != 0) {
+            uint32_t dd = ppsUtcDate / 10000;
+            uint32_t mm = (ppsUtcDate / 100) % 100;
+            uint32_t yy = ppsUtcDate % 100;
+            uint32_t hh = ppsUtcTime / 10000;
+            uint32_t mn = (ppsUtcTime / 100) % 100;
+            uint32_t ss = ppsUtcTime % 100;
+            snprintf(ts, sizeof(ts), "20%02lu%02lu%02luT%02lu%02lu%02luZ",
+                     (unsigned long)yy, (unsigned long)mm, (unsigned long)dd,
+                     (unsigned long)hh, (unsigned long)mn, (unsigned long)ss);
+        } else {
+            strncpy(ts, "unknown", sizeof(ts));
+        }
+
+        /* Get current GPS position */
+        float lat = ppsLatitude;
+        float lon = ppsLongitude;
+        float alt = ppsAltitude;
+        if (cfg.surveyCount > 0) {
+            lat = cfg.surveyLat;
+            lon = cfg.surveyLon;
+            alt = cfg.surveyAlt;
+        }
+
+        f_printf(&f, "%s,%s,%.2f,%.6f,%.6f,%.1f,%s,%d,%llu\n",
+                 ts, species, (double)confidence,
+                 (double)lat, (double)lon, (double)alt,
+                 cfg.stationId, ppsSynced ? 1 : 0,
+                 (unsigned long long)windowStartSample);
+        f_close(&f);
+    }
+
+    osMutexRelease(fileMtxHandle);
+}
+
+static void StartInferenceTask(void *argument)
+{
+    (void)argument;
+
+    /* Wait for SD to mount before trying to load model */
+    while (!sdMounted) {
+        osDelay(500);
+    }
+
+    /* Attempt to load model from SD card */
+    if (loadModelFromSD() != 0) {
+        printf("Inference: No model — task idle\r\n");
+        /* Stay alive so $MODEL,RELOAD can retry */
+        for (;;) {
+            osThreadFlagsWait(0x01, osFlagsWaitAny, osWaitForever);
+            /* Check if this is a reload request (flag 0x02) */
+            if (sdMounted) {
+                loadModelFromSD();
+            }
+        }
+    }
+
+    /* Main inference loop */
+    for (;;) {
+        /* Wait for audioTask to signal a complete mel buffer */
+        uint32_t flags = osThreadFlagsWait(0x03, osFlagsWaitAny, osWaitForever);
+
+        /* Flag 0x02 = reload request */
+        if (flags & 0x02) {
+            modelLoaded = 0;
+            tflite_deinit();
+            if (loadModelFromSD() != 0) {
+                printf("Inference: Reload failed\r\n");
+            }
+            continue;
+        }
+
+        /* Flag 0x01 = mel buffer ready */
+        if (!(flags & 0x01)) continue;
+        if (!modelLoaded || cfg.missionMode == MISSION_RECORD) continue;
+
+        /* Get completed spectrogram and run inference */
+        const int8_t *melData = mel_get_buffer();
+        uint64_t windowStart = absSampleCount - (uint64_t)(MEL_FRAMES * MEL_HOP * 2);
+
+        tflite_result_t results[TFLITE_MAX_CLASSES];
+        int nResults = tflite_infer(melData, MEL_FRAMES * MEL_BINS,
+                                     results, TFLITE_MAX_CLASSES);
+
+        detWindowsProcessed++;
+        detUpdateCsvFilename();
+
+        if (nResults <= 0) continue;
+
+        /* Check each class against threshold */
+        uint8_t threshold = cfg.detConfThresh;
+        for (int i = 0; i < nResults; i++) {
+            uint8_t confPct = (uint8_t)(results[i].confidence * 100.0f);
+            if (confPct >= threshold && results[i].class_index < modelNumLabels) {
+                const char *species = modelLabels[results[i].class_index];
+
+                /* Update last detection info */
+                strncpy(detLastSpecies, species, sizeof(detLastSpecies) - 1);
+                detLastConf = confPct;
+                if (ppsSynced && ppsUtcDate != 0) {
+                    uint32_t dd = ppsUtcDate / 10000;
+                    uint32_t mm = (ppsUtcDate / 100) % 100;
+                    uint32_t yy = ppsUtcDate % 100;
+                    uint32_t hh = ppsUtcTime / 10000;
+                    uint32_t mn = (ppsUtcTime / 100) % 100;
+                    uint32_t ss = ppsUtcTime % 100;
+                    snprintf(detLastTime, sizeof(detLastTime),
+                             "20%02lu%02lu%02luT%02lu%02lu%02luZ",
+                             (unsigned long)yy, (unsigned long)mm, (unsigned long)dd,
+                             (unsigned long)hh, (unsigned long)mn, (unsigned long)ss);
+                }
+                detHits++;
+
+                /* Log to CSV */
+                detLogCsv(species, results[i].confidence, windowStart);
+
+                printf("DET: %s %d%% @ %s\r\n", species, confPct, detLastTime);
+
+                /* Push detection over BLE if streaming enabled */
+                if (streamDetInterval > 0) {
+                    bleSendLine("$DETECTION");
+                    bleSendLine("species=%s", species);
+                    bleSendLine("conf=%d", confPct);
+                    bleSendLine("time=%s", detLastTime);
+                    bleSendLine("$END");
+                }
+            }
+        }
+    }
+}
 
 /* ========================= GPS / NMEA ========================= */
 
@@ -1330,6 +1683,9 @@ static void configSetDefaults(device_config_t *c)
     c->surveyLon = 0.0f;
     c->surveyAlt = 0.0f;
     c->surveyCount = 0;
+    c->missionMode = MISSION_RECORD;
+    c->detConfThresh = 70;   /* 70% default threshold */
+    c->detWindowStep = 3;    /* 3 seconds */
     memset(c->_pad, 0xFF, sizeof(c->_pad));
     c->crc32 = 0;
 }
@@ -1688,6 +2044,13 @@ static void bleHandleStatusPage(int page)
         bleSendLine("rec_dur=%lu",
                     (unsigned long)(isRecording ? totalDataBytes / (SAMPLE_RATE * 3) : 0));
         bleSendLine("rec_ovf=%lu", (unsigned long)ringOverruns);
+        bleSendLine("det_active=%d", (cfg.missionMode != MISSION_RECORD && modelLoaded) ? 1 : 0);
+        bleSendLine("det_windows=%lu", (unsigned long)detWindowsProcessed);
+        bleSendLine("det_hits=%lu", (unsigned long)detHits);
+        bleSendLine("det_last=%s", detLastSpecies);
+        bleSendLine("model_loaded=%d", modelLoaded ? 1 : 0);
+        bleSendLine("model_size=%lu", (unsigned long)modelBufSize);
+        bleSendLine("model_labels=%d", modelNumLabels);
         break;
 
     case 3: { /* Audio + survey */
@@ -1788,6 +2151,9 @@ static void bleHandleConfig(void)
     bleSendLine("act_min=%d", cfg.activityMinPct);
     bleSendLine("act_max=%d", cfg.activityMaxPct);
     bleSendLine("act_hold=%d", cfg.activityHoldSec);
+    bleSendLine("mission=%d", cfg.missionMode);
+    bleSendLine("det_thresh=%d", cfg.detConfThresh);
+    bleSendLine("det_step=%d", cfg.detWindowStep);
 
     /* Survey-in config */
     {
@@ -2001,6 +2367,18 @@ static void bleHandleSet(const char *args)
             bleSendLine("$ERR,BADARG");
         }
         return; /* no additional flash save needed */
+    } else if (strcmp(key, "MISSION") == 0) {
+        int v = val[0] - '0';
+        if (v < 0 || v > 2) { bleSendLine("$ERR,BADARG"); return; }
+        cfg.missionMode = (uint8_t)v;
+    } else if (strcmp(key, "DETTHRESH") == 0) {
+        int v = atoi(val);
+        if (v < 0 || v > 100) { bleSendLine("$ERR,BADARG"); return; }
+        cfg.detConfThresh = (uint8_t)v;
+    } else if (strcmp(key, "DETSTEP") == 0) {
+        int v = atoi(val);
+        if (v < 1 || v > 3) { bleSendLine("$ERR,BADARG"); return; }
+        cfg.detWindowStep = (uint8_t)v;
     } else if (strcmp(key, "STREAM") == 0) {
         /* $SET,STREAM,0          → stop all streams
          * $SET,STREAM,AUDIO,<ms> → audio level stream
@@ -2008,6 +2386,7 @@ static void bleHandleSet(const char *args)
         if (strcmp(val, "0") == 0) {
             streamAudioInterval = 0;
             streamRecInterval = 0;
+            streamDetInterval = 0;
             printf("BLE: All streams off\r\n");
         } else if (strncmp(val, "AUDIO,", 6) == 0) {
             int v = atoi(val + 6);
@@ -2021,6 +2400,12 @@ static void bleHandleSet(const char *args)
             streamRecInterval = (uint32_t)v;
             if (v > 0) lastRecTick = HAL_GetTick();
             printf("BLE: Rec stream = %d ms\r\n", v);
+        } else if (strncmp(val, "DET,", 4) == 0) {
+            int v = atoi(val + 4);
+            if (v != 0 && (v < 100 || v > 30000)) { bleSendLine("$ERR,BADARG"); return; }
+            streamDetInterval = (uint32_t)v;
+            if (v > 0) lastDetTick = HAL_GetTick();
+            printf("BLE: Det stream = %d ms\r\n", v);
         } else {
             bleSendLine("$ERR,BADARG");
             return;
@@ -2429,6 +2814,13 @@ static void bleHandleCommand(const char *cmd)
         bleSendLine("$SET,TRIGPOST,<0-60>");
         bleSendLine("$SET,LOWBAT,<0-100>");
         bleSendLine("$SET,AUTOSTOP,<0|1>");
+        bleSendLine("$SET,MISSION,<0|1|2> - record/detect/both");
+        bleSendLine("$SET,DETTHRESH,<0-100> - det confidence %%");
+        bleSendLine("$SET,DETSTEP,<1-3>   - window step sec");
+        bleSendLine("$MODEL,STATUS        - model info");
+        bleSendLine("$MODEL,RELOAD        - reload from SD");
+        bleSendLine("$DET,STATUS          - detection stats");
+        bleSendLine("$DET,STREAM,<0|ms>   - push detections");
         bleSendLine("$OTA,BEGIN,<size>,<crc32hex>");
         bleSendLine("$OTA,D,<hexdata>   - OTA data chunk");
         bleSendLine("$OTA,END           - finalize OTA");
@@ -2477,6 +2869,54 @@ static void bleHandleCommand(const char *cmd)
         bleHandleSd(cmd + 4);
     } else if (strncmp(cmd, "$SET,", 5) == 0) {
         bleHandleSet(cmd + 5);
+    } else if (strncmp(cmd, "$MODEL,", 7) == 0) {
+        const char *arg = cmd + 7;
+        if (strcmp(arg, "STATUS") == 0) {
+            bleSendLine("$MODEL,STATUS");
+            bleSendLine("loaded=%d", modelLoaded ? 1 : 0);
+            bleSendLine("size=%lu", (unsigned long)modelBufSize);
+            bleSendLine("labels=%d", modelNumLabels);
+            for (int i = 0; i < modelNumLabels; i++) {
+                bleSendLine("label_%d=%s", i, modelLabels[i]);
+            }
+            const tflite_info_t *info = tflite_get_info();
+            if (info->ready) {
+                bleSendLine("input=%d", info->input_size);
+                bleSendLine("classes=%d", info->output_classes);
+                bleSendLine("arena=%d", info->arena_used);
+            }
+            bleSendLine("$END");
+        } else if (strcmp(arg, "RELOAD") == 0) {
+            if (inferenceTaskHandle != NULL) {
+                osThreadFlagsSet(inferenceTaskHandle, 0x02);
+                bleSendLine("$OK");
+            } else {
+                bleSendLine("$ERR,NOTASK");
+            }
+        } else {
+            bleSendLine("$ERR,BADARG");
+        }
+    } else if (strncmp(cmd, "$DET,", 5) == 0) {
+        const char *arg = cmd + 5;
+        if (strcmp(arg, "STATUS") == 0) {
+            bleSendLine("$DET,STATUS");
+            bleSendLine("active=%d", (cfg.missionMode != MISSION_RECORD && modelLoaded) ? 1 : 0);
+            bleSendLine("mission=%d", cfg.missionMode);
+            bleSendLine("windows=%lu", (unsigned long)detWindowsProcessed);
+            bleSendLine("hits=%lu", (unsigned long)detHits);
+            bleSendLine("last_species=%s", detLastSpecies);
+            bleSendLine("last_conf=%d", (int)detLastConf);
+            bleSendLine("last_time=%s", detLastTime);
+            bleSendLine("$END");
+        } else if (strncmp(arg, "STREAM,", 7) == 0) {
+            int v = atoi(arg + 7);
+            if (v != 0 && (v < 100 || v > 30000)) { bleSendLine("$ERR,BADARG"); return; }
+            streamDetInterval = (uint32_t)v;
+            if (v > 0) lastDetTick = HAL_GetTick();
+            bleSendLine("$OK");
+        } else {
+            bleSendLine("$ERR,BADARG");
+        }
     } else {
         bleSendLine("$ERR,BADCMD");
     }

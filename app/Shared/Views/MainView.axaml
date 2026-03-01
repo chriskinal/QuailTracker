@@ -55,6 +55,20 @@
                 <views:OperationsView DataContext="{Binding OperationsViewModel}" />
             </TabItem>
 
+            <!-- Detect Tab -->
+            <TabItem Header="Detect">
+                <TabItem.HeaderTemplate>
+                    <DataTemplate>
+                        <StackPanel Spacing="4">
+                            <PathIcon Data="M12,2L1,21H23M12,6L19.53,19H4.47M11,10V14H13V10M11,16V18H13V16"
+                                      Width="20" Height="20" />
+                            <TextBlock Text="Detect" HorizontalAlignment="Center" FontSize="10" />
+                        </StackPanel>
+                    </DataTemplate>
+                </TabItem.HeaderTemplate>
+                <views:DetectView DataContext="{Binding DetectViewModel}" />
+            </TabItem>
+
             <!-- Schedule Tab -->
             <TabItem Header="Schedule">
                 <TabItem.HeaderTemplate>

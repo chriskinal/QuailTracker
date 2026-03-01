@@ -323,7 +323,8 @@
                 // Downloads
                 const dlEl = document.getElementById('downloads');
                 const dlFiles = files.filter(f =>
-                    f.name.endsWith('.tflite') || f.name === 'model_config.json'
+                    f.name.endsWith('.tflite') || f.name === 'model_config.json' ||
+                    f.name === 'mel_filterbank.h'
                 );
                 dlEl.innerHTML = dlFiles.map(f =>
                     `<a href="/api/outputs/${f.name}" class="btn-download" download>${f.name} (${(f.size / 1024).toFixed(1)} KB)</a>`

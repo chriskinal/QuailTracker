@@ -74,6 +74,7 @@ public class BluetoothService : IBluetoothService
     public event EventHandler<ConnectionState>? ConnectionStateChanged;
     public event EventHandler<DeviceStatus>? StatusReceived;
     public event EventHandler<DeviceConfig>? ConfigReceived;
+    public event EventHandler<DetectionEvent>? DetectionReceived;
 
     public BluetoothService()
     {
@@ -365,6 +366,62 @@ public class BluetoothService : IBluetoothService
         }
     }
 
+    public async Task SendModelCommandAsync(string operation)
+    {
+        if (CurrentState != ConnectionState.Connected) return;
+
+        try
+        {
+            await SendRawAsync($"$MODEL,{operation}");
+        }
+        catch
+        {
+            // Timeout — non-fatal
+        }
+    }
+
+    public async Task SendDetectionCommandAsync(string operation)
+    {
+        if (CurrentState != ConnectionState.Connected) return;
+
+        try
+        {
+            await SendRawAsync($"$DET,{operation}");
+        }
+        catch
+        {
+            // Timeout — non-fatal
+        }
+    }
+
+    public async Task<bool> SendDetectionConfigAsync(DeviceConfig config)
+    {
+        if (CurrentState != ConnectionState.Connected) return false;
+
+        var commands = new[]
+        {
+            $"$SET,MISSION,{(int)config.Mission}",
+            $"$SET,DETTHRESH,{config.DetectionThresholdPercent}",
+            $"$SET,DETSTEP,{config.DetectionWindowStep}",
+        };
+
+        foreach (var cmd in commands)
+        {
+            try
+            {
+                var response = await SendRawAsync(cmd);
+                if (response.StartsWith("$ERR", StringComparison.Ordinal))
+                    return false;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     public async Task SendCommandAsync(string command)
     {
         if (CurrentState != ConnectionState.Connected) return;
@@ -513,8 +570,13 @@ public class BluetoothService : IBluetoothService
                     ConfigReceived?.Invoke(this, config);
                     _responseTcs?.TrySetResult("$CONFIG");
                 }
+                else if (type == "$DETECTION")
+                {
+                    var det = ParseDetection(lines);
+                    DetectionReceived?.Invoke(this, det);
+                }
             }
-            else if (line is "$STATUS" or "$CONFIG" or "$STREAM" ||
+            else if (line is "$STATUS" or "$CONFIG" or "$STREAM" or "$DETECTION" ||
                      line.StartsWith("$STATUS,", StringComparison.Ordinal))
             {
                 // New multi-line block started before previous $END arrived.
@@ -549,7 +611,7 @@ public class BluetoothService : IBluetoothService
         }
 
         // Start of multi-line block
-        if (line is "$STATUS" or "$CONFIG" or "$STREAM" ||
+        if (line is "$STATUS" or "$CONFIG" or "$STREAM" or "$DETECTION" ||
             line.StartsWith("$STATUS,", StringComparison.Ordinal))
         {
             _multiLineType = line;
@@ -703,6 +765,14 @@ public class BluetoothService : IBluetoothService
             SurveyCount = GetInt(d, "survey_count"),
             SurveyActive = GetBool(d, "survey_active"),
 
+            DetectionActive = GetBool(d, "det_active"),
+            DetectionWindows = GetLong(d, "det_windows"),
+            DetectionHits = GetLong(d, "det_hits"),
+            DetectionLastSpecies = Get(d, "det_last"),
+            ModelLoaded = GetBool(d, "model_loaded"),
+            ModelSize = GetLong(d, "model_size"),
+            ModelLabels = GetInt(d, "model_labels"),
+
             LastUpdated = DateTime.Now,
         };
     }
@@ -742,6 +812,22 @@ public class BluetoothService : IBluetoothService
             SurveyLongitude = GetLong(d, "survey_lon") / 1e7,
             SurveyAltitude = GetLong(d, "survey_alt") / 1000f,
             SurveyCount = GetInt(d, "survey_count"),
+
+            Mission = (MissionMode)GetInt(d, "mission"),
+            DetectionThresholdPercent = GetInt(d, "det_thresh", 70),
+            DetectionWindowStep = GetInt(d, "det_step", 3),
+        };
+    }
+
+    private static DetectionEvent ParseDetection(List<string> lines)
+    {
+        var d = LinesToDict(lines);
+        return new DetectionEvent
+        {
+            Species = Get(d, "species"),
+            Confidence = GetInt(d, "conf"),
+            Timestamp = Get(d, "time"),
+            ReceivedAt = DateTime.Now,
         };
     }
 

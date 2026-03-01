@@ -120,6 +120,26 @@ public interface IBluetoothService
     /// </summary>
     /// <param name="operation">Operation string</param>
     Task SendSurveyCommandAsync(string operation);
+
+    /// <summary>
+    /// Fired when a detection is received via $DETECTION push.
+    /// </summary>
+    event EventHandler<DetectionEvent>? DetectionReceived;
+
+    /// <summary>
+    /// Send a model command (STATUS, RELOAD).
+    /// </summary>
+    Task SendModelCommandAsync(string operation);
+
+    /// <summary>
+    /// Send a detection command (STATUS, STREAM,<ms>).
+    /// </summary>
+    Task SendDetectionCommandAsync(string operation);
+
+    /// <summary>
+    /// Send detection configuration (mission mode, threshold, window step).
+    /// </summary>
+    Task<bool> SendDetectionConfigAsync(DeviceConfig config);
 }
 
 /// <summary>
@@ -131,4 +151,15 @@ public enum ConnectionState
     Scanning,
     Connecting,
     Connected
+}
+
+/// <summary>
+/// A detection event pushed by the device.
+/// </summary>
+public record DetectionEvent
+{
+    public string Species { get; init; } = "";
+    public int Confidence { get; init; }
+    public string Timestamp { get; init; } = "";
+    public DateTime ReceivedAt { get; init; } = DateTime.Now;
 }

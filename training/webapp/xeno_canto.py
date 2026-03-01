@@ -105,7 +105,7 @@ def download_recording(recording, output_dir, progress_callback=None):
 
 
 def segment_recording(audio_path, output_dir, species_name, duration=3.0,
-                      stride=1.5, sr=22050):
+                      stride=1.5, sr=24000):
     """Segment a recording into fixed-length clips with overlap.
 
     Args:

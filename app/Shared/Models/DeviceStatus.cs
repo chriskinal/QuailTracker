@@ -84,6 +84,15 @@ public record DeviceStatus
     public int SurveyCount { get; init; }
     public bool SurveyActive { get; init; }
 
+    // Detection / Inference
+    public bool DetectionActive { get; init; }
+    public long DetectionWindows { get; init; }
+    public long DetectionHits { get; init; }
+    public string DetectionLastSpecies { get; init; } = "";
+    public bool ModelLoaded { get; init; }
+    public long ModelSize { get; init; }
+    public int ModelLabels { get; init; }
+
     // Timestamp
     public DateTime LastUpdated { get; init; } = DateTime.Now;
 }

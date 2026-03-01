@@ -41,6 +41,15 @@ stm32/**/*/com.st.stm32cube.ide.mcu.sfrview.prefs
 training/data/
 training/output/
 
+# TFLite Micro source tree (generated, see README.md in that directory)
+stm32/QuailTracker_U575/Middlewares/Third_Party/TFLiteMicro/tensorflow/
+stm32/QuailTracker_U575/Middlewares/Third_Party/TFLiteMicro/third_party/
+stm32/QuailTracker_U575/Middlewares/Third_Party/TFLiteMicro/signal/
+stm32/QuailTracker_U575/Middlewares/Third_Party/TFLiteMicro/LICENSE
+
+# CMSIS-DSP (downloaded separately)
+stm32/QuailTracker_U575/Middlewares/Third_Party/CMSIS_DSP/
+
 # .NET
 bin/
 obj/
