@@ -46,6 +46,15 @@ void mel_reset(void);
 /* mel_get_frame_count() — returns number of frames written to active buffer. */
 int mel_get_frame_count(void);
 
+/* mel_set_gain_compensation() — set dB gain offset to compensate for
+ * the level difference between device mic and training data.
+ * Typical: +18 dB for ADF1 at gain=6 vs xeno-canto recordings. */
+void mel_set_gain_compensation(float db);
+
+/* mel_get_debug() — retrieve signal chain peak values from last frame.
+ * Returns max absolute values for: input samples, FFT output, magnitude. */
+void mel_get_debug(int16_t *inMax, int16_t *fftMax, int16_t *magMax);
+
 #ifdef __cplusplus
 }
 #endif

@@ -52,7 +52,15 @@
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+static void hf_tx(char c) {
+    while (!(USART1->ISR & USART_ISR_TXE_TXFNF)) {}
+    USART1->TDR = (uint8_t)c;
+}
+static void hf_puts(const char *s) { while (*s) hf_tx(*s++); }
+static void hf_hex32(uint32_t v) {
+    const char hex[] = "0123456789ABCDEF";
+    for (int i = 28; i >= 0; i -= 4) hf_tx(hex[(v >> i) & 0xF]);
+}
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
@@ -89,7 +97,38 @@ void NMI_Handler(void)
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
-  GPIOG->BSRR = GPIO_PIN_2; /* RED LED on (PG2) */
+  {
+    volatile uint32_t cfsr  = SCB->CFSR;
+    volatile uint32_t hfsr  = SCB->HFSR;
+    volatile uint32_t mmfar = SCB->MMFAR;
+    volatile uint32_t bfar  = SCB->BFAR;
+
+    /* Get the stacked frame from PSP or MSP depending on EXC_RETURN */
+    uint32_t *frame;
+    __asm volatile ("tst lr, #4 \n"
+                    "ite eq     \n"
+                    "mrseq %0, msp \n"
+                    "mrsne %0, psp \n"
+                    : "=r" (frame));
+    /* frame: [0]=R0 [1]=R1 [2]=R2 [3]=R3 [4]=R12 [5]=LR [6]=PC [7]=xPSR */
+
+    hf_puts("\r\n!!! HARDFAULT\r\n");
+    hf_puts("PC=");  hf_hex32(frame[6]); hf_puts("\r\n");
+    hf_puts("LR=");  hf_hex32(frame[5]); hf_puts("\r\n");
+    hf_puts("SP=");  hf_hex32((uint32_t)frame); hf_puts("\r\n");
+    hf_puts("CFSR="); hf_hex32(cfsr); hf_puts("\r\n");
+    hf_puts("HFSR="); hf_hex32(hfsr); hf_puts("\r\n");
+    hf_puts("BFAR="); hf_hex32(bfar); hf_puts("\r\n");
+    hf_puts("MMFAR="); hf_hex32(mmfar); hf_puts("\r\n");
+    hf_puts("R0="); hf_hex32(frame[0]); hf_puts(" R1="); hf_hex32(frame[1]); hf_puts("\r\n");
+    hf_puts("R2="); hf_hex32(frame[2]); hf_puts(" R3="); hf_hex32(frame[3]); hf_puts("\r\n");
+    hf_puts("R12="); hf_hex32(frame[4]); hf_puts("\r\n");
+  }
+  /* Rapid-blink red LED */
+  for (;;) {
+    GPIOG->ODR ^= GPIO_PIN_2;
+    for (volatile int i = 0; i < 500000; i++) {}
+  }
   /* USER CODE END HardFault_IRQn 0 */
   while (1)
   {

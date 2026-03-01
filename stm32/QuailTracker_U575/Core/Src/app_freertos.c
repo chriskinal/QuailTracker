@@ -264,16 +264,17 @@ static ota_ctx_t ota;
 #define MISSION_BOTH   2
 
 /* Inference buffers from main.c */
-extern uint8_t modelBuf[20 * 1024];
+extern uint8_t modelBuf[56 * 1024];
 extern uint32_t modelBufSize;
-extern uint8_t tensorArena[56 * 1024];
+extern uint8_t tensorArena[112 * 1024];
 extern volatile uint64_t absSampleCount;
 
 /* Inference task handle + notification */
 static osThreadId_t inferenceTaskHandle;
 
-/* Decimation buffer: 512 int32 → 256 int16 at 24kHz */
-static int16_t decimBuf[256];
+/* Decimation + mel accumulation: 2 audio blocks of 128 → 256 at 24kHz (one mel hop) */
+static int16_t melAccumBuf[256];  /* MEL_HOP samples */
+static int melAccumIdx = 0;
 
 /* Inference state */
 static volatile uint8_t modelLoaded = 0;
@@ -302,14 +303,14 @@ osThreadId_t audioTaskHandle;
 const osThreadAttr_t audioTask_attributes = {
   .name = "audioTask",
   .priority = (osPriority_t) osPriorityAboveNormal,
-  .stack_size = 1024 * 4
+  .stack_size = 2048 * 4
 };
 /* Definitions for cliTask */
 osThreadId_t cliTaskHandle;
 const osThreadAttr_t cliTask_attributes = {
   .name = "cliTask",
   .priority = (osPriority_t) osPriorityNormal,
-  .stack_size = 512 * 4
+  .stack_size = 1024 * 4
 };
 /* Definitions for fileMtx */
 osMutexId_t fileMtxHandle;
@@ -409,7 +410,7 @@ void MX_FREERTOS_Init(void) {
     const osThreadAttr_t gpsTask_attributes = {
       .name = "gpsTask",
       .priority = (osPriority_t) osPriorityNormal,
-      .stack_size = 512 * 4
+      .stack_size = 1024 * 4
     };
     osThreadNew(StartGpsTask, NULL, &gpsTask_attributes);
   }
@@ -417,7 +418,7 @@ void MX_FREERTOS_Init(void) {
     const osThreadAttr_t bleTask_attributes = {
       .name = "bleTask",
       .priority = (osPriority_t) osPriorityNormal,
-      .stack_size = 1024 * 4
+      .stack_size = 1536 * 4
     };
     osThreadNew(StartBleTask, NULL, &bleTask_attributes);
   }
@@ -464,6 +465,8 @@ void StartAudioTask(void *argument)
         actAbove = 0; actTotal = 0;
         actRatio = 0; actSquelch = 0;
         actHolddown = 0; actGateOpen = 1;
+        melAccumIdx = 0;
+        mel_reset();
         startRecording();
       }
       else if (cmd == CMD_STOP_REC) stopRecording();
@@ -576,34 +579,59 @@ void StartAudioTask(void *argument)
           }
         }
 
-        /* Step 5: Squelch -zero out uninteresting audio */
-        if (cfg.activityMode == 2 && actSquelch) {
-          memset(pcmBuffer, 0, blockLen * sizeof(int32_t));
-        }
-
-        /* Step 5b: Mel spectrogram feed for inference (2:1 decimate 48kHz → 24kHz) */
+        /* Step 5b: Mel spectrogram feed (BEFORE squelch, needs real audio) */
         if (cfg.missionMode != MISSION_RECORD && modelLoaded) {
-          /* Decimate: average pairs of int32 samples → int16 */
-          for (int i = 0; i < blockLen / 2; i++) {
+          /* Decimate: average pairs of int32 ADF1 samples → int16 for Q15 FFT.
+           * ADF1 DFLTDR is a 25-bit sinc4 output left-justified in 32 bits
+           * (bits [31:7]).  >> 8 gives ~17 usable bits, saturate to int16. */
+          int nDecim = blockLen / 2;
+          for (int i = 0; i < nDecim; i++) {
             int32_t avg = (pcmBuffer[i * 2] + pcmBuffer[i * 2 + 1]) / 2;
-            /* Scale int32 (24-bit in upper) down to int16 */
-            decimBuf[i] = (int16_t)(avg >> 16);
+            int32_t s16 = avg >> 8;
+            if (s16 > 32767) s16 = 32767;
+            if (s16 < -32768) s16 = -32768;
+            melAccumBuf[melAccumIdx++] = (int16_t)s16;
           }
-          mel_process_frame(decimBuf);
 
-          /* When mel buffer is full (256 frames = 3s), notify inferenceTask */
-          if (mel_get_frame_count() >= MEL_FRAMES) {
-            if (inferenceTaskHandle != NULL) {
-              osThreadFlagsSet(inferenceTaskHandle, 0x01);
+          /* Debug: print pcmBuffer and melAccumBuf samples once */
+          {
+            static int melDecimDbg = 0;
+            if (melDecimDbg == 0) {
+              printf("PCM32: %ld %ld %ld %ld\r\n",
+                     (long)pcmBuffer[0], (long)pcmBuffer[1],
+                     (long)pcmBuffer[2], (long)pcmBuffer[3]);
+              printf("MEL16: %d %d %d %d\r\n",
+                     (int)melAccumBuf[0], (int)melAccumBuf[1],
+                     (int)melAccumBuf[2], (int)melAccumBuf[3]);
+              melDecimDbg = 1;
             }
           }
+
+          /* Process one mel hop when we have 256 decimated samples */
+          if (melAccumIdx >= MEL_HOP) {
+            HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_7); /* blue LED: mel heartbeat */
+            mel_process_frame(melAccumBuf);
+            melAccumIdx = 0;
+
+            /* When mel buffer is full (256 frames = 3s), notify inferenceTask */
+            if (mel_get_frame_count() >= MEL_FRAMES) {
+              if (inferenceTaskHandle != NULL) {
+                osThreadFlagsSet(inferenceTaskHandle, 0x01);
+              }
+            }
+          }
+        }
+
+        /* Step 5: Squelch — zero out uninteresting audio (after mel feed) */
+        if (cfg.activityMode == 2 && actSquelch) {
+          memset(pcmBuffer, 0, blockLen * sizeof(int32_t));
         }
 
         /* Step 6: Encode + write (skip if detect-only mode) */
         if (cfg.missionMode == MISSION_DETECT) goto skip_write;
         if (recFormat == REC_FMT_WAV) {
           /* Pack int32 samples into 24-bit LE (3 bytes/sample) for WAV */
-          uint8_t packed[512 * 3];
+          static uint8_t packed[512 * 3];
           for (int i = 0; i < blockLen; i++) {
             uint32_t v = (uint32_t)pcmBuffer[i];
             packed[i * 3 + 0] = (uint8_t)(v);
@@ -885,6 +913,43 @@ void StartCliTask(void *argument)
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
 
+/* ========================= FreeRTOS hooks ========================= */
+
+/* Polling UART write - works with interrupts disabled */
+static void uart_poll_puts(const char *s)
+{
+    while (*s) {
+        while (!(USART1->ISR & USART_ISR_TXE_TXFNF)) {}
+        USART1->TDR = (uint8_t)*s++;
+    }
+}
+
+void vAssertCalled(const char *file, int line)
+{
+    taskDISABLE_INTERRUPTS();
+    char buf[80];
+    snprintf(buf, sizeof(buf), "\r\n!!! ASSERT: %s:%d\r\n", file, line);
+    uart_poll_puts(buf);
+    /* Blink red LED (PG2) to signal fault */
+    for (;;) {
+        HAL_GPIO_TogglePin(GPIOG, GPIO_PIN_2);
+        for (volatile int i = 0; i < 500000; i++) {}
+    }
+}
+
+void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
+{
+    taskDISABLE_INTERRUPTS();
+    char buf[80];
+    snprintf(buf, sizeof(buf), "\r\n!!! STACK OVERFLOW: %s\r\n", pcTaskName);
+    uart_poll_puts(buf);
+    /* Blink red LED (PG2) to signal fault */
+    for (;;) {
+        HAL_GPIO_TogglePin(GPIOG, GPIO_PIN_2);
+        for (volatile int i = 0; i < 500000; i++) {}
+    }
+}
+
 /* ========================= Inference Task ========================= */
 
 /* Load model from SD card /model/quail_model.tflite + /model/model_config.json */
@@ -983,9 +1048,44 @@ static int loadModelFromSD(void)
     const tflite_info_t *info = tflite_get_info();
     printf("Inference: TFLite ready - input=%d bytes, %d classes, arena=%d bytes\r\n",
            info->input_size, info->output_classes, info->arena_used);
+    printf("Inference: input quant scale=%.6f zp=%d, mel_min=%.2f mel_max=%.2f\r\n",
+           (double)info->input_scale, info->input_zero_point,
+           (double)modelMelMin, (double)modelMelMax);
+
+    /* Self-test: verify model responds differently to different inputs.
+     * tflite_infer copies into the input tensor, so we just need a
+     * source buffer.  Use modelBuf (model flatbuffer) as scratch since
+     * it's already allocated and the model is parsed — raw bytes are fine. */
+    {
+        static int8_t testBuf[10240];  /* reuse .bss, freed after this scope */
+        tflite_result_t tr[TFLITE_MAX_CLASSES];
+
+        memset(testBuf, -128, info->input_size);
+        int n1 = tflite_infer(testBuf, info->input_size, tr, TFLITE_MAX_CLASSES);
+        int8_t raw_min = (n1 > 0) ? tr[0].raw_score : -99;
+
+        memset(testBuf, 0, info->input_size);
+        int n2 = tflite_infer(testBuf, info->input_size, tr, TFLITE_MAX_CLASSES);
+        int8_t raw_mid = (n2 > 0) ? tr[0].raw_score : -99;
+
+        memset(testBuf, 127, info->input_size);
+        int n3 = tflite_infer(testBuf, info->input_size, tr, TFLITE_MAX_CLASSES);
+        int8_t raw_max = (n3 > 0) ? tr[0].raw_score : -99;
+
+        printf("Inference: self-test raw[-128]=%d raw[0]=%d raw[127]=%d\r\n",
+               (int)raw_min, (int)raw_mid, (int)raw_max);
+    }
 
     /* Initialize mel spectrogram */
     mel_init(modelMelMin, modelMelMax);
+
+    /* Compensate for device mic level vs training data level.
+     * +18dB was calibrated at ADF gain=6 (36dB).  Adjust for current
+     * gain setting: each gain step is 6dB, higher gain needs less comp. */
+    float gainComp = 18.0f - (float)(cfg.gain - 6) * 6.0f;
+    mel_set_gain_compensation(gainComp);
+    printf("Inference: gain compensation %.0f dB (ADF gain=%d)\r\n",
+           gainComp, cfg.gain);
 
     modelLoaded = 1;
     return 0;
@@ -1057,11 +1157,15 @@ static void detLogCsv(const char *species, float confidence,
             alt = cfg.surveyAlt;
         }
 
-        f_printf(&f, "%s,%s,%.2f,%.6f,%.6f,%.1f,%s,%d,%llu\n",
+        /* FatFS f_printf doesn't support %f or %llu — use snprintf + f_puts */
+        char line[192];
+        snprintf(line, sizeof(line),
+                 "%s,%s,%.2f,%.6f,%.6f,%.1f,%s,%d,%llu\n",
                  ts, species, (double)confidence,
                  (double)lat, (double)lon, (double)alt,
                  cfg.stationId, ppsSynced ? 1 : 0,
                  (unsigned long long)windowStartSample);
+        f_puts(line, &f);
         f_close(&f);
     }
 
@@ -1113,12 +1217,37 @@ static void StartInferenceTask(void *argument)
         const int8_t *melData = mel_get_buffer();
         uint64_t windowStart = absSampleCount - (uint64_t)(MEL_FRAMES * MEL_HOP * 2);
 
+        /* Debug: dump mel buffer stats + signal chain diagnostics */
+        {
+            int8_t bMin = 127, bMax = -128;
+            int32_t bSum = 0;
+            for (int k = 0; k < MEL_FRAMES * MEL_BINS; k++) {
+                if (melData[k] < bMin) bMin = melData[k];
+                if (melData[k] > bMax) bMax = melData[k];
+                bSum += melData[k];
+            }
+            int16_t dbgIn, dbgFft, dbgMag;
+            mel_get_debug(&dbgIn, &dbgFft, &dbgMag);
+            printf("MEL: min=%d max=%d avg=%d IN=%d FFT=%d MAG=%d\r\n",
+                   (int)bMin, (int)bMax, (int)(bSum / (MEL_FRAMES * MEL_BINS)),
+                   (int)dbgIn, (int)dbgFft, (int)dbgMag);
+        }
+
         tflite_result_t results[TFLITE_MAX_CLASSES];
         int nResults = tflite_infer(melData, MEL_FRAMES * MEL_BINS,
                                      results, TFLITE_MAX_CLASSES);
 
         detWindowsProcessed++;
         detUpdateCsvFilename();
+
+        /* Debug: print raw inference output for every window */
+        if (nResults > 0) {
+            printf("INF: raw=%d conf=%d%% thr=%d%% win=%lu\r\n",
+                   (int)results[0].raw_score,
+                   (int)(results[0].confidence * 100.0f),
+                   (int)cfg.detConfThresh,
+                   (unsigned long)detWindowsProcessed);
+        }
 
         if (nResults <= 0) continue;
 
@@ -1516,7 +1645,9 @@ static void StartBleTask(void *argument)
 
     /* Apply persisted config to runtime state */
     extern MDF_FilterConfigTypeDef AdfFilterConfig0;
+    extern MDF_HandleTypeDef AdfHandle0;
     AdfFilterConfig0.Gain = (int32_t)cfg.gain;  /* raw dB value 0-24 */
+    HAL_MDF_SetGain(&AdfHandle0, (int32_t)cfg.gain);  /* update hardware register */
     recFormat = cfg.recFormat;
 
     printf("BLE: Config loaded (station=%s, gain=%d, fmt=%s)\r\n",
@@ -1684,7 +1815,7 @@ static void configSetDefaults(device_config_t *c)
     c->surveyAlt = 0.0f;
     c->surveyCount = 0;
     c->missionMode = MISSION_RECORD;
-    c->detConfThresh = 70;   /* 70% default threshold */
+    c->detConfThresh = 50;   /* 50% default threshold */
     c->detWindowStep = 3;    /* 3 seconds */
     memset(c->_pad, 0xFF, sizeof(c->_pad));
     c->crc32 = 0;
@@ -2242,7 +2373,10 @@ static void bleHandleSet(const char *args)
         /* Apply to ADF filter immediately via HAL (writes hardware register) */
         extern MDF_HandleTypeDef AdfHandle0;
         HAL_MDF_SetGain(&AdfHandle0, (int32_t)v);
-        printf("BLE: ADF gain set to %d dB\r\n", v);
+        /* Update mel gain compensation for new gain level */
+        float gc = 18.0f - (float)(v - 6) * 6.0f;
+        mel_set_gain_compensation(gc);
+        printf("BLE: ADF gain set to %d dB (mel comp=%.0f dB)\r\n", v, gc);
     } else if (strcmp(key, "BPFLOW") == 0) {
         int v = atoi(val);
         if (v < 0 || v > 1500) { bleSendLine("$ERR,BADARG"); return; }

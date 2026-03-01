@@ -11,6 +11,36 @@ from tensorflow.keras import layers
 from config import Config
 
 
+def focal_loss(gamma=2.0, alpha=0.25, label_smoothing=0.05):
+    """Binary focal loss with label smoothing.
+
+    Focal loss down-weights easy examples so the model focuses on hard ones.
+    Label smoothing handles noisy labels from energy-based sorting.
+    """
+    @tf.keras.utils.register_keras_serializable()
+    def loss_fn(y_true, y_pred):
+        # Apply label smoothing: 0 → smooth, 1 → 1-smooth
+        y_true = y_true * (1 - label_smoothing) + 0.5 * label_smoothing
+
+        # Clip predictions for numerical stability
+        y_pred = tf.clip_by_value(y_pred, 1e-7, 1 - 1e-7)
+
+        # Binary cross entropy per element
+        bce = -(y_true * tf.math.log(y_pred) +
+                (1 - y_true) * tf.math.log(1 - y_pred))
+
+        # Focal modulation: (1-pt)^gamma
+        p_t = y_true * y_pred + (1 - y_true) * (1 - y_pred)
+        focal_weight = tf.pow(1 - p_t, gamma)
+
+        # Alpha weighting
+        alpha_t = y_true * alpha + (1 - y_true) * (1 - alpha)
+
+        return tf.reduce_mean(alpha_t * focal_weight * bce)
+
+    return loss_fn
+
+
 def _ds_conv_block(x, filters, kernel_size, strides):
     """Depthwise separable convolution block with BN + ReLU6."""
     x = layers.DepthwiseConv2D(
@@ -77,17 +107,9 @@ def build_model(config, num_classes):
 
     model = keras.Model(inputs=inputs, outputs=outputs)
 
-    # Cosine decay LR schedule
-    total_steps = tc.epochs  # Updated per-epoch in callbacks
-    lr_schedule = keras.optimizers.schedules.CosineDecay(
-        initial_learning_rate=tc.learning_rate,
-        decay_steps=total_steps,
-        alpha=tc.min_learning_rate,
-    )
-
     model.compile(
-        optimizer=keras.optimizers.Adam(learning_rate=lr_schedule),
-        loss="binary_crossentropy",
+        optimizer=keras.optimizers.Adam(learning_rate=tc.learning_rate),
+        loss=focal_loss(gamma=2.0, alpha=0.5, label_smoothing=0.05),
         metrics=[
             "accuracy",
             keras.metrics.AUC(name="auc", multi_label=True),

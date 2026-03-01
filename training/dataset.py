@@ -9,23 +9,73 @@ from sklearn.model_selection import train_test_split
 from config import Config
 
 
+def generate_noise_audio(config, count, rng=None):
+    """Generate synthetic noise audio clips for negative training examples.
+
+    Creates a mix of white, pink, and brown noise at various levels.
+    These get processed through the same mel spectrogram pipeline as real
+    audio, giving the model realistic negative examples to learn from.
+
+    Args:
+        config: Config instance.
+        count: Number of noise clips to generate.
+        rng: numpy random generator (optional).
+
+    Returns:
+        List of (audio_array, noise_type_str) tuples.
+    """
+    if rng is None:
+        rng = np.random.default_rng(42)
+
+    ac = config.audio
+    n_samples = int(ac.duration * ac.sample_rate)
+    clips = []
+
+    for i in range(count):
+        noise_type = rng.choice(["white", "pink", "brown", "silence"])
+        level = 10 ** rng.uniform(-4, -1.5)  # -40 to -15 dBFS
+
+        if noise_type == "white":
+            audio = rng.normal(0, level, n_samples).astype(np.float32)
+
+        elif noise_type == "pink":
+            white = rng.normal(0, 1, n_samples)
+            freqs = np.fft.rfftfreq(n_samples, d=1.0 / ac.sample_rate)
+            freqs[0] = 1.0
+            pink_filter = 1.0 / np.sqrt(freqs)
+            pink = np.fft.irfft(np.fft.rfft(white) * pink_filter, n=n_samples)
+            audio = (pink * level / (np.std(pink) + 1e-9)).astype(np.float32)
+
+        elif noise_type == "brown":
+            white = rng.normal(0, 1, n_samples)
+            brown = np.cumsum(white)
+            brown -= np.mean(brown)
+            audio = (brown * level / (np.std(brown) + 1e-9)).astype(np.float32)
+
+        else:  # silence — very quiet noise floor
+            audio = rng.normal(0, 1e-5, n_samples).astype(np.float32)
+
+        clips.append((audio, noise_type))
+
+    return clips
+
+
 def load_labels(export_dir):
-    """Read class labels from labels.txt, add 'noise' if directory exists."""
+    """Read class labels from labels.txt.
+
+    The noise/ directory is NOT a class — noise clips are loaded as negative
+    examples (all-zeros labels) in load_dataset().
+    """
     labels_file = os.path.join(export_dir, "labels.txt")
     if os.path.exists(labels_file):
         with open(labels_file, "r") as f:
             labels = [line.strip() for line in f if line.strip()]
     else:
-        # Infer from subdirectory names
+        # Infer from subdirectory names, excluding noise/
         labels = sorted([
             d for d in os.listdir(export_dir)
-            if os.path.isdir(os.path.join(export_dir, d))
+            if os.path.isdir(os.path.join(export_dir, d)) and d != "noise"
         ])
-
-    # Add noise class if directory exists but not in labels
-    noise_dir = os.path.join(export_dir, "noise")
-    if os.path.isdir(noise_dir) and "noise" not in labels:
-        labels.append("noise")
 
     return labels
 
@@ -116,6 +166,51 @@ def load_dataset(export_dir, config):
             except Exception as e:
                 print(f"  Warning: failed to load {wav_path}: {e}")
 
+    # Load noise/ directory as negative examples (all-zeros labels).
+    # Also supplement with synthetic noise to ensure the model gets both
+    # hard negatives (real environment) and easy negatives (synthetic).
+    noise_dir = os.path.join(export_dir, "noise")
+    num_positive = len(spectrograms)
+    real_noise_count = 0
+
+    if os.path.isdir(noise_dir):
+        noise_files = [f for f in os.listdir(noise_dir) if f.lower().endswith(".wav")]
+        print(f"  noise (real): {len(noise_files)} clips")
+
+        for wav_file in noise_files:
+            wav_path = os.path.join(noise_dir, wav_file)
+            try:
+                audio, sr = sf.read(wav_path, dtype="float32")
+                if sr != config.audio.sample_rate:
+                    audio = librosa.resample(
+                        audio, orig_sr=sr, target_sr=config.audio.sample_rate
+                    )
+                if audio.ndim > 1:
+                    audio = audio.mean(axis=1)
+
+                mel = compute_mel_spectrogram(audio, config)
+                spectrograms.append(mel)
+                targets.append(np.zeros(len(labels), dtype=np.float32))
+                real_noise_count += 1
+
+            except Exception as e:
+                print(f"  Warning: failed to load {wav_path}: {e}")
+
+    # Add synthetic noise to reach balanced count (or all synthetic if no noise dir)
+    num_synthetic = max(0, num_positive - real_noise_count)
+    if num_synthetic > 0 and num_positive > 0:
+        print(f"  noise (synthetic): generating {num_synthetic} clips...")
+        rng = np.random.default_rng(42)
+        noise_clips = generate_noise_audio(config, num_synthetic, rng)
+
+        for audio, noise_type in noise_clips:
+            mel = compute_mel_spectrogram(audio, config)
+            spectrograms.append(mel)
+            targets.append(np.zeros(len(labels), dtype=np.float32))
+
+    total_noise = real_noise_count + num_synthetic
+    print(f"  Total negatives: {total_noise} ({real_noise_count} real + {num_synthetic} synthetic)")
+
     X = np.array(spectrograms, dtype=np.float32)
     y = np.array(targets, dtype=np.float32)
 
@@ -126,10 +221,10 @@ def load_dataset(export_dir, config):
 def split_dataset(X, y, config):
     """Stratified train/val split.
 
-    Uses argmax of one-hot labels for stratification.
+    Uses max label value for stratification (handles all-zeros noise labels).
     """
-    # Convert one-hot to class indices for stratification
-    y_indices = np.argmax(y, axis=1)
+    # For stratification: 1 if any target species present, 0 if noise (all zeros)
+    y_indices = (np.max(y, axis=1) > 0.5).astype(int)
 
     X_train, X_val, y_train, y_val = train_test_split(
         X, y,

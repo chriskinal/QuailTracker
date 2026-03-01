@@ -23,6 +23,8 @@ typedef struct {
     int      input_size;         /* expected input tensor bytes */
     int      output_classes;     /* number of output classes */
     int      arena_used;         /* bytes of tensor arena actually used */
+    float    input_scale;        /* input tensor quantization scale */
+    int      input_zero_point;   /* input tensor quantization zero point */
     uint8_t  ready;              /* 1 if model loaded and interpreter allocated */
 } tflite_info_t;
 

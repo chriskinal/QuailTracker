@@ -25,7 +25,7 @@ def convert_to_tflite_int8(model_path, calibration_data_path, output_path):
     Returns:
         Size of the TFLite model in bytes.
     """
-    model = tf.keras.models.load_model(model_path)
+    model = tf.keras.models.load_model(model_path, compile=False)
     cal_data = np.load(calibration_data_path)
 
     def representative_dataset():

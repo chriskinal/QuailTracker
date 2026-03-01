@@ -34,15 +34,19 @@ def evaluate_keras(model, X_val, y_val, labels, threshold=0.5):
     # Add channel dimension
     val_X = X_val[..., np.newaxis]
     y_pred_probs = model.predict(val_X, verbose=0)
-    y_pred = (y_pred_probs >= threshold).astype(int)
-    y_true = y_val.astype(int)
 
-    # Use argmax for single-label confusion matrix
-    y_pred_classes = np.argmax(y_pred_probs, axis=1)
-    y_true_classes = np.argmax(y_true, axis=1)
+    if len(labels) == 1:
+        # Single-class sigmoid: use threshold for binary classification
+        eval_labels = [labels[0], "noise"]
+        y_pred_classes = (y_pred_probs[:, 0] >= threshold).astype(int)
+        y_true_classes = (y_val[:, 0] > 0.5).astype(int)
+    else:
+        eval_labels = labels
+        y_pred_classes = np.argmax(y_pred_probs, axis=1)
+        y_true_classes = np.argmax(y_val, axis=1)
 
     print("\n=== Keras Float32 Model ===")
-    print(classification_report(y_true_classes, y_pred_classes, target_names=labels))
+    print(classification_report(y_true_classes, y_pred_classes, target_names=eval_labels))
 
     return y_true_classes, y_pred_classes
 
@@ -92,13 +96,23 @@ def evaluate_tflite(tflite_path, X_val, y_val, labels, mel_min, mel_max):
         output_float = (output_int8.astype(np.float32) - output_zp) * output_scale
 
         y_pred_probs_all.append(output_float)
-        y_pred_classes.append(np.argmax(output_float))
+
+        if len(labels) == 1:
+            y_pred_classes.append(int(output_float[0] >= 0.5))
+        else:
+            y_pred_classes.append(np.argmax(output_float))
 
     y_pred_classes = np.array(y_pred_classes)
-    y_true_classes = np.argmax(y_val, axis=1)
+
+    if len(labels) == 1:
+        eval_labels = [labels[0], "noise"]
+        y_true_classes = (y_val[:, 0] > 0.5).astype(int)
+    else:
+        eval_labels = labels
+        y_true_classes = np.argmax(y_val, axis=1)
 
     print("\n=== TFLite Int8 Model ===")
-    print(classification_report(y_true_classes, y_pred_classes, target_names=labels))
+    print(classification_report(y_true_classes, y_pred_classes, target_names=eval_labels))
 
     # Accuracy comparison
     tflite_acc = np.mean(y_pred_classes == y_true_classes)

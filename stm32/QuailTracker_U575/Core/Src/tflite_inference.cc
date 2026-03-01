@@ -88,7 +88,22 @@ extern "C" int tflite_init(const uint8_t *modelBuf, size_t modelSize,
     s_info.input_size = input->bytes;
     s_info.output_classes = output->dims->data[output->dims->size - 1];
     s_info.arena_used = s_interpreter->arena_used_bytes();
+    s_info.input_scale = input->params.scale;
+    s_info.input_zero_point = input->params.zero_point;
     s_info.ready = 1;
+
+    /* Print input/output tensor quantization for debugging */
+    printf("TFLite: input dims=[");
+    for (int i = 0; i < input->dims->size; i++)
+        printf("%d%s", input->dims->data[i], i < input->dims->size - 1 ? "," : "");
+    printf("] bytes=%d scale=%.6f zp=%d\r\n",
+           (int)input->bytes, (double)input->params.scale,
+           input->params.zero_point);
+    printf("TFLite: output dims=[");
+    for (int i = 0; i < output->dims->size; i++)
+        printf("%d%s", output->dims->data[i], i < output->dims->size - 1 ? "," : "");
+    printf("] scale=%.6f zp=%d\r\n",
+           (double)output->params.scale, output->params.zero_point);
 
     return 0;
 }
@@ -126,9 +141,13 @@ extern "C" int tflite_infer(const int8_t *input, size_t inputSize,
         float real = ((float)raw - outputTensor->params.zero_point) *
                      outputTensor->params.scale;
 
-        /* Sigmoid activation (model outputs logits if Logistic op is fused,
-         * but apply sigmoid defensively for robustness) */
-        results[i].confidence = 1.0f / (1.0f + expf(-real));
+        /* The model already has a Logistic (sigmoid) output layer, so
+         * the dequantized value is already a probability in [0,1].
+         * Do NOT apply sigmoid again (double-sigmoid was mapping
+         * noise at ~0.53 → sigmoid(0.53) ≈ 0.63 false positives). */
+        if (real < 0.0f) real = 0.0f;
+        if (real > 1.0f) real = 1.0f;
+        results[i].confidence = real;
     }
 
     return nResults;

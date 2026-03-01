@@ -23,7 +23,7 @@ class AudioConfig:
 @dataclass
 class ModelConfig:
     # DS-CNN block filters (first is standard Conv2D)
-    filters: list = field(default_factory=lambda: [16, 32, 48, 64])
+    filters: list = field(default_factory=lambda: [32, 64, 128, 128])
     kernel_size: tuple = (3, 3)
     strides: tuple = (2, 2)
     dropout_rate: float = 0.2
@@ -32,11 +32,11 @@ class ModelConfig:
 @dataclass
 class TrainingConfig:
     batch_size: int = 32
-    epochs: int = 100
+    epochs: int = 200
     learning_rate: float = 1e-3
     min_learning_rate: float = 1e-6
     val_split: float = 0.2
-    early_stop_patience: int = 15
+    early_stop_patience: int = 25
     early_stop_metric: str = "val_auc"
     random_seed: int = 42
 
