@@ -37,6 +37,10 @@ stm32/**/*/com.st.stm32cube.ide.mcu.sfrview.prefs
 # Audio recordings
 *.wav
 
+# Training data and model outputs
+training/data/
+training/output/
+
 # .NET
 bin/
 obj/
