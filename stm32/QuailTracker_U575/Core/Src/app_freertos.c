@@ -131,7 +131,7 @@ typedef struct {
 
 extern int32_t pcmBuffer[];
 
-/* PCM ring buffer — defined in main.c, written by DMA ISR callbacks */
+/* PCM ring buffer -defined in main.c, written by DMA ISR callbacks */
 #define PCM_RING_SIZE  16384
 #define PCM_RING_MASK  (PCM_RING_SIZE - 1)
 extern int32_t pcmRing[];
@@ -166,7 +166,7 @@ static uint32_t streamRecInterval = 0;
 static uint32_t lastAudioTick = 0;
 static uint32_t lastRecTick = 0;
 
-/* BLE log forwarding — ring buffer fed by _write(), drained by BLE task */
+/* BLE log forwarding -ring buffer fed by _write(), drained by BLE task */
 #define BLE_LOG_RING_SIZE 512
 volatile uint8_t bleLogEnabled = 0;
 volatile uint8_t bleLogRing[BLE_LOG_RING_SIZE];
@@ -218,7 +218,7 @@ static char bleLastResponse[64];
 /* Recording filename from main.c (for BLE $STATUS) */
 extern char recFilename[];
 
-/* BLE live probe — CLI task sets request, BLE task executes and stores result */
+/* BLE live probe -CLI task sets request, BLE task executes and stores result */
 static volatile uint8_t bleLiveProbeReq;
 static volatile uint8_t bleLiveProbeReady;
 static char bleLiveProbeResp[64];
@@ -266,7 +266,7 @@ static ota_ctx_t ota;
 /* Inference buffers from main.c */
 extern uint8_t modelBuf[20 * 1024];
 extern uint32_t modelBufSize;
-extern uint8_t tensorArena[48 * 1024];
+extern uint8_t tensorArena[56 * 1024];
 extern volatile uint64_t absSampleCount;
 
 /* Inference task handle + notification */
@@ -576,7 +576,7 @@ void StartAudioTask(void *argument)
           }
         }
 
-        /* Step 5: Squelch — zero out uninteresting audio */
+        /* Step 5: Squelch -zero out uninteresting audio */
         if (cfg.activityMode == 2 && actSquelch) {
           memset(pcmBuffer, 0, blockLen * sizeof(int32_t));
         }
@@ -626,7 +626,7 @@ void StartAudioTask(void *argument)
           }
           osMutexRelease(fileMtxHandle);
         } else {
-          /* FLAC encode — accumulates 8 calls into one 4096-sample block */
+          /* FLAC encode -accumulates 8 calls into one 4096-sample block */
           uint32_t encoded = flac_enc_process(&flacEncoder, pcmBuffer, blockLen);
           if (encoded > 0) {
             osMutexAcquire(fileMtxHandle, osWaitForever);
@@ -650,7 +650,7 @@ skip_write:
         (void)0; /* label requires a statement */
       }
     } else {
-      /* Not recording — drain ring and track peak for live audio monitor.
+      /* Not recording -drain ring and track peak for live audio monitor.
        * Apply HPF to remove DC offset / LF noise (same as recording path)
        * using separate state so recording init doesn't conflict. */
       static int32_t monHpfPrevIn = 0, monHpfPrevOut = 0;
@@ -689,7 +689,7 @@ skip_write:
 void StartCliTask(void *argument)
 {
   /* USER CODE BEGIN cliTask */
-  /* Re-enable USART1 RXNE — the CubeMX-generated BSP_COM_Init after
+  /* Re-enable USART1 RXNE -the CubeMX-generated BSP_COM_Init after
    * osKernelInitialize() re-inits USART1 and clears our earlier enable. */
   USART1->CR1 |= USART_CR1_RXNEIE_RXFNEIE;
 
@@ -699,7 +699,7 @@ void StartCliTask(void *argument)
 
   for (;;)
   {
-    int c = getChar(10);  /* block up to 10ms — replaces poll + osDelay(10) */
+    int c = getChar(10);  /* block up to 10ms -replaces poll + osDelay(10) */
     if (c >= 0) {
       switch (c) {
       case '1':
@@ -981,7 +981,7 @@ static int loadModelFromSD(void)
     }
 
     const tflite_info_t *info = tflite_get_info();
-    printf("Inference: TFLite ready — input=%d bytes, %d classes, arena=%d bytes\r\n",
+    printf("Inference: TFLite ready - input=%d bytes, %d classes, arena=%d bytes\r\n",
            info->input_size, info->output_classes, info->arena_used);
 
     /* Initialize mel spectrogram */
@@ -1079,7 +1079,7 @@ static void StartInferenceTask(void *argument)
 
     /* Attempt to load model from SD card */
     if (loadModelFromSD() != 0) {
-        printf("Inference: No model — task idle\r\n");
+        printf("Inference: No model -task idle\r\n");
         /* Stay alive so $MODEL,RELOAD can retry */
         for (;;) {
             osThreadFlagsWait(0x01, osFlagsWaitAny, osWaitForever);
@@ -1575,7 +1575,7 @@ static void StartBleTask(void *argument)
         /* OTA inactivity timeout */
         if (ota.state == OTA_RECEIVING &&
             (HAL_GetTick() - ota.lastActivityTick) > OTA_TIMEOUT_MS) {
-            printf("OTA: Timeout — aborting\r\n");
+            printf("OTA: Timeout -aborting\r\n");
             ota.state = OTA_IDLE;
             bleSendLine("$ERR,TIMEOUT");
         }
@@ -1618,13 +1618,13 @@ static void StartBleTask(void *argument)
             }
         }
 
-        /* Push audio level stream (Config tab — fast, ~5 Hz) */
+        /* Push audio level stream (Config tab -fast, ~5 Hz) */
         if (streamAudioInterval > 0 && bleConnected &&
             (HAL_GetTick() - lastAudioTick) >= streamAudioInterval) {
             lastAudioTick = HAL_GetTick();
             bleHandleStreamAudio();
         }
-        /* Push recording stats stream (Ops tab — ~1 Hz) */
+        /* Push recording stats stream (Ops tab -~1 Hz) */
         if (streamRecInterval > 0 && bleConnected &&
             (HAL_GetTick() - lastRecTick) >= streamRecInterval) {
             lastRecTick = HAL_GetTick();
@@ -1754,7 +1754,7 @@ static void configLoad(void)
         return;
     }
 
-    printf("Config: Invalid/empty — writing defaults\r\n");
+    printf("Config: Invalid/empty -writing defaults\r\n");
     configSetDefaults(&cfg);
     cfg.crc32 = configComputeCrc(&cfg);
     configSave();
@@ -1836,7 +1836,7 @@ static void bleHandleStatusEx(const char *tag)
     bleSendLine("id=%s", cfg.stationId);
     bleSendLine("fw=" FW_VERSION);
 
-    /* Battery — not yet implemented */
+    /* Battery -not yet implemented */
     bleSendLine("bat_v=0");
     bleSendLine("bat_pct=0");
     bleSendLine("bat_lvl=0");
@@ -1888,7 +1888,7 @@ static void bleHandleStatusEx(const char *tag)
     bleSendLine("pps_count=%lu", (unsigned long)ppsCount);
     bleSendLine("pps_ms=%lu", (unsigned long)(HAL_GetTick() - ppsTick));
 
-    /* Temperature/humidity — not yet implemented */
+    /* Temperature/humidity -not yet implemented */
     bleSendLine("temp=0");
     bleSendLine("hum=0");
 
@@ -1926,7 +1926,7 @@ static void bleHandleStatusEx(const char *tag)
                 (unsigned long)(isRecording ? totalDataBytes / (SAMPLE_RATE * 3) : 0));
     bleSendLine("rec_ovf=%lu", (unsigned long)ringOverruns);
 
-    /* Audio buffer stats — read and reset peak */
+    /* Audio buffer stats -read and reset peak */
     int32_t peak = audioPeakLevel;
     audioPeakLevel = 0;
     bleSendLine("aud_peak=%d", (int)peak);
@@ -2214,7 +2214,7 @@ static void bleHandleSd(const char *arg)
 
 static void bleHandleSet(const char *args)
 {
-    /* args points past "$SET," — e.g. "STATION,QT001" */
+    /* args points past "$SET," -e.g. "STATION,QT001" */
     char key[16], val[32];
     const char *comma = strchr(args, ',');
     if (!comma) { bleSendLine("$ERR,BADARG"); return; }
@@ -2520,7 +2520,7 @@ static int otaCopyConfig(void)
     device_config_t tmp;
     memcpy(&tmp, src, sizeof(tmp));
 
-    /* Validate — if corrupt, use current RAM config */
+    /* Validate -if corrupt, use current RAM config */
     if (tmp.magic != CONFIG_MAGIC ||
         tmp.crc32 != crc32_compute((const uint8_t *)&tmp, sizeof(tmp) - 4)) {
         memcpy(&tmp, &cfg, sizeof(tmp));
@@ -2577,7 +2577,7 @@ static void otaSwapBank(void)
                         ? OB_SWAP_BANK_DISABLE : OB_SWAP_BANK_ENABLE;
 
     HAL_FLASHEx_OBProgram(&obNew);
-    HAL_FLASH_OB_Launch();  /* triggers system reset — does not return */
+    HAL_FLASH_OB_Launch();  /* triggers system reset -does not return */
 }
 
 static void otaBegin(const char *args)
@@ -2647,7 +2647,7 @@ static void otaData(const char *hexStr)
         ota.bytesReceived += chunk;
         pos += chunk;
 
-        /* Page buffer full — write to flash */
+        /* Page buffer full -write to flash */
         if (ota.pageBufPos == OTA_PAGE_SIZE) {
             if (otaWritePage() != 0) {
                 bleSendLine("$ERR,FLASH");
@@ -2721,7 +2721,7 @@ static void otaRollback(void)
 {
     if (ota.state != OTA_IDLE) { bleSendLine("$ERR,BADSTATE"); return; }
 
-    printf("OTA: Rolling back — copying config...\r\n");
+    printf("OTA: Rolling back -copying config...\r\n");
     if (otaCopyConfig() != 0) {
         bleSendLine("$ERR,CONFIG");
         return;

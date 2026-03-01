@@ -143,7 +143,7 @@ uint8_t modelBuf[20 * 1024] __attribute__((aligned(16)));
 uint32_t modelBufSize = 0;
 
 /* TFLite Micro tensor arena */
-uint8_t tensorArena[48 * 1024] __attribute__((aligned(16)));
+uint8_t tensorArena[56 * 1024] __attribute__((aligned(16)));
 
 /* Absolute sample counter (monotonically increasing, never reset) */
 volatile uint64_t absSampleCount = 0;

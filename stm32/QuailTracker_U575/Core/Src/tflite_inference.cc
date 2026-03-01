@@ -19,6 +19,11 @@
 
 #include <cmath>
 #include <cstring>
+#include <cstdio>
+
+#include "tensorflow/lite/micro/cortex_m_generic/debug_log_callback.h"
+
+static void tflite_debug_log(const char *s) { printf("%s", s); }
 
 /* ---- Static state ---- */
 
@@ -28,7 +33,7 @@ static tflite_info_t s_info;
 
 /* Op resolver with only the ops our DS-CNN model needs.
  * 6 ops keeps the binary small vs. AllOpsResolver. */
-static tflite::MicroMutableOpResolver<6> s_resolver;
+static tflite::MicroMutableOpResolver<7> s_resolver;
 
 /* Storage for the interpreter object (avoid dynamic alloc) */
 static uint8_t s_interpBuf[sizeof(tflite::MicroInterpreter)] __attribute__((aligned(16)));
@@ -41,29 +46,40 @@ extern "C" int tflite_init(const uint8_t *modelBuf, size_t modelSize,
 
     memset(&s_info, 0, sizeof(s_info));
 
+    RegisterDebugLogCallback(tflite_debug_log);
+
     /* Verify FlatBuffer */
     s_model = tflite::GetModel(modelBuf);
+    printf("TFLite: model schema=%lu, expected=%d\r\n",
+           (unsigned long)s_model->version(), TFLITE_SCHEMA_VERSION);
     if (s_model->version() != TFLITE_SCHEMA_VERSION) {
+        printf("TFLite: schema version MISMATCH\r\n");
         return -1;
     }
 
     /* Register only the ops our DS-CNN model uses */
-    s_resolver = tflite::MicroMutableOpResolver<6>();
+    s_resolver = tflite::MicroMutableOpResolver<7>();
     s_resolver.AddConv2D();
     s_resolver.AddDepthwiseConv2D();
-    s_resolver.AddAveragePool2D();
+    s_resolver.AddMean();              /* GlobalAveragePooling2D → MEAN op */
     s_resolver.AddFullyConnected();
     s_resolver.AddReshape();
-    s_resolver.AddLogistic();  /* sigmoid output */
+    s_resolver.AddLogistic();          /* sigmoid output */
+    s_resolver.AddQuantize();          /* int8 requantization between layers */
 
     /* Construct interpreter in pre-allocated buffer */
     s_interpreter = new (s_interpBuf) tflite::MicroInterpreter(
         s_model, s_resolver, arenaBuf, arenaSize);
 
-    if (s_interpreter->AllocateTensors() != kTfLiteOk) {
+    printf("TFLite: AllocateTensors (arena=%u bytes)...\r\n", (unsigned)arenaSize);
+    TfLiteStatus alloc_status = s_interpreter->AllocateTensors();
+    if (alloc_status != kTfLiteOk) {
+        printf("TFLite: AllocateTensors FAILED (status=%d)\r\n", (int)alloc_status);
         s_interpreter = nullptr;
         return -1;
     }
+    printf("TFLite: OK, arena used=%u bytes\r\n",
+           (unsigned)s_interpreter->arena_used_bytes());
 
     /* Populate info */
     TfLiteTensor *input = s_interpreter->input(0);
