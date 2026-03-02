@@ -87,6 +87,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
                     <TextBlock Text="{Binding Clips.Count, StringFormat='{}{0} total clips'}"
                                VerticalAlignment="Center"
                                Foreground="#757575" />
+                    <TextBlock Text="{Binding StatusMessage}"
+                               VerticalAlignment="Center"
+                               Foreground="#757575"
+                               Margin="16,0,0,0" />
                 </StackPanel>
             </StackPanel>
         </Border>

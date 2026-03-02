@@ -39,6 +39,9 @@ public partial class TrainingDataViewModel : ObservableObject
     private readonly IAudioFileService _audioFileService;
     private readonly ObservableCollection<Detection> _detections;
     private readonly ObservableCollection<AudioFile> _audioFiles;
+    [ObservableProperty]
+    private string _statusMessage = string.Empty;
+
     private readonly Action<string> _setStatus;
     private CancellationTokenSource? _cts;
 
@@ -81,13 +84,12 @@ public partial class TrainingDataViewModel : ObservableObject
     public TrainingDataViewModel(
         IAudioFileService audioFileService,
         ObservableCollection<AudioFile> audioFiles,
-        ObservableCollection<Detection> detections,
-        Action<string> setStatus)
+        ObservableCollection<Detection> detections)
     {
         _audioFileService = audioFileService;
         _audioFiles = audioFiles;
         _detections = detections;
-        _setStatus = setStatus;
+        _setStatus = msg => StatusMessage = msg;
     }
 
     [RelayCommand]

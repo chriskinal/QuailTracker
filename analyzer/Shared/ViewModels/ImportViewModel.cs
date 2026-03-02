@@ -35,6 +35,9 @@ public partial class ImportViewModel : ObservableObject
     private readonly IAudioFileService _audioFileService;
     private readonly ObservableCollection<AudioFile> _audioFiles;
     private readonly ObservableCollection<Station> _stations;
+    [ObservableProperty]
+    private string _statusMessage = string.Empty;
+
     private readonly Action<string> _setStatus;
     private CancellationTokenSource? _cts;
 
@@ -71,13 +74,12 @@ public partial class ImportViewModel : ObservableObject
     public ImportViewModel(
         IAudioFileService audioFileService,
         ObservableCollection<AudioFile> audioFiles,
-        ObservableCollection<Station> stations,
-        Action<string> setStatus)
+        ObservableCollection<Station> stations)
     {
         _audioFileService = audioFileService;
         _audioFiles = audioFiles;
         _stations = stations;
-        _setStatus = setStatus;
+        _setStatus = msg => StatusMessage = msg;
     }
 
     [RelayCommand]

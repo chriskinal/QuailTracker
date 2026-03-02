@@ -34,6 +34,9 @@ public partial class LocalizationViewModel : ObservableObject
     private readonly ObservableCollection<Station> _stations;
     private readonly ObservableCollection<Detection> _detections;
     private readonly ObservableCollection<Localization> _localizations;
+    [ObservableProperty]
+    private string _statusMessage = string.Empty;
+
     private readonly Action<string> _setStatus;
     private CancellationTokenSource? _cts;
 
@@ -67,14 +70,13 @@ public partial class LocalizationViewModel : ObservableObject
         ITdoaService tdoaService,
         ObservableCollection<Station> stations,
         ObservableCollection<Detection> detections,
-        ObservableCollection<Localization> localizations,
-        Action<string> setStatus)
+        ObservableCollection<Localization> localizations)
     {
         _tdoaService = tdoaService;
         _stations = stations;
         _detections = detections;
         _localizations = localizations;
-        _setStatus = setStatus;
+        _setStatus = msg => StatusMessage = msg;
 
         _detections.CollectionChanged += (_, _) => OnPropertyChanged(nameof(SelectedDetectionCount));
         _stations.CollectionChanged += (_, _) => OnPropertyChanged(nameof(StationsWithLocationCount));

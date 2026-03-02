@@ -28,9 +28,6 @@ public partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     private int _selectedTabIndex;
 
-    [ObservableProperty]
-    private string _statusMessage = "Ready";
-
     public ConfigService ConfigService { get; }
 
     // Shared data collections
@@ -97,34 +94,29 @@ public partial class MainWindowViewModel : ObservableObject
             new AudioPlaybackService(),
             noiseReduction,
             configService,
-            appState,
-            status => StatusMessage = status);
+            appState);
 
         _importViewModel = new ImportViewModel(
             audioFileService,
             AudioFiles,
-            Stations,
-            status => StatusMessage = status);
+            Stations);
 
         _processingViewModel = new ProcessingViewModel(
             audioFileService,
             birdNetService,
             AudioFiles,
-            Detections,
-            status => StatusMessage = status);
+            Detections);
 
         _trainingDataViewModel = new TrainingDataViewModel(
             audioFileService,
             AudioFiles,
-            Detections,
-            status => StatusMessage = status);
+            Detections);
 
         _localizationViewModel = new LocalizationViewModel(
             tdoaService,
             Stations,
             Detections,
-            Localizations,
-            status => StatusMessage = status);
+            Localizations);
 
         _populationViewModel = new PopulationViewModel(
             populationService,
@@ -132,15 +124,13 @@ public partial class MainWindowViewModel : ObservableObject
             tdoaService,
             Stations,
             Detections,
-            Localizations,
-            status => StatusMessage = status);
+            Localizations);
 
         _mapViewModel = new MapViewModel(
             mapService,
             kmlExportService,
             Stations,
             Detections,
-            Localizations,
-            status => StatusMessage = status);
+            Localizations);
     }
 }

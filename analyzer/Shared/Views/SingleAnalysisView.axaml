@@ -23,31 +23,124 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
     <Grid RowDefinitions="Auto,2*,Auto,*" Margin="8">
 
-        <!-- Row 0: File Bar -->
+        <!-- Row 0: Controls -->
         <Border Grid.Row="0"
                 Classes="CardPanel"
                 Margin="0,0,0,8">
-            <Grid ColumnDefinitions="Auto,*,Auto">
-                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
-                    <PathIcon Data="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"
-                              Width="20" Height="20"
-                              Foreground="#757575" />
-                    <TextBlock Text="{Binding FileName}"
+            <Grid RowDefinitions="Auto,Auto,Auto">
+                <!-- File + Model Row -->
+                <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,8">
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                        <PathIcon Data="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"
+                                  Width="18" Height="18"
+                                  Foreground="#757575" />
+                        <TextBlock Text="{Binding FileName}"
+                                   VerticalAlignment="Center"
+                                   FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding FileInfo}"
+                                   VerticalAlignment="Center"
+                                   Foreground="#757575"
+                                   Margin="8,0,0,0" />
+                        <Border Width="1" Background="#E0E0E0" Margin="8,2" />
+                        <TextBlock Text="Model:" VerticalAlignment="Center" FontWeight="SemiBold" />
+                        <TextBlock Text="Not Loaded"
+                                   IsVisible="{Binding !IsModelLoaded}"
+                                   VerticalAlignment="Center"
+                                   Foreground="#F44336" />
+                        <TextBlock Text="Loaded"
+                                   IsVisible="{Binding IsModelLoaded}"
+                                   VerticalAlignment="Center"
+                                   Foreground="#4CAF50" />
+                    </StackPanel>
+                    <TextBlock Grid.Column="1"
+                               Text="{Binding ModelPath}"
                                VerticalAlignment="Center"
-                               FontWeight="SemiBold" />
-                </StackPanel>
-                <TextBlock Grid.Column="1"
-                           Text="{Binding FileInfo}"
-                           VerticalAlignment="Center"
-                           Margin="16,0"
-                           Foreground="#757575" />
-                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="12">
+                               Margin="8,0"
+                               TextTrimming="CharacterEllipsis"
+                               Foreground="#757575" />
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8">
+                        <Button Content="Open File..."
+                                Classes="SecondaryButton"
+                                Click="OnOpenFileClick" />
+                        <Button Content="Load Model..."
+                                Classes="SecondaryButton"
+                                Click="OnLoadModelClick" />
+                    </StackPanel>
+                </Grid>
+
+                <!-- Settings Row -->
+                <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="16">
                     <CheckBox Content="Spectrogram"
                               IsChecked="{Binding GenerateSpectrogram}"
                               VerticalAlignment="Center" />
-                    <Button Content="Open File..."
-                            Classes="SecondaryButton"
-                            Click="OnOpenFileClick" />
+                    <CheckBox Content="Noise Reduction"
+                              IsChecked="{Binding NoiseReductionEnabled}"
+                              VerticalAlignment="Center" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Max Freq:" VerticalAlignment="Center" />
+                        <Slider Value="{Binding MaxFrequencyHz}"
+                                Minimum="1000"
+                                Maximum="{Binding SampleRate, Converter={x:Static vm:HalfValueConverter.Instance}}"
+                                Width="120"
+                                VerticalAlignment="Center"
+                                TickFrequency="1000"
+                                IsSnapToTickEnabled="True" />
+                        <TextBlock Text="{Binding MaxFrequencyHz, StringFormat='{}{0:#,0} Hz'}"
+                                   Width="64"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Confidence:" VerticalAlignment="Center" />
+                        <Slider Value="{Binding ConfidenceThreshold}"
+                                Minimum="0.1"
+                                Maximum="0.99"
+                                Width="120"
+                                VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding ConfidenceThreshold, StringFormat='{}{0:P0}'}"
+                                   Width="40"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Sensitivity:" VerticalAlignment="Center" />
+                        <Slider Value="{Binding Sensitivity}"
+                                Minimum="0.5"
+                                Maximum="1.5"
+                                Width="120"
+                                VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding Sensitivity, StringFormat='{}{0:F1}'}"
+                                   Width="30"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- Action Row -->
+                <StackPanel Grid.Row="2"
+                            Orientation="Horizontal"
+                            Spacing="8"
+                            Margin="0,8,0,0">
+                    <Button Content="Analyze"
+                            Classes="PrimaryButton"
+                            Command="{Binding AnalyzeCommand}"
+                            IsVisible="{Binding !IsAnalyzing}" />
+                    <Button Content="Cancel"
+                            Classes="DangerButton"
+                            Command="{Binding CancelAnalysisCommand}"
+                            IsVisible="{Binding IsAnalyzing}" />
+                    <ProgressBar IsVisible="{Binding IsAnalyzing}"
+                                 Minimum="0"
+                                 Maximum="{Binding AnalysisTotalSegments}"
+                                 Value="{Binding AnalysisProgress}"
+                                 Width="200"
+                                 VerticalAlignment="Center"
+                                 Margin="8,0" />
+                    <Button Content="Stop"
+                            Classes="ToolbarButton"
+                            IsVisible="{Binding IsPlaying}"
+                            Click="OnStopPlaybackClick" />
+                    <TextBlock Text="{Binding StatusMessage}"
+                               VerticalAlignment="Center"
+                               Foreground="#757575"
+                               Margin="8,0,0,0" />
                 </StackPanel>
             </Grid>
         </Border>
@@ -55,7 +148,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
         <!-- Row 1: Spectrogram -->
         <Border Grid.Row="1"
                 Classes="DarkCardPanel"
-                Margin="0,0,0,8">
+                MinHeight="80">
             <Grid ColumnDefinitions="44,*" RowDefinitions="*,24">
                 <!-- Placeholder when no file loaded -->
                 <TextBlock Grid.ColumnSpan="2" Grid.RowSpan="2"
@@ -112,117 +205,28 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
             </Grid>
         </Border>
 
-        <!-- Row 2: Analysis Controls -->
-        <Border Grid.Row="2"
-                Classes="CardPanel"
-                Margin="0,0,0,8">
-            <Grid RowDefinitions="Auto,Auto,Auto">
-                <!-- Model Row -->
-                <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,8">
-                    <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8">
-                        <PathIcon Data="M21,16.5C21,16.88 20.79,17.21 20.47,17.38L12.57,21.82C12.41,21.94 12.21,22 12,22C11.79,22 11.59,21.94 11.43,21.82L3.53,17.38C3.21,17.21 3,16.88 3,16.5V7.5C3,7.12 3.21,6.79 3.53,6.62L11.43,2.18C11.59,2.06 11.79,2 12,2C12.21,2 12.41,2.06 12.57,2.18L20.47,6.62C20.79,6.79 21,7.12 21,7.5V16.5M12,4.15L5,8.09V15.91L12,19.85L19,15.91V8.09L12,4.15Z"
-                                  Width="18" Height="18"
-                                  Foreground="#757575" />
-                        <TextBlock Text="Model:" VerticalAlignment="Center" FontWeight="SemiBold" />
-                        <TextBlock Text="Not Loaded"
-                                   IsVisible="{Binding !IsModelLoaded}"
-                                   VerticalAlignment="Center"
-                                   Foreground="#F44336" />
-                        <TextBlock Text="Loaded"
-                                   IsVisible="{Binding IsModelLoaded}"
-                                   VerticalAlignment="Center"
-                                   Foreground="#4CAF50" />
-                    </StackPanel>
-                    <TextBlock Grid.Column="1"
-                               Text="{Binding ModelPath}"
-                               VerticalAlignment="Center"
-                               Margin="12,0"
-                               TextTrimming="CharacterEllipsis"
-                               Foreground="#757575" />
-                    <Button Grid.Column="2"
-                            Content="Load Model..."
-                            Classes="SecondaryButton"
-                            Click="OnLoadModelClick" />
-                </Grid>
-
-                <!-- Settings Row -->
-                <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="16">
-                    <CheckBox Content="Noise Reduction"
-                              IsChecked="{Binding NoiseReductionEnabled}"
-                              VerticalAlignment="Center" />
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <TextBlock Text="Max Freq:" VerticalAlignment="Center" />
-                        <Slider Value="{Binding MaxFrequencyHz}"
-                                Minimum="1000"
-                                Maximum="{Binding SampleRate, Converter={x:Static vm:HalfValueConverter.Instance}}"
-                                Width="120"
-                                VerticalAlignment="Center"
-                                TickFrequency="1000"
-                                IsSnapToTickEnabled="True" />
-                        <TextBlock Text="{Binding MaxFrequencyHz, StringFormat='{}{0:#,0} Hz'}"
-                                   Width="64"
-                                   VerticalAlignment="Center" />
-                    </StackPanel>
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <TextBlock Text="Confidence:" VerticalAlignment="Center" />
-                        <Slider Value="{Binding ConfidenceThreshold}"
-                                Minimum="0.1"
-                                Maximum="0.99"
-                                Width="120"
-                                VerticalAlignment="Center" />
-                        <TextBlock Text="{Binding ConfidenceThreshold, StringFormat='{}{0:P0}'}"
-                                   Width="40"
-                                   VerticalAlignment="Center" />
-                    </StackPanel>
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <TextBlock Text="Sensitivity:" VerticalAlignment="Center" />
-                        <Slider Value="{Binding Sensitivity}"
-                                Minimum="0.5"
-                                Maximum="1.5"
-                                Width="120"
-                                VerticalAlignment="Center" />
-                        <TextBlock Text="{Binding Sensitivity, StringFormat='{}{0:F1}'}"
-                                   Width="30"
-                                   VerticalAlignment="Center" />
-                    </StackPanel>
-                </StackPanel>
-
-                <!-- Action Row -->
-                <StackPanel Grid.Row="2"
-                            Orientation="Horizontal"
-                            Spacing="8"
-                            Margin="0,12,0,0">
-                    <Button Content="Analyze"
-                            Classes="PrimaryButton"
-                            Command="{Binding AnalyzeCommand}"
-                            IsVisible="{Binding !IsAnalyzing}" />
-                    <Button Content="Cancel"
-                            Classes="DangerButton"
-                            Command="{Binding CancelAnalysisCommand}"
-                            IsVisible="{Binding IsAnalyzing}" />
-                    <ProgressBar IsVisible="{Binding IsAnalyzing}"
-                                 Minimum="0"
-                                 Maximum="{Binding AnalysisTotalSegments}"
-                                 Value="{Binding AnalysisProgress}"
-                                 Width="200"
-                                 VerticalAlignment="Center"
-                                 Margin="8,0" />
-                    <Button Content="Stop"
-                            Classes="ToolbarButton"
-                            IsVisible="{Binding IsPlaying}"
-                            Click="OnStopPlaybackClick" />
-                </StackPanel>
-            </Grid>
-        </Border>
+        <!-- Row 2: Splitter -->
+        <GridSplitter Grid.Row="2"
+                      Height="6"
+                      HorizontalAlignment="Stretch"
+                      Background="#E0E0E0"
+                      ResizeDirection="Rows"
+                      Margin="0,4" />
 
         <!-- Row 3: Detections DataGrid -->
-        <Grid Grid.Row="3" RowDefinitions="Auto,*">
-            <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,0,0,8">
+        <Grid Grid.Row="3" RowDefinitions="Auto,*" MinHeight="80">
+            <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" Margin="0,0,0,8">
                 <TextBlock Text="Detections" Classes="SectionHeader" VerticalAlignment="Center" />
                 <TextBlock Grid.Column="1"
                            Text="{Binding Detections.Count, StringFormat='{}{0} detections'}"
                            VerticalAlignment="Center"
-                           Foreground="#757575" />
+                           Foreground="#757575"
+                           Margin="0,0,8,0" />
+                <Button Grid.Column="2"
+                        Content="Export..."
+                        Classes="SecondaryButton"
+                        Click="OnExportClick"
+                        IsEnabled="{Binding Detections.Count}" />
             </Grid>
 
             <DataGrid Grid.Row="1"

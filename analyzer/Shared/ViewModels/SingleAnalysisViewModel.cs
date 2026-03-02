@@ -40,10 +40,14 @@ public partial class SingleAnalysisViewModel : ObservableObject
     private readonly NoiseReductionService _noiseReduction;
     private readonly ConfigService _configService;
     private readonly AppStateService _appState;
+    [ObservableProperty]
+    private string _statusMessage = string.Empty;
+
     private readonly Action<string> _setStatus;
     private AudioFile? _loadedFile;
     private CancellationTokenSource? _analysisCts;
     private CancellationTokenSource? _playbackCts;
+    private CancellationTokenSource? _regenCts;
 
     [ObservableProperty]
     private string _filePath = string.Empty;
@@ -114,8 +118,7 @@ public partial class SingleAnalysisViewModel : ObservableObject
         AudioPlaybackService playbackService,
         NoiseReductionService noiseReduction,
         ConfigService configService,
-        AppStateService appState,
-        Action<string> setStatus)
+        AppStateService appState)
     {
         _audioFileService = audioFileService;
         _birdNetService = birdNetService;
@@ -125,7 +128,7 @@ public partial class SingleAnalysisViewModel : ObservableObject
         _spectrogramService.NoiseReduction = noiseReduction;
         _configService = configService;
         _appState = appState;
-        _setStatus = setStatus;
+        _setStatus = msg => StatusMessage = msg;
 
         // Sync from service in case model was already loaded elsewhere
         IsModelLoaded = _birdNetService.IsModelLoaded;
@@ -187,13 +190,15 @@ public partial class SingleAnalysisViewModel : ObservableObject
             MaxFrequencyHz = _loadedFile.SampleRate / 2.0;
             IsFileLoaded = true;
 
-            // Estimate noise profile for noise reduction
-            _setStatus("Estimating noise profile...");
-            await Task.Run(() =>
+            if (NoiseReductionEnabled)
             {
-                var (samples, sr) = SpectrogramService.ReadAudioMono(path);
-                _noiseReduction.EstimateNoiseProfile(samples, sr);
-            });
+                _setStatus("Estimating noise profile...");
+                await Task.Run(() =>
+                {
+                    var (samples, sr) = SpectrogramService.ReadAudioMono(path);
+                    _noiseReduction.EstimateNoiseProfile(samples, sr);
+                });
+            }
 
             if (GenerateSpectrogram)
             {
@@ -301,33 +306,107 @@ public partial class SingleAnalysisViewModel : ObservableObject
 
     partial void OnNoiseReductionEnabledChanged(bool value)
     {
-        if (IsFileLoaded && GenerateSpectrogram && !string.IsNullOrEmpty(FilePath))
-            _ = RegenerateSpectrogramAsync();
+        if (!IsFileLoaded || string.IsNullOrEmpty(FilePath)) return;
+
+        if (value && !_noiseReduction.HasProfile)
+            _ = EstimateNoiseProfileThenRegenerateAsync();
+        else if (GenerateSpectrogram)
+            _ = FullRegenerateSpectrogramAsync();
+    }
+
+    private async Task EstimateNoiseProfileThenRegenerateAsync()
+    {
+        try
+        {
+            IsGenerating = true;
+            _setStatus("Estimating noise profile...");
+            await Task.Run(() =>
+            {
+                var (samples, sr) = SpectrogramService.ReadAudioMono(FilePath);
+                _noiseReduction.EstimateNoiseProfile(samples, sr);
+            });
+
+            if (GenerateSpectrogram)
+            {
+                int imageWidth = Math.Clamp((int)(FileDuration.TotalSeconds * 20), 800, 3000);
+                const int imageHeight = 500;
+                _spectrogramService.InvalidateCache();
+                SpectrogramImage = await _spectrogramService.GenerateAsync(
+                    FilePath, imageWidth, imageHeight, MaxFrequencyHz, NoiseReductionEnabled);
+            }
+
+            _setStatus($"Loaded {FileName}");
+        }
+        catch (Exception ex)
+        {
+            _setStatus($"Error: {ex.Message}");
+        }
+        finally
+        {
+            IsGenerating = false;
+        }
     }
 
     partial void OnMaxFrequencyHzChanged(double value)
     {
         if (IsFileLoaded && GenerateSpectrogram && !string.IsNullOrEmpty(FilePath))
-            _ = RegenerateSpectrogramAsync();
+            _ = RenderSpectrogramFromCacheAsync();
     }
 
-    private async Task RegenerateSpectrogramAsync()
+    /// <summary>Re-render from cached FFT data (instant). Falls back to full regen if no cache.</summary>
+    private async Task RenderSpectrogramFromCacheAsync()
     {
+        _regenCts?.Cancel();
+        _regenCts?.Dispose();
+        var cts = new CancellationTokenSource();
+        _regenCts = cts;
+
+        try
+        {
+            const int imageHeight = 500;
+            var bitmap = await _spectrogramService.RenderCachedAsync(imageHeight, MaxFrequencyHz, cts.Token);
+            if (bitmap != null)
+            {
+                SpectrogramImage = bitmap;
+                return;
+            }
+
+            // No cache — full regeneration
+            await FullRegenerateSpectrogramAsync();
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            _setStatus($"Error regenerating spectrogram: {ex.Message}");
+        }
+    }
+
+    /// <summary>Full FFT recomputation (expensive). Used for file load, noise reduction toggle.</summary>
+    private async Task FullRegenerateSpectrogramAsync()
+    {
+        _regenCts?.Cancel();
+        _regenCts?.Dispose();
+        var cts = new CancellationTokenSource();
+        _regenCts = cts;
+
         try
         {
             IsGenerating = true;
+            _spectrogramService.InvalidateCache();
             int imageWidth = Math.Clamp((int)(FileDuration.TotalSeconds * 20), 800, 3000);
             const int imageHeight = 500;
             SpectrogramImage = await _spectrogramService.GenerateAsync(
-                FilePath, imageWidth, imageHeight, MaxFrequencyHz, NoiseReductionEnabled);
+                FilePath, imageWidth, imageHeight, MaxFrequencyHz, NoiseReductionEnabled, cts.Token);
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             _setStatus($"Error regenerating spectrogram: {ex.Message}");
         }
         finally
         {
-            IsGenerating = false;
+            if (_regenCts == cts)
+                IsGenerating = false;
         }
     }
 

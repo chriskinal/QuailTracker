@@ -43,12 +43,36 @@ public class SpectrogramService
 
     public NoiseReductionService? NoiseReduction { get; set; }
 
+    // Cached FFT data from the last full computation
+    private float[]? _cachedMagnitudeDb;
+    private int _cachedImageWidth;
+    private int _cachedNumBins;
+    private double _cachedNyquist;
+    private float _cachedMaxDb;
+    private double _cachedDuration;
+    private string? _cachedFilePath;
+    private bool _cachedNoiseReduction;
+
+    public bool HasCache => _cachedMagnitudeDb != null;
+
     public Task<WriteableBitmap> GenerateAsync(
         string filePath, int imageWidth, int imageHeight,
         double maxFreqHz = 0, bool noiseReduction = false,
         CancellationToken ct = default)
     {
         return Task.Run(() => Generate(filePath, imageWidth, imageHeight, maxFreqHz, noiseReduction, ct), ct);
+    }
+
+    /// <summary>
+    /// Re-render from cached FFT data with a new frequency range. Near-instant.
+    /// Returns null if no cache is available.
+    /// </summary>
+    public Task<WriteableBitmap?> RenderCachedAsync(
+        int imageHeight, double maxFreqHz, CancellationToken ct = default)
+    {
+        if (_cachedMagnitudeDb == null) return Task.FromResult<WriteableBitmap?>(null);
+
+        return Task.Run(() => RenderFromCache(imageHeight, maxFreqHz, ct), ct);
     }
 
     private WriteableBitmap Generate(string filePath, int imageWidth, int imageHeight,
@@ -64,11 +88,7 @@ public class SpectrogramService
         int totalFrames = Math.Max(1, (samples.Length - FftSize) / HopSize + 1);
         int numBins = FftSize / 2 + 1;
         double nyquist = sampleRate / 2.0;
-
-        // Limit displayed frequency range
-        if (maxFreqHz <= 0 || maxFreqHz > nyquist)
-            maxFreqHz = nyquist;
-        int maxBin = Math.Clamp((int)(maxFreqHz / nyquist * (numBins - 1)), 1, numBins - 1);
+        double duration = (double)samples.Length / sampleRate;
 
         var window = MakeHannWindow(FftSize);
         var fftBuffer = new Complex[FftSize];
@@ -101,6 +121,38 @@ public class SpectrogramService
                 if (db > maxDb) maxDb = db;
             }
         }
+
+        // Cache the FFT data
+        _cachedMagnitudeDb = magnitudeDb;
+        _cachedImageWidth = imageWidth;
+        _cachedNumBins = numBins;
+        _cachedNyquist = nyquist;
+        _cachedMaxDb = maxDb;
+        _cachedDuration = duration;
+        _cachedFilePath = filePath;
+        _cachedNoiseReduction = noiseReduction;
+
+        return RenderBitmap(magnitudeDb, imageWidth, imageHeight, numBins, nyquist, maxDb, duration, maxFreqHz);
+    }
+
+    private WriteableBitmap? RenderFromCache(int imageHeight, double maxFreqHz, CancellationToken ct)
+    {
+        var magnitudeDb = _cachedMagnitudeDb;
+        if (magnitudeDb == null) return null;
+
+        ct.ThrowIfCancellationRequested();
+
+        return RenderBitmap(magnitudeDb, _cachedImageWidth, imageHeight,
+            _cachedNumBins, _cachedNyquist, _cachedMaxDb, _cachedDuration, maxFreqHz);
+    }
+
+    private static WriteableBitmap RenderBitmap(float[] magnitudeDb, int imageWidth, int imageHeight,
+        int numBins, double nyquist, float maxDb, double duration, double maxFreqHz)
+    {
+        // Limit displayed frequency range
+        if (maxFreqHz <= 0 || maxFreqHz > nyquist)
+            maxFreqHz = nyquist;
+        int maxBin = Math.Clamp((int)(maxFreqHz / nyquist * (numBins - 1)), 1, numBins - 1);
 
         float floor = maxDb - 80f;
         float range = maxDb - floor;
@@ -149,7 +201,6 @@ public class SpectrogramService
         }
 
         // Draw time gridlines (vertical)
-        double duration = (double)samples.Length / sampleRate;
         double timeInterval = duration <= 30 ? 5 : duration <= 120 ? 15 : duration <= 600 ? 60 : 300;
 
         for (double t = timeInterval; t < duration; t += timeInterval)
@@ -184,6 +235,12 @@ public class SpectrogramService
         }
 
         return bitmap;
+    }
+
+    public void InvalidateCache()
+    {
+        _cachedMagnitudeDb = null;
+        _cachedFilePath = null;
     }
 
     internal static (float[] samples, int sampleRate) ReadAudioMono(string filePath)

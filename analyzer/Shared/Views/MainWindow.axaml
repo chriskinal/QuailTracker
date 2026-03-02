@@ -12,7 +12,7 @@
         <vm:MainWindowViewModel />
     </Design.DataContext>
 
-    <Grid RowDefinitions="Auto,*,Auto">
+    <Grid RowDefinitions="Auto,*">
         <!-- Header -->
         <Border Grid.Row="0"
                 Background="{StaticResource QuailPrimaryBrush}"
@@ -135,42 +135,5 @@
             </TabItem>
         </TabControl>
 
-        <!-- Status Bar -->
-        <Border Grid.Row="2"
-                Background="#DD1E2930"
-                Padding="12,6"
-                BorderThickness="0,1,0,0"
-                BorderBrush="#DD475A6E">
-            <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto">
-                <TextBlock Text="{Binding StatusMessage}"
-                           VerticalAlignment="Center"
-                           FontSize="12"
-                           Foreground="#AAAAAA" />
-                <TextBlock Grid.Column="1"
-                           Text="{Binding AudioFiles.Count, StringFormat='Files: {0}'}"
-                           VerticalAlignment="Center"
-                           FontSize="12"
-                           Foreground="White"
-                           Margin="16,0" />
-                <TextBlock Grid.Column="2"
-                           Text="{Binding Detections.Count, StringFormat='Detections: {0}'}"
-                           VerticalAlignment="Center"
-                           FontSize="12"
-                           Foreground="White"
-                           Margin="16,0" />
-                <TextBlock Grid.Column="3"
-                           Text="{Binding Localizations.Count, StringFormat='Localizations: {0}'}"
-                           VerticalAlignment="Center"
-                           FontSize="12"
-                           Foreground="White"
-                           Margin="16,0" />
-                <TextBlock Grid.Column="4"
-                           Text="{Binding Stations.Count, StringFormat='Stations: {0}'}"
-                           VerticalAlignment="Center"
-                           FontSize="12"
-                           Foreground="White"
-                           Margin="16,0,0,0" />
-            </Grid>
-        </Border>
     </Grid>
 </Window>

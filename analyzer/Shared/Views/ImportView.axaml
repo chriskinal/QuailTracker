@@ -7,7 +7,19 @@
     <Grid ColumnDefinitions="*,300" Margin="8">
         <!-- Left: File List -->
         <Grid Grid.Column="0" RowDefinitions="Auto,*,Auto" Margin="0,0,8,0">
-            <TextBlock Grid.Row="0" Text="Audio Files" Classes="SectionHeader" />
+            <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,*" Margin="0,0,0,4">
+                <TextBlock Text="Audio Files" Classes="SectionHeader" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="1"
+                           Text="{Binding AudioFiles.Count, StringFormat='({0})'}"
+                           VerticalAlignment="Center"
+                           Foreground="#757575"
+                           Margin="6,0,0,0" />
+                <TextBlock Grid.Column="2"
+                           Text="{Binding StatusMessage}"
+                           VerticalAlignment="Center"
+                           HorizontalAlignment="Right"
+                           Foreground="#757575" />
+            </Grid>
 
             <!-- Drop Zone / File List -->
             <Border Grid.Row="1"
@@ -96,7 +108,12 @@
 
         <!-- Right: Station Configuration -->
         <Grid Grid.Column="1" RowDefinitions="Auto,*,Auto">
-            <TextBlock Grid.Row="0" Text="Stations" Classes="SectionHeader" />
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="6">
+                <TextBlock Text="Stations" Classes="SectionHeader" VerticalAlignment="Center" />
+                <TextBlock Text="{Binding Stations.Count, StringFormat='({0})'}"
+                           VerticalAlignment="Center"
+                           Foreground="#757575" />
+            </StackPanel>
 
             <!-- Station List -->
             <DataGrid Grid.Row="1"

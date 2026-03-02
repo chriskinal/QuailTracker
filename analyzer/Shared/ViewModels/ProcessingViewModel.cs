@@ -34,6 +34,9 @@ public partial class ProcessingViewModel : ObservableObject
     private readonly IBirdNetService _birdNetService;
     private readonly ObservableCollection<AudioFile> _audioFiles;
     private readonly ObservableCollection<Detection> _detections;
+    [ObservableProperty]
+    private string _statusMessage = string.Empty;
+
     private readonly Action<string> _setStatus;
     private CancellationTokenSource? _cts;
 
@@ -101,14 +104,13 @@ public partial class ProcessingViewModel : ObservableObject
         IAudioFileService audioFileService,
         IBirdNetService birdNetService,
         ObservableCollection<AudioFile> audioFiles,
-        ObservableCollection<Detection> detections,
-        Action<string> setStatus)
+        ObservableCollection<Detection> detections)
     {
         _audioFileService = audioFileService;
         _birdNetService = birdNetService;
         _audioFiles = audioFiles;
         _detections = detections;
-        _setStatus = setStatus;
+        _setStatus = msg => StatusMessage = msg;
 
         _detections.CollectionChanged += (_, _) => UpdateFilteredDetections();
         _audioFiles.CollectionChanged += (_, _) => StartProcessingCommand.NotifyCanExecuteChanged();

@@ -115,6 +115,10 @@
                     <Button Content="Clear"
                             Classes="ToolbarButton"
                             Command="{Binding ClearCommand}" />
+                    <TextBlock Text="{Binding StatusMessage}"
+                               VerticalAlignment="Center"
+                               Foreground="#757575"
+                               Margin="8,0,0,0" />
                 </StackPanel>
                 <Button Grid.Row="3"
                         Content="Cancel"

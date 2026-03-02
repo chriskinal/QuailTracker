@@ -158,19 +158,29 @@
                             Classes="ToolbarButton"
                             Command="{Binding ClearDetectionsCommand}"
                             IsVisible="{Binding !IsProcessing}" />
+                    <TextBlock Text="{Binding StatusMessage}"
+                               VerticalAlignment="Center"
+                               Foreground="#757575"
+                               Margin="8,0,0,0" />
                 </StackPanel>
             </Grid>
         </Border>
 
         <!-- Detection Results -->
         <Grid Grid.Row="2" RowDefinitions="Auto,*,Auto">
-            <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="0,0,0,8">
+            <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" Margin="0,0,0,8">
                 <TextBlock Text="Detections" Classes="SectionHeader" VerticalAlignment="Center" />
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
                     <TextBox Text="{Binding SpeciesFilter}"
                              Watermark="Filter by species..."
                              Width="150" />
                 </StackPanel>
+                <Button Grid.Column="2"
+                        Content="Export..."
+                        Classes="SecondaryButton"
+                        Click="OnExportClick"
+                        IsEnabled="{Binding FilteredDetections.Count}"
+                        Margin="8,0,0,0" />
             </Grid>
 
             <DataGrid Grid.Row="1"

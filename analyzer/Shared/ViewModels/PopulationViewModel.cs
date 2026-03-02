@@ -37,6 +37,9 @@ public partial class PopulationViewModel : ObservableObject
     private readonly ObservableCollection<Station> _stations;
     private readonly ObservableCollection<Detection> _detections;
     private readonly ObservableCollection<Localization> _localizations;
+    [ObservableProperty]
+    private string _statusMessage = string.Empty;
+
     private readonly Action<string> _setStatus;
     private CancellationTokenSource? _cts;
 
@@ -169,8 +172,7 @@ public partial class PopulationViewModel : ObservableObject
         ITdoaService tdoaService,
         ObservableCollection<Station> stations,
         ObservableCollection<Detection> detections,
-        ObservableCollection<Localization> localizations,
-        Action<string> setStatus)
+        ObservableCollection<Localization> localizations)
     {
         _populationService = populationService;
         _weatherService = weatherService;
@@ -178,7 +180,7 @@ public partial class PopulationViewModel : ObservableObject
         _stations = stations;
         _detections = detections;
         _localizations = localizations;
-        _setStatus = setStatus;
+        _setStatus = msg => StatusMessage = msg;
     }
 
     private SurveyConfig BuildConfig() => new()

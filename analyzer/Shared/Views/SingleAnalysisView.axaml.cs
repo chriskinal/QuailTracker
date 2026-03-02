@@ -19,12 +19,15 @@
 using System;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Shapes;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using QuailTracker.Analyzer.Shared.Models;
+using QuailTracker.Analyzer.Shared.Services;
 using QuailTracker.Analyzer.Shared.ViewModels;
 
 namespace QuailTracker.Analyzer.Shared.Views;
@@ -39,6 +42,8 @@ public partial class SingleAnalysisView : UserControl
     private static readonly IBrush MarkerLabelBg = new SolidColorBrush(Color.Parse("#CC1a0533"));
 
     private SingleAnalysisViewModel? _currentVm;
+    private bool _updatePending;
+    private bool _updating;
 
     public SingleAnalysisView()
     {
@@ -73,8 +78,7 @@ public partial class SingleAnalysisView : UserControl
             or nameof(SingleAnalysisViewModel.FileDuration)
             or nameof(SingleAnalysisViewModel.MaxFrequencyHz))
         {
-            UpdateAxisLabels();
-            UpdateDetectionMarkers();
+            ScheduleVisualUpdate();
         }
     }
 
@@ -82,14 +86,34 @@ public partial class SingleAnalysisView : UserControl
     {
         if (e.Property == BoundsProperty)
         {
-            UpdateAxisLabels();
-            UpdateDetectionMarkers();
+            ScheduleVisualUpdate();
         }
     }
 
     private void OnDetectionsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        UpdateDetectionMarkers();
+        ScheduleVisualUpdate();
+    }
+
+    private void ScheduleVisualUpdate()
+    {
+        if (_updatePending) return;
+        _updatePending = true;
+        Dispatcher.UIThread.Post(() =>
+        {
+            _updatePending = false;
+            if (_updating) return;
+            _updating = true;
+            try
+            {
+                UpdateAxisLabels();
+                UpdateDetectionMarkers();
+            }
+            finally
+            {
+                _updating = false;
+            }
+        }, DispatcherPriority.Background);
     }
 
     private void UpdateAxisLabels()
@@ -296,5 +320,35 @@ public partial class SingleAnalysisView : UserControl
     private void OnStopPlaybackClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         _currentVm?.StopPlayback();
+    }
+
+    private async void OnExportClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (_currentVm == null || _currentVm.Detections.Count == 0) return;
+
+        var topLevel = TopLevel.GetTopLevel(this);
+        if (topLevel == null) return;
+
+        var baseName = System.IO.Path.GetFileNameWithoutExtension(_currentVm.FileName);
+        var file = await topLevel.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Export Detections",
+            SuggestedFileName = $"{baseName}_detections.csv",
+            FileTypeChoices = new[]
+            {
+                new FilePickerFileType("BirdNET CSV") { Patterns = new[] { "*.csv" } },
+                new FilePickerFileType("Raven Selection Table") { Patterns = new[] { "*.txt" } }
+            }
+        });
+
+        if (file == null) return;
+
+        var path = file.Path.LocalPath;
+        var detections = _currentVm.Detections.ToList();
+
+        if (path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase))
+            DetectionExporter.WriteRavenTable(detections, path);
+        else
+            DetectionExporter.WriteBirdNetCsv(detections, path);
     }
 }

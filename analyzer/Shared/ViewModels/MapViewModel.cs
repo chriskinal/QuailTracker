@@ -34,6 +34,9 @@ public partial class MapViewModel : ObservableObject
     private readonly ObservableCollection<Station> _stations;
     private readonly ObservableCollection<Detection> _detections;
     private readonly ObservableCollection<Localization> _localizations;
+    [ObservableProperty]
+    private string _statusMessage = string.Empty;
+
     private readonly Action<string> _setStatus;
 
     [ObservableProperty]
@@ -72,15 +75,14 @@ public partial class MapViewModel : ObservableObject
         IKmlExportService kmlExportService,
         ObservableCollection<Station> stations,
         ObservableCollection<Detection> detections,
-        ObservableCollection<Localization> localizations,
-        Action<string> setStatus)
+        ObservableCollection<Localization> localizations)
     {
         _mapService = mapService;
         _kmlExportService = kmlExportService;
         _stations = stations;
         _detections = detections;
         _localizations = localizations;
-        _setStatus = setStatus;
+        _setStatus = msg => StatusMessage = msg;
 
         _mapService.MapReady += (_, _) =>
         {

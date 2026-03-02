@@ -16,8 +16,11 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+using System;
+using System.Linq;
 using Avalonia.Controls;
 using Avalonia.Platform.Storage;
+using QuailTracker.Analyzer.Shared.Services;
 using QuailTracker.Analyzer.Shared.ViewModels;
 
 namespace QuailTracker.Analyzer.Shared.Views;
@@ -50,5 +53,35 @@ public partial class ProcessingView : UserControl
         {
             await vm.LoadModelCommand.ExecuteAsync(files[0].Path.LocalPath);
         }
+    }
+
+    private async void OnExportClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (DataContext is not ProcessingViewModel vm) return;
+        if (vm.FilteredDetections.Count == 0) return;
+
+        var topLevel = TopLevel.GetTopLevel(this);
+        if (topLevel == null) return;
+
+        var file = await topLevel.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Export Detections",
+            SuggestedFileName = "detections_export.csv",
+            FileTypeChoices = new[]
+            {
+                new FilePickerFileType("BirdNET CSV") { Patterns = new[] { "*.csv" } },
+                new FilePickerFileType("Raven Selection Table") { Patterns = new[] { "*.txt" } }
+            }
+        });
+
+        if (file == null) return;
+
+        var path = file.Path.LocalPath;
+        var detections = vm.FilteredDetections.ToList();
+
+        if (path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase))
+            DetectionExporter.WriteRavenTable(detections, path);
+        else
+            DetectionExporter.WriteBirdNetCsv(detections, path);
     }
 }

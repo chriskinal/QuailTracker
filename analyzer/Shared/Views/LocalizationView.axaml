@@ -70,6 +70,10 @@
                     <Button Content="Clear Results"
                             Classes="ToolbarButton"
                             Command="{Binding ClearLocalizationsCommand}" />
+                    <TextBlock Text="{Binding StatusMessage}"
+                               VerticalAlignment="Center"
+                               Foreground="#757575"
+                               Margin="8,0,0,0" />
                 </StackPanel>
                 <Button Grid.Row="2"
                         Content="Cancel"
@@ -102,7 +106,12 @@
 
             <!-- Localization Results -->
             <Grid Grid.Column="1" RowDefinitions="Auto,*" Margin="4,0,0,0">
-                <TextBlock Grid.Row="0" Text="Localization Results" Classes="SectionHeader" />
+                <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="6">
+                    <TextBlock Text="Localization Results" Classes="SectionHeader" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding Localizations.Count, StringFormat='({0})'}"
+                               VerticalAlignment="Center"
+                               Foreground="#757575" />
+                </StackPanel>
                 <DataGrid Grid.Row="1"
                           ItemsSource="{Binding Localizations}"
                           SelectedItem="{Binding SelectedLocalization}"
