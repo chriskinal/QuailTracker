@@ -170,6 +170,7 @@ def api_full_pipeline():
     data = request.get_json() or {}
     species_list = data.get("species_list", [])
     api_key = data.get("api_key", "")
+    skip_download = data.get("skip_download", False)
     output_dir = data.get("output_dir", OUTPUT_DIR)
     noise_dir = data.get("noise_dir", "")
     max_recordings = int(data.get("max_recordings", 30))
@@ -177,16 +178,19 @@ def api_full_pipeline():
     epochs = int(data.get("epochs", 100))
     batch_size = int(data.get("batch_size", 32))
     augment = data.get("augment", True)
+    call_band_low = float(data.get("call_band_low", 1300))
+    call_band_high = float(data.get("call_band_high", 2800))
 
     if not species_list:
         return jsonify({"error": "species_list is required"}), 400
-    if not api_key:
+    if not skip_download and not api_key:
         return jsonify({"error": "api_key is required"}), 400
 
     def job():
         run_full_pipeline(
             species_list=species_list,
             api_key=api_key,
+            skip_download=skip_download,
             output_dir=output_dir,
             noise_dir=noise_dir if noise_dir else None,
             max_recordings=max_recordings,
@@ -194,6 +198,8 @@ def api_full_pipeline():
             epochs=epochs,
             batch_size=batch_size,
             augment=augment,
+            call_band_low=call_band_low,
+            call_band_high=call_band_high,
             progress_callback=_push_progress,
         )
 

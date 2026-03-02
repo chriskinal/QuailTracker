@@ -145,6 +145,21 @@ header h1 {
     flex: 1;
 }
 
+.inline-fields {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.inline-fields input[type="number"] {
+    padding: 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 0.875rem;
+}
+
 /* Tags */
 .tags {
     display: flex;

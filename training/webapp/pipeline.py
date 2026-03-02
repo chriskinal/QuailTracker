@@ -25,6 +25,7 @@ from evaluate import (
     plot_confusion_matrix,
 )
 
+from sort_clips import sort_species_clips
 from webapp.xeno_canto import download_species_dataset
 
 
@@ -346,20 +347,25 @@ def run_evaluate(model_dir, data_dir, progress_callback=None):
 
 
 def run_full_pipeline(species_list, api_key, output_dir, noise_dir=None,
-                      max_recordings=30, quality_min="B", epochs=100,
-                      batch_size=32, augment=True, progress_callback=None):
-    """Full pipeline: download → train → export → evaluate.
+                      skip_download=False, max_recordings=30, quality_min="B",
+                      epochs=100, batch_size=32, augment=True,
+                      call_band_low=1300.0, call_band_high=2800.0,
+                      progress_callback=None):
+    """Full pipeline: download → sort → train → export → evaluate.
 
     Args:
         species_list: List of species English names.
         api_key: xeno-canto API key.
         output_dir: Output directory for all artifacts.
         noise_dir: Optional path to noise clips directory.
+        skip_download: If True, skip download and use existing clips.
         max_recordings: Max recordings per species to download.
         quality_min: Minimum xeno-canto quality rating.
         epochs: Training epochs.
         batch_size: Training batch size.
         augment: Enable augmentation.
+        call_band_low: Lower call-band frequency in Hz for negative extraction.
+        call_band_high: Upper call-band frequency in Hz for negative extraction.
         progress_callback: Optional callable(message_str).
 
     Returns:
@@ -371,30 +377,54 @@ def run_full_pipeline(species_list, api_key, output_dir, noise_dir=None,
     os.makedirs(data_dir, exist_ok=True)
 
     # Stage 1: Download xeno-canto clips
-    cb(json.dumps({"stage": "download", "status": "started"}))
     total_clips = 0
-    for i, species in enumerate(species_list):
-        cb(f"[{i + 1}/{len(species_list)}] Downloading '{species}'...")
-        clips = download_species_dataset(
-            species, api_key, data_dir,
-            max_recordings=max_recordings,
-            quality_min=quality_min,
+    if skip_download:
+        cb("Skipping download — using existing clips")
+        for species in species_list:
+            species_dir = os.path.join(data_dir, species)
+            if os.path.isdir(species_dir):
+                count = len([f for f in os.listdir(species_dir)
+                             if f.endswith(".wav")])
+                cb(f"  {species}: {count} existing clips")
+                total_clips += count
+            else:
+                cb(f"  WARNING: No clips found for '{species}' at {species_dir}")
+    else:
+        cb(json.dumps({"stage": "download", "status": "started"}))
+        for i, species in enumerate(species_list):
+            cb(f"[{i + 1}/{len(species_list)}] Downloading '{species}'...")
+            clips = download_species_dataset(
+                species, api_key, data_dir,
+                max_recordings=max_recordings,
+                quality_min=quality_min,
+                progress_callback=cb,
+            )
+            total_clips += clips
+
+        cb(f"Download complete: {total_clips} total clips")
+
+    # Stage 2: Sort clips — extract negatives using call-band energy
+    cb(json.dumps({"stage": "sort", "status": "started"}))
+    for species in species_list:
+        cb(f"Sorting clips for '{species}'...")
+        sort_species_clips(
+            data_dir, species,
+            freq_low=call_band_low, freq_high=call_band_high,
             progress_callback=cb,
         )
-        total_clips += clips
 
-    cb(f"Download complete: {total_clips} total clips")
-
-    # Stage 2: Copy noise directory if provided
+    # Stage 2b: Copy additional noise directory if provided
     if noise_dir and os.path.isdir(noise_dir):
         import shutil
         noise_dest = os.path.join(data_dir, "noise")
-        if os.path.exists(noise_dest):
-            shutil.rmtree(noise_dest)
-        shutil.copytree(noise_dir, noise_dest)
-        noise_count = len([f for f in os.listdir(noise_dest)
-                           if f.endswith(".wav")])
-        cb(f"Copied {noise_count} noise clips")
+        os.makedirs(noise_dest, exist_ok=True)
+        copied = 0
+        for f in os.listdir(noise_dir):
+            if f.endswith(".wav"):
+                shutil.copy2(os.path.join(noise_dir, f),
+                             os.path.join(noise_dest, f))
+                copied += 1
+        cb(f"Copied {copied} additional noise clips from {noise_dir}")
 
     # Stage 3: Train
     cb(json.dumps({"stage": "training", "status": "started"}))

@@ -35,11 +35,12 @@ CLIP_DURATION_MS = 3000
 STRIDE_MS = 1500
 
 
-def compute_call_band_energy(audio, sr=SAMPLE_RATE):
-    """Log energy in the bobwhite call frequency band."""
+def compute_call_band_energy(audio, sr=SAMPLE_RATE,
+                              freq_low=CALL_FREQ_LOW, freq_high=CALL_FREQ_HIGH):
+    """Log energy in the specified call frequency band."""
     S = np.abs(librosa.stft(audio, n_fft=N_FFT, hop_length=HOP_LENGTH)) ** 2
     freqs = librosa.fft_frequencies(sr=sr, n_fft=N_FFT)
-    call_mask = (freqs >= CALL_FREQ_LOW) & (freqs <= CALL_FREQ_HIGH)
+    call_mask = (freqs >= freq_low) & (freqs <= freq_high)
     call_energy = np.sum(S[call_mask, :])
     return np.log10(call_energy + 1e-12)
 
@@ -72,21 +73,39 @@ def find_otsu_threshold(values):
     return best_thresh
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Sort clips with overlap protection")
-    parser.add_argument("--clips-dir", required=True, help="Path to clips directory")
-    parser.add_argument("--species", default="Northern Bobwhite")
-    parser.add_argument("--dry-run", action="store_true")
-    args = parser.parse_args()
+def sort_species_clips(clips_dir, species, freq_low=CALL_FREQ_LOW,
+                       freq_high=CALL_FREQ_HIGH, dry_run=False,
+                       progress_callback=None):
+    """Sort clips for a species into call vs. noise using energy analysis.
 
-    species_dir = os.path.join(args.clips_dir, args.species)
-    noise_dir = os.path.join(args.clips_dir, "noise")
+    Args:
+        clips_dir: Root clips directory containing species subdirectories.
+        species: Species subdirectory name.
+        freq_low: Lower bound of call frequency band (Hz).
+        freq_high: Upper bound of call frequency band (Hz).
+        dry_run: If True, classify but don't move files.
+        progress_callback: Optional callable(message_str).
+
+    Returns:
+        Dict with counts: total_call, total_noise, total_discarded.
+    """
+    cb = progress_callback or print
+    species_dir = os.path.join(clips_dir, species)
+    noise_dir = os.path.join(clips_dir, "noise")
+
+    if not os.path.isdir(species_dir):
+        cb(f"Species directory not found: {species_dir}")
+        return {"total_call": 0, "total_noise": 0, "total_discarded": 0}
 
     # Parse clips into per-recording groups
     recordings = defaultdict(list)
     wav_files = sorted(f for f in os.listdir(species_dir) if f.endswith(".wav"))
 
-    print(f"Analyzing {len(wav_files)} clips...")
+    if not wav_files:
+        cb(f"No WAV clips found in {species_dir}")
+        return {"total_call": 0, "total_noise": 0, "total_discarded": 0}
+
+    cb(f"Analyzing {len(wav_files)} clips (call band: {freq_low:.0f}-{freq_high:.0f} Hz)...")
     for i, fname in enumerate(wav_files):
         parts = fname.replace(".wav", "").split("_")
         xc_id = parts[0]
@@ -96,7 +115,7 @@ def main():
         if sr != SAMPLE_RATE:
             audio = librosa.resample(audio, orig_sr=sr, target_sr=SAMPLE_RATE)
 
-        energy = compute_call_band_energy(audio, SAMPLE_RATE)
+        energy = compute_call_band_energy(audio, SAMPLE_RATE, freq_low, freq_high)
         recordings[xc_id].append({
             "filename": fname,
             "offset_ms": offset_ms,
@@ -104,12 +123,12 @@ def main():
         })
 
         if (i + 1) % 200 == 0:
-            print(f"  {i + 1}/{len(wav_files)}...")
+            cb(f"  {i + 1}/{len(wav_files)}...")
 
     # Global threshold
     all_energies = np.array([c["energy"] for clips in recordings.values() for c in clips])
     threshold = find_otsu_threshold(all_energies)
-    print(f"\nOtsu threshold: {threshold:.2f}")
+    cb(f"Otsu threshold: {threshold:.2f}")
 
     # For each recording: classify clips, then enforce gap
     total_call = 0
@@ -120,18 +139,14 @@ def main():
     for xc_id in sorted(recordings.keys()):
         clips = sorted(recordings[xc_id], key=lambda c: c["offset_ms"])
 
-        # Step 1: raw classification
         for c in clips:
             c["is_call"] = c["energy"] >= threshold
 
-        # Step 2: find call offsets
         call_offsets = set()
         for c in clips:
             if c["is_call"]:
                 call_offsets.add(c["offset_ms"])
 
-        # Step 3: noise clips must not overlap with ANY call clip.
-        # Two clips overlap if their offsets differ by less than CLIP_DURATION_MS.
         for c in clips:
             if c["is_call"]:
                 c["label"] = "call"
@@ -151,35 +166,47 @@ def main():
 
         noise_files.extend(c["filename"] for c in clips if c["label"] == "noise")
 
-        print(f"  {xc_id}: {n_call:3d} call, {n_noise:3d} noise, "
-              f"{n_disc:3d} discarded ({len(clips)} total)")
+        cb(f"  {xc_id}: {n_call:3d} call, {n_noise:3d} noise, "
+           f"{n_disc:3d} discarded ({len(clips)} total)")
 
-    print(f"\nSummary:")
-    print(f"  Call clips (positive): {total_call}")
-    print(f"  Noise clips (negative): {total_noise}")
-    print(f"  Discarded (too close to calls): {total_discarded}")
-    print(f"  Total: {total_call + total_noise + total_discarded}")
+    cb(f"Sort summary: {total_call} call, {total_noise} noise, {total_discarded} discarded")
 
-    if args.dry_run:
-        print("\n[DRY RUN] No files moved.")
-        return
+    if not dry_run:
+        os.makedirs(noise_dir, exist_ok=True)
+        for fname in noise_files:
+            shutil.move(
+                os.path.join(species_dir, fname),
+                os.path.join(noise_dir, fname),
+            )
 
-    os.makedirs(noise_dir, exist_ok=True)
-    for fname in noise_files:
-        shutil.move(
-            os.path.join(species_dir, fname),
-            os.path.join(noise_dir, fname),
-        )
+        remaining = len([f for f in os.listdir(species_dir) if f.endswith(".wav")])
+        noise_count = len([f for f in os.listdir(noise_dir) if f.endswith(".wav")])
+        cb(f"  {species_dir}: {remaining} call clips (includes {total_discarded} borderline)")
+        cb(f"  {noise_dir}: {noise_count} noise clips")
 
-    # Keep discarded clips in species dir as positive examples
-    # (better to have borderline positives than lose training data)
+    return {
+        "total_call": total_call,
+        "total_noise": total_noise,
+        "total_discarded": total_discarded,
+    }
 
-    remaining = len([f for f in os.listdir(species_dir) if f.endswith(".wav")])
-    noise_count = len([f for f in os.listdir(noise_dir) if f.endswith(".wav")])
 
-    print(f"\nDone:")
-    print(f"  {species_dir}: {remaining} call clips (includes {total_discarded} borderline)")
-    print(f"  {noise_dir}: {noise_count} noise clips")
+def main():
+    parser = argparse.ArgumentParser(description="Sort clips with overlap protection")
+    parser.add_argument("--clips-dir", required=True, help="Path to clips directory")
+    parser.add_argument("--species", default="Northern Bobwhite")
+    parser.add_argument("--freq-low", type=float, default=CALL_FREQ_LOW,
+                        help="Lower call-band frequency (Hz)")
+    parser.add_argument("--freq-high", type=float, default=CALL_FREQ_HIGH,
+                        help="Upper call-band frequency (Hz)")
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+
+    sort_species_clips(
+        args.clips_dir, args.species,
+        freq_low=args.freq_low, freq_high=args.freq_high,
+        dry_run=args.dry_run,
+    )
 
 
 if __name__ == "__main__":

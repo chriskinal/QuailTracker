@@ -30,10 +30,12 @@
                 <div class="field">
                     <label for="q-output-dir">Output directory</label>
                     <input type="text" id="q-output-dir" value="/output">
+                    <span class="hint">Where the trained model and exported files will be saved</span>
                 </div>
                 <div class="field">
                     <label for="q-epochs">Epochs: <span id="q-epochs-val">100</span></label>
                     <input type="range" id="q-epochs" min="5" max="200" value="100">
+                    <span class="hint">Number of training passes over the data. More epochs = longer training but may improve accuracy. Training stops early if no improvement.</span>
                 </div>
                 <div class="field">
                     <label for="q-batch-size">Batch size</label>
@@ -42,12 +44,14 @@
                         <option value="32" selected>32</option>
                         <option value="64">64</option>
                     </select>
+                    <span class="hint">Samples processed together per training step. Smaller = slower but can generalize better. 32 is a good default.</span>
                 </div>
                 <div class="field checkbox">
                     <label>
                         <input type="checkbox" id="q-augment" checked>
                         Enable augmentation
                     </label>
+                    <span class="hint">Randomly varies pitch, timing, and noise during training to make the model more robust in the field</span>
                 </div>
                 <button type="submit" class="btn-primary" id="btn-train">Train</button>
             </form>
@@ -57,11 +61,6 @@
         <section id="tab-full" class="tab-content">
             <form id="form-full" class="form-panel">
                 <div class="field">
-                    <label for="f-api-key">xeno-canto API key</label>
-                    <input type="password" id="f-api-key" placeholder="Enter API key">
-                    <span class="hint">Saved in browser localStorage</span>
-                </div>
-                <div class="field">
                     <label>Species</label>
                     <div class="species-input">
                         <input type="text" id="f-species-input"
@@ -70,30 +69,59 @@
                     </div>
                     <div id="species-tags" class="tags"></div>
                 </div>
-                <div class="field">
-                    <label for="f-max-recordings">Max recordings per species: <span id="f-max-val">30</span></label>
-                    <input type="range" id="f-max-recordings" min="10" max="100" value="30">
+                <div class="field checkbox">
+                    <label>
+                        <input type="checkbox" id="f-download" checked>
+                        Download clips from xeno-canto
+                    </label>
+                    <span class="hint">Uncheck to re-train on previously downloaded clips</span>
+                </div>
+                <div id="download-fields">
+                    <div class="field">
+                        <label for="f-api-key">xeno-canto API key</label>
+                        <input type="password" id="f-api-key" placeholder="Enter API key">
+                        <span class="hint">Saved in browser localStorage</span>
+                    </div>
+                    <div class="field">
+                        <label for="f-max-recordings">Max recordings per species: <span id="f-max-val">30</span></label>
+                        <input type="range" id="f-max-recordings" min="10" max="100" value="30">
+                    </div>
+                    <div class="field">
+                        <label for="f-quality">Quality filter</label>
+                        <select id="f-quality">
+                            <option value="A">A only</option>
+                            <option value="B" selected>A + B</option>
+                            <option value="C">A + B + C</option>
+                        </select>
+                    </div>
                 </div>
                 <div class="field">
-                    <label for="f-quality">Quality filter</label>
-                    <select id="f-quality">
-                        <option value="A">A only</option>
-                        <option value="B" selected>A + B</option>
-                        <option value="C">A + B + C</option>
-                    </select>
+                    <label>Call band for negative extraction</label>
+                    <div class="inline-fields">
+                        <input type="number" id="f-call-band-low" value="1300"
+                               min="200" max="8000" step="100" style="width:80px">
+                        <span>–</span>
+                        <input type="number" id="f-call-band-high" value="2800"
+                               min="500" max="12000" step="100" style="width:80px">
+                        <span>Hz</span>
+                    </div>
+                    <span class="hint">Tune to the call frequency range of the target species (default: 1300–2800 Hz for bobwhite)</span>
                 </div>
                 <div class="field">
                     <label for="f-noise-dir">Noise directory (optional)</label>
                     <input type="text" id="f-noise-dir" value="/data/noise"
                            placeholder="/data/noise">
+                    <span class="hint">Additional noise clips to supplement auto-extracted negatives</span>
                 </div>
                 <div class="field">
                     <label for="f-output-dir">Output directory</label>
                     <input type="text" id="f-output-dir" value="/output">
+                    <span class="hint">Where the trained model and exported files will be saved</span>
                 </div>
                 <div class="field">
                     <label for="f-epochs">Epochs: <span id="f-epochs-val">100</span></label>
                     <input type="range" id="f-epochs" min="5" max="200" value="100">
+                    <span class="hint">Number of training passes over the data. More epochs = longer training but may improve accuracy. Training stops early if no improvement.</span>
                 </div>
                 <div class="field">
                     <label for="f-batch-size">Batch size</label>
@@ -102,14 +130,16 @@
                         <option value="32" selected>32</option>
                         <option value="64">64</option>
                     </select>
+                    <span class="hint">Samples processed together per training step. Smaller = slower but can generalize better. 32 is a good default.</span>
                 </div>
                 <div class="field checkbox">
                     <label>
                         <input type="checkbox" id="f-augment" checked>
                         Enable augmentation
                     </label>
+                    <span class="hint">Randomly varies pitch, timing, and noise during training to make the model more robust in the field</span>
                 </div>
-                <button type="submit" class="btn-primary" id="btn-full-pipeline">Download & Train</button>
+                <button type="submit" class="btn-primary" id="btn-full-pipeline">Download &amp; Train</button>
             </form>
         </section>
 
@@ -118,6 +148,7 @@
             <h2>Progress</h2>
             <div id="stage-indicators" class="stages">
                 <span class="stage" data-stage="download">Download</span>
+                <span class="stage" data-stage="sort">Sort</span>
                 <span class="stage" data-stage="training">Train</span>
                 <span class="stage" data-stage="export">Export</span>
                 <span class="stage" data-stage="evaluate">Evaluate</span>
@@ -201,6 +232,21 @@
         apiKeyInput.addEventListener('change', () => {
             localStorage.setItem('xc_api_key', apiKeyInput.value);
         });
+
+        // --- Download toggle ---
+        const downloadCheckbox = document.getElementById('f-download');
+        const downloadFields = document.getElementById('download-fields');
+        const pipelineBtn = document.getElementById('btn-full-pipeline');
+
+        function updateDownloadToggle() {
+            const on = downloadCheckbox.checked;
+            downloadFields.style.opacity = on ? '1' : '0.4';
+            downloadFields.style.pointerEvents = on ? 'auto' : 'none';
+            pipelineBtn.textContent = on ? 'Download & Train' : 'Sort & Train';
+        }
+
+        downloadCheckbox.addEventListener('change', updateDownloadToggle);
+        updateDownloadToggle();
 
         // --- Progress / SSE ---
         const logOutput = document.getElementById('log-output');
@@ -362,6 +408,11 @@
                 alert('Add at least one species.');
                 return;
             }
+            const doDownload = document.getElementById('f-download').checked;
+            if (doDownload && !document.getElementById('f-api-key').value) {
+                alert('Enter a xeno-canto API key or uncheck "Download clips".');
+                return;
+            }
             resetUI();
 
             fetch('/api/full-pipeline', {
@@ -370,6 +421,7 @@
                 body: JSON.stringify({
                     species_list: speciesList,
                     api_key: document.getElementById('f-api-key').value,
+                    skip_download: !doDownload,
                     output_dir: document.getElementById('f-output-dir').value,
                     noise_dir: document.getElementById('f-noise-dir').value,
                     max_recordings: parseInt(document.getElementById('f-max-recordings').value),
@@ -377,6 +429,8 @@
                     epochs: parseInt(document.getElementById('f-epochs').value),
                     batch_size: parseInt(document.getElementById('f-batch-size').value),
                     augment: document.getElementById('f-augment').checked,
+                    call_band_low: parseFloat(document.getElementById('f-call-band-low').value),
+                    call_band_high: parseFloat(document.getElementById('f-call-band-high').value),
                 }),
             }).then(r => {
                 if (!r.ok) return r.json().then(d => { throw new Error(d.error); });
