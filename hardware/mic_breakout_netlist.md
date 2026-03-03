@@ -37,7 +37,10 @@ Cross-reference: `mic_breakout_bom.csv`
 | 3 | VDD (3.3V) | 3 |
 | 4 | GND | 4 |
 
-Cable: JST PH 4-wire, straight-through (pin 1 to pin 1).
+Cable: 4-conductor shielded (guitar pickup wire) with separate drain wire.
+JST PH connectors on both ends, straight-through (pin 1 to pin 1).
+Shield drain wire crimped with GND wire into pin 4 on the main board connector only.
+Drain wire left floating on mic breakout end (single-end ground).
 
 ---
 
@@ -48,3 +51,4 @@ Cable: JST PH 4-wire, straight-through (pin 1 to pin 1).
 - **Sound hole** (0.8mm NPTH) centered under MIC1 acoustic port on bottom side
 - **No copper** under the sound hole — keep the acoustic path clear
 - **Ground pour** on bottom layer under mic, but broken around the sound hole
+- **Cable shield** grounded on main board side only (drain wire crimped with GND into JST pin 4). Left floating on mic breakout side to avoid ground loop.

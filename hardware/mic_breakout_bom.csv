@@ -21,5 +21,7 @@ CN1,JST PH 4-pin S4B-PH-SM4-TB,SMD 2.0mm pitch,C265102,1,Cable to main board (SM
 # -------------------------------------------------------
 # CABLE
 # -------------------------------------------------------
-# JST PH 2.0mm 4-wire pre-crimped cable 50-100mm
-# Plug into CN2 on main board (also JST PH 4-pin)
+# 4-conductor shielded guitar pickup wire, 50-100mm
+# JST PH 2.0mm crimped on both ends (4 signal wires through connector)
+# Shield drain wire: crimp with GND wire into JST pin 4 on main board end
+# Shield floating (unconnected) on mic breakout end — single-end ground
