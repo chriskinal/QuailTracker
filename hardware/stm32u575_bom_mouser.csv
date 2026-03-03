@@ -1,0 +1,80 @@
+Designator,Description,Manufacturer,MFR Part #,Mouser Part #,Qty,Unit Price @10,Ext Price @10,In Stock,Notes
+# =============================================
+# MAIN BOARD — Mouser-sourceable components
+# =============================================
+# MCU & Power
+U1,MCU STM32U575VGT6 LQFP-100 (non-SMPS LDO variant),STMicroelectronics,STM32U575VGT6,511-STM32U575VGT6,1,$6.73,$6.73,730,160MHz Cortex-M33 1MB flash 784KB RAM
+Q1,LDO 3.3V 1A SOT-23-5 (8uA Iq),Torex Semiconductor,XC6220B331MR-G,865-XC6220B331MR-G,1,$0.944,$0.944,7625,20mV dropout
+# Decoupling Capacitors
+C1-C10,100nF X7R 16V 0402,Samsung Electro-Mechanics,CL05B104KO5NNNC,187-CL05B104KO5NNNC,10,$0.006,$0.06,3686281,VDD + VDDA + VBAT + NRST decoupling
+C11,10uF X5R 25V 0805,YAGEO,CC0805KFX5R8BB106,603-CC0805KFX5R8BB10,1,$0.133,$0.133,28952,VDD bulk near pin 11
+C12,4.7uF X5R 10V 0402,YAGEO,CC0402MPX5R5BB475,603-CC0402MPX55BB475,1,$0.063,$0.063,72062,VCAP pin 48 internal LDO bypass
+C13-C16,1uF X5R 25V 0402,YAGEO,CC0402KRX5R6BB105,603-CC402KRX5R6BB105,4,$0.066,$0.264,3201815,Analog + LDO decoupling
+# Crystal
+X1,32.768kHz SMD3215 crystal,NDK,NX3215SA-32.768K-STD-MUS-3,344-NX3215SA32768KST,1,$0.669,$0.669,2880,LSE RTC crystal
+# GPS Power Control
+Q2,P-FET SI2301CDS SOT-23,Vishay Semiconductors,SI2301CDS-T1-E3,781-SI2301CDS-E3,1,$0.818,$0.818,158962,GPS VCC switch
+Q3,NPN MMBT3904 SOT-23,Diotec Semiconductor,MMBT3904,637-MMBT3904,1,$0.053,$0.053,64,GPS FET gate drive
+# Resistors
+R1 R2 R6,10k 1% 0603,YAGEO,RC0603FR-0710KL,603-RC0603FR-0710KL,3,$0.006,$0.018,2963186,Q2 gate pull-up + Q3 base + BOOT0 pull-down
+R3 R4,4.7k 1% 0603,YAGEO,RC0603FR-074K7L,603-RC0603FR-074K7L,2,$0.006,$0.012,1934872,I2C1 SCL/SDA pull-ups
+R7 R8,1M 1% 0603,YAGEO,RC0603FR-071ML,603-RC0603FR-071ML,2,$0.008,$0.016,757306,Battery voltage divider
+R9,1k 1% 0603,YAGEO,RC0603FR-071KL,603-RC0603FR-071KL,1,$0.008,$0.008,10771055,LED current limit ~1.5mA
+# LED
+LED1,Green LED 0805,ams-OSRAM,LGR971-KN-1-0-20-R18,720-LGR971KN1020R18,1,$0.147,$0.147,46952,Status LED
+# SD Card
+CARD1,MicroSD push-push SMD slot,Hirose Connector,DM3AT-SF-PEJM5(41),798-DM3ATSFPEJM541,1,$2.86,$2.86,18027,SPI mode
+# Connectors
+CN1,JST PH 2-pin TH vertical,JST Commercial,B2B-PH-K-S-GW,306-B2BPHKSGW,1,$0.191,$0.191,8608,Battery connector (GW variant in stock)
+CN2,JST PH 4-pin TH vertical,JST Commercial,B4B-PH-K(LF)(SN),306-B4BPHKLFSNPP,1,$0.139,$0.139,2679,Mic breakout connector
+# H_STRIP,1x40 Male Header 2.54mm TH,Generic,N/A,N/A,1,~$0.10,~$0.10,N/A,"Amazon — not worth buying from Mouser. Cut for H1 (1x4 SHT30) + H2 (1x7 debug)"
+# Switches
+SW1 SW2,Tactile switch SMD,Same Sky,TS42-5252-09-Y-260-SMT-TR,179-TS42525209Y260S,2,$0.177,$0.354,4000,RESET + BOOT0 buttons
+# =============================================
+# MAIN BOARD SUBTOTAL (Mouser): $13.58 per unit @10 (headers from Amazon)
+# =============================================
+#
+# =============================================
+# MIC BREAKOUT BOARD
+# =============================================
+MIC1,IM72D128 PDM MEMS mic,Infineon Technologies,IM72D128V01XTMA1,726-IM72D128V01XTMA1,1,$1.81,$1.81,31559,69dB SNR PDM digital MEMS — proven in prototype testing
+C_MIC,100nF X7R 16V 0603,YAGEO,CC0603KRX7R7BB104,603-CC603KPX7R7BB104,1,$0.057,$0.057,42927,VDD decoupling (hand-solder)
+CN_MIC,JST PH 4-pin SMD right-angle,JST Commercial,S4B-PH-SM4-TB(LF)(SN),306-S4BPHSM4TBLFSN,1,$0.541,$0.541,3120,Cable to main board
+# =============================================
+# MIC BREAKOUT SUBTOTAL: $2.41 per unit @10
+# =============================================
+#
+# =============================================
+# OFF-BOARD MODULES (source separately)
+# =============================================
+# GPS,Seeed L76K XIAO breakout + active antenna,Seeed Studio,109100021,N/A,1,~$7.00,~$7.00,N/A,"Order direct from Seeed (~$7). Mouser stocks it at $16.18 (713-109100021) but 2x markup."
+# BLE,Ai-Thinker PB-03F BLE 5.2 module,Ai-Thinker,PB-03F,N/A,1,~$0.80,~$0.80,N/A,"NOT ON MOUSER. Source from LCSC (C2980027) or AliExpress"
+# SHT30,SHT30 temp/humidity module (pre-made),Various,N/A,N/A,1,~$1.50,~$1.50,N/A,"Pre-made I2C module from AliExpress. Or bare IC: Mouser 403-SHT30-DIS-B10KS $2.17@10"
+# =============================================
+#
+# =============================================
+# COST SUMMARY (per unit, qty 10)
+# =============================================
+# Mouser main board components:     $13.58
+# Mouser mic breakout components:    $2.41
+# GPS (Seeed direct, on order):     ~$7.00
+# BLE PB-03F (LCSC/AliExpress):     ~$0.80
+# SHT30 module (AliExpress):        ~$1.50
+# Headers (Amazon):                 ~$0.10
+# PCB (OSH Park, 2-layer):          ~$10.00
+# =============================================
+# ESTIMATED TOTAL:                  ~$36 per unit
+# (vs ~$34 landed from JLCPCB w/ tariffs+shipping)
+# =============================================
+#
+# SOURCING NOTES:
+# 1. PB-03F BLE module: No Mouser equivalent. Cheapest Mouser BLE is RN4871 ($7.65)
+#    but requires completely different AT command firmware. Keep sourcing from LCSC.
+# 2. GPS module: Seeed L76K breakout is $16.18 on Mouser vs ~$7 direct from Seeed.
+#    Consider ordering directly from seedstudio.com for significant savings.
+# 3. IM72D128 mic: 31K in stock at Mouser. Proven in prototype testing, 69dB SNR.
+# 4. OSH Park PCB: After Dark (2-layer) is $1/sq.in. Estimate ~$5-8 per board
+#    depending on final dimensions. Slower turnaround (12 days) vs JLCPCB (5 days).
+# 5. All passives are YAGEO — excellent Mouser availability, consistent pricing.
+# 6. JST PH B4B-PH-K (without -S suffix, no locating boss) used for 4-pin since
+#    the -S variant is out of stock. Functionally identical, mates with same cables.
