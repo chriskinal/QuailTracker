@@ -323,7 +323,7 @@ int main(void)
   printf("\r\n\r\n");
   printf("================================================\r\n");
   printf("  QuailTracker STM32 - PDM Audio Prototype\r\n");
-  printf("  Nucleo-H723ZG + IM73D122 + SD Card\r\n");
+  printf("  Nucleo-H723ZG + IM72D128 + SD Card\r\n");
   printf("================================================\r\n");
 
   /* Start DFSDM DMA */

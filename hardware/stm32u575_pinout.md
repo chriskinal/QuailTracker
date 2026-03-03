@@ -14,8 +14,8 @@ C5270988 is the non-SMPS variant — uses internal LDO, no external inductor.
 
 | Function | GPIO | LQFP100 Pin | AF | Peripheral | Notes |
 |----------|------|-------------|-----|------------|-------|
-| PDM Mic Clock | PE9 | 40 | AF3 | ADF1_CCK0 | Clock out to IM73D122 |
-| PDM Mic Data | PE10 | 41 | AF3 | ADF1_SDI0 | Data in from IM73D122 |
+| PDM Mic Clock | PE9 | 40 | AF3 | ADF1_CCK0 | Clock out to IM72D128 |
+| PDM Mic Data | PE10 | 41 | AF3 | ADF1_SDI0 | Data in from IM72D128 |
 | GPS UART TX | PA9 | 68 | AF7 | USART1_TX | To L76K RX |
 | GPS UART RX | PA10 | 69 | AF7 | USART1_RX | From L76K TX |
 | BLE UART TX | PA2 | 25 | AF7 | USART2_TX | To PB-03F RX |
@@ -87,7 +87,7 @@ Low-power modes (Stop 2, Standby, Shutdown) are similar between LDO and SMPS.
 
 ## Peripheral Details
 
-### ADF1 — PDM Microphone (IM73D122)
+### ADF1 — PDM Microphone (IM72D128)
 
 Selected PE9/PE10 over PB3/PB4 because:
 - PB3 = JTDO/TRACESWO after reset — now used for SWO debug trace output

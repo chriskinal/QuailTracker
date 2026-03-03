@@ -12,7 +12,7 @@ An open-source, low-cost ARU (~$50/unit including enclosure, batteries, and ante
 
 **Core hardware:**
 - STM32U575 MCU (160 MHz Cortex-M33, 784 KB RAM, 1 MB flash)
-- Infineon IM73D122 PDM MEMS microphone on a separate breakout board
+- Infineon IM72D128 PDM MEMS microphone on a separate breakout board
 - Quectel L76K GPS with PPS output for sub-millisecond time synchronization
 - 32 GB MicroSD card for audio storage
 - Ai-Thinker PB-03F BLE 5.2 module for wireless configuration

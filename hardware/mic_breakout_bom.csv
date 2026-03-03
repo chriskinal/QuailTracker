@@ -1,6 +1,6 @@
 Designator,Comment,Footprint,LCSC Part #,Qty,Notes
-MIC1,IM73D122V01,SMD bottom-port,,1,PDM MEMS mic 70dB SNR (consign from Mouser/DigiKey)
-C1,100nF X7R 16V,0603,C14663,1,VDD decoupling (hand-solder)
+MIC1,IM72D128V01,SMD bottom-port,,1,PDM MEMS mic 72dB SNR (consign from Mouser/DigiKey)
+C1,100nF X7R 16V,0805,C49678,1,VDD decoupling (hand-solder)
 CN1,JST PH 4-pin S4B-PH-SM4-TB,SMD 2.0mm pitch,C265102,1,Cable to main board (SMD right-angle — flat bottom for case mount)
 # -------------------------------------------------------
 # MIC BREAKOUT BOARD SPECIFICATIONS
@@ -14,7 +14,7 @@ CN1,JST PH 4-pin S4B-PH-SM4-TB,SMD 2.0mm pitch,C265102,1,Cable to main board (SM
 # ASSEMBLY PROCESS
 # -------------------------------------------------------
 # 1. Apply solder paste via stencil (MIC1 pads only)
-# 2. Place IM73D122 on paste (check orientation — dot = pin 1)
+# 2. Place IM72D128 on paste (check orientation — dot = pin 1)
 # 3. Reflow on hot plate (peak 250C 30s)
 # 4. Hand-solder 0603 cap (C1) and SMD JST PH connector (CN1)
 # 5. Verify continuity and no shorts

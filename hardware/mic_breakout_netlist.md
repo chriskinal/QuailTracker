@@ -1,11 +1,11 @@
 # Mic Breakout Board — Netlist / Connections
 
-3 components: IM73D122 PDM mic, 100nF decoupling cap, JST PH 4-pin connector.
+3 components: IM72D128 PDM mic, 100nF decoupling cap, JST PH 4-pin connector.
 Cross-reference: `mic_breakout_bom.csv`
 
 ---
 
-## IM73D122V01 Pin Definitions
+## IM72D128V01 Pin Definitions
 
 | Pin | Name | Function |
 |-----|------|----------|
