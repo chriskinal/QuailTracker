@@ -74,6 +74,8 @@ static volatile DSTATUS Stat = STA_NOINIT;
 static uint8_t CardType;
 
 /* Private SD SPI helpers ---------------------------------------------------*/
+static volatile uint8_t spiDead = 0;  /* set if SPI times out — all ops bail */
+
 static void SPI_Start(void)
 {
     /* Enable SPI in infinite transfer mode (TSIZE=0) */
@@ -88,13 +90,41 @@ static void SPI_Stop(void)
 {
     /* Suspend and disable SPI */
     SET_BIT(hspi1.Instance->CR1, SPI_CR1_CSUSP);
-    while (hspi1.Instance->CR1 & SPI_CR1_CSTART);
+    uint32_t t = 0;
+    while ((hspi1.Instance->CR1 & SPI_CR1_CSTART) && ++t < 100000);
     CLEAR_BIT(hspi1.Instance->CR1, SPI_CR1_SPE);
     /* Flush RX FIFO */
-    while (hspi1.Instance->SR & SPI_SR_RXP)
+    t = 0;
+    while ((hspi1.Instance->SR & SPI_SR_RXP) && ++t < 1000)
         (void)*(volatile uint8_t *)&hspi1.Instance->RXDR;
     /* Clear flags */
     SET_BIT(hspi1.Instance->IFCR, 0xFFFFFFFF);
+}
+
+/* Hard-reset SPI peripheral via RCC and toggle GPIO to force pin re-sync */
+static void SPI_Recover(void)
+{
+    /* RCC reset — unconditionally returns SPI1 to power-on state */
+    __HAL_RCC_SPI1_FORCE_RESET();
+    __HAL_RCC_SPI1_RELEASE_RESET();
+
+    /* Toggle pins out of AF and back */
+    GPIO_InitTypeDef g = {0};
+    g.Pin = GPIO_PIN_5 | GPIO_PIN_6 | GPIO_PIN_7;
+    g.Mode = GPIO_MODE_INPUT;
+    g.Pull = GPIO_PULLUP;
+    HAL_GPIO_Init(GPIOA, &g);
+    HAL_Delay(1);
+    g.Mode = GPIO_MODE_AF_PP;
+    g.Pull = GPIO_NOPULL;
+    g.Speed = GPIO_SPEED_FREQ_LOW;
+    g.Alternate = GPIO_AF5_SPI1;
+    HAL_GPIO_Init(GPIOA, &g);
+
+    /* Re-init SPI registers (RCC reset wiped them) */
+    HAL_SPI_Init(&hspi1);
+
+    spiDead = 0;
 }
 
 static void SPI_SetSlow(void)
@@ -109,33 +139,57 @@ static void SPI_SetFast(void)
     MODIFY_REG(hspi1.Instance->CFG1, SPI_CFG1_MBR_Msk, SPI_BAUDRATEPRESCALER_32);
 }
 
+/* Timeout ~10ms at 160MHz (each iteration is a few cycles) */
+#define SPI_TIMEOUT 500000
+
 static uint8_t SPI_TxRx(uint8_t data)
 {
+    if (spiDead) return 0xFF;
     SPI_Start();
-    while (!(hspi1.Instance->SR & SPI_SR_TXP));
+    uint32_t t = 0;
+    while (!(hspi1.Instance->SR & SPI_SR_TXP)) {
+        if (++t > SPI_TIMEOUT) { spiDead = 1; return 0xFF; }
+    }
     *(volatile uint8_t *)&hspi1.Instance->TXDR = data;
-    while (!(hspi1.Instance->SR & SPI_SR_RXP));
+    t = 0;
+    while (!(hspi1.Instance->SR & SPI_SR_RXP)) {
+        if (++t > SPI_TIMEOUT) { spiDead = 1; return 0xFF; }
+    }
     return *(volatile uint8_t *)&hspi1.Instance->RXDR;
 }
 
 static void SPI_TxMulti(const uint8_t *buf, uint16_t len)
 {
+    if (spiDead) return;
     SPI_Start();
     while (len--) {
-        while (!(hspi1.Instance->SR & SPI_SR_TXP));
+        uint32_t t = 0;
+        while (!(hspi1.Instance->SR & SPI_SR_TXP)) {
+            if (++t > SPI_TIMEOUT) { spiDead = 1; return; }
+        }
         *(volatile uint8_t *)&hspi1.Instance->TXDR = *buf++;
-        while (!(hspi1.Instance->SR & SPI_SR_RXP));
+        t = 0;
+        while (!(hspi1.Instance->SR & SPI_SR_RXP)) {
+            if (++t > SPI_TIMEOUT) { spiDead = 1; return; }
+        }
         (void)*(volatile uint8_t *)&hspi1.Instance->RXDR;
     }
 }
 
 static void SPI_RxMulti(uint8_t *buf, uint16_t len)
 {
+    if (spiDead) return;
     SPI_Start();
     while (len--) {
-        while (!(hspi1.Instance->SR & SPI_SR_TXP));
+        uint32_t t = 0;
+        while (!(hspi1.Instance->SR & SPI_SR_TXP)) {
+            if (++t > SPI_TIMEOUT) { spiDead = 1; return; }
+        }
         *(volatile uint8_t *)&hspi1.Instance->TXDR = 0xFF;
-        while (!(hspi1.Instance->SR & SPI_SR_RXP));
+        t = 0;
+        while (!(hspi1.Instance->SR & SPI_SR_RXP)) {
+            if (++t > SPI_TIMEOUT) { spiDead = 1; return; }
+        }
         *buf++ = *(volatile uint8_t *)&hspi1.Instance->RXDR;
     }
 }
@@ -290,6 +344,9 @@ DSTATUS USER_initialize (
   /* USER CODE BEGIN INIT */
     uint8_t n, cmd, ty, ocr[4];
     uint8_t retry;
+
+    /* Reset SPI state and clear any prior error flags */
+    SPI_Recover();
 
     for (retry = 0; retry < 3; retry++) {
     SPI_SetSlow();

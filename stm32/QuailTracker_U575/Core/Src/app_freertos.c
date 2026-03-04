@@ -723,7 +723,6 @@ void StartCliTask(void *argument)
   printMenu();
 
   uint32_t lastHeartbeat = HAL_GetTick();
-
   for (;;)
   {
     /* Heartbeat: toggle PD13 every 1s so user can see RTOS is alive */

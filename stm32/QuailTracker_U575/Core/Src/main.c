@@ -861,12 +861,6 @@ int main(void)
     }
   }
 
-  /* STM32U5 SPI1 workaround: peripheral reset before first use.
-   * HAL_SPI_Init alone leaves the SPI in a state where MISO reads 0.
-   * A full peripheral reset + re-init fixes it. */
-  __HAL_RCC_SPI1_FORCE_RESET();
-  __HAL_RCC_SPI1_RELEASE_RESET();
-  MX_SPI1_Init();
 
   /* Init FatFS and mount SD card */
   MX_FATFS_Init();
