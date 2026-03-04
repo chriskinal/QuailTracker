@@ -111,6 +111,30 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
                                    Width="30"
                                    VerticalAlignment="Center" />
                     </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Overlap (s):" VerticalAlignment="Center" />
+                        <Slider Value="{Binding OverlapSeconds}"
+                                Minimum="0"
+                                Maximum="2.5"
+                                Width="100"
+                                VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding OverlapSeconds, StringFormat='{}{0:F1}'}"
+                                   Width="25"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Merge:" VerticalAlignment="Center" />
+                        <Slider Value="{Binding MergeCount}"
+                                Minimum="1"
+                                Maximum="10"
+                                IsSnapToTickEnabled="True"
+                                TickFrequency="1"
+                                Width="80"
+                                VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding MergeCount}"
+                                   Width="20"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
                 </StackPanel>
 
                 <!-- Action Row -->

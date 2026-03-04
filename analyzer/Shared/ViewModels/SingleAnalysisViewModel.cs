@@ -92,6 +92,12 @@ public partial class SingleAnalysisViewModel : ObservableObject
     private double _sensitivity = 1.0;
 
     [ObservableProperty]
+    private double _overlapSeconds = 0.0;
+
+    [ObservableProperty]
+    private int _mergeCount = 1;
+
+    [ObservableProperty]
     private bool _generateSpectrogram = true;
 
     [ObservableProperty]
@@ -277,9 +283,9 @@ public partial class SingleAnalysisViewModel : ObservableObject
                 _audioFileService,
                 ConfidenceThreshold,
                 targetSpecies: null,
-                overlapSeconds: 0.0,
+                OverlapSeconds,
                 Sensitivity,
-                mergeCount: 1,
+                MergeCount,
                 progress,
                 ct: _analysisCts.Token);
 
