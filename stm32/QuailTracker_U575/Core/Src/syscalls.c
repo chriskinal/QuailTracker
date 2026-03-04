@@ -30,6 +30,7 @@
 #include <sys/time.h>
 #include <sys/times.h>
 #include "cmsis_os2.h"
+#include "SEGGER_RTT.h"
 
 
 /* Variables */
@@ -92,17 +93,13 @@ __attribute__((weak)) int _read(int file, char *ptr, int len)
 __attribute__((weak)) int _write(int file, char *ptr, int len)
 {
   (void)file;
-  int DataIdx;
 
   if (printMutex) osMutexAcquire(printMutex, osWaitForever);
-  for (DataIdx = 0; DataIdx < len; DataIdx++)
-  {
-    __io_putchar(*ptr++);
-  }
+  SEGGER_RTT_Write(0, ptr, len);
 
   /* Mirror output to BLE log ring buffer (non-blocking, drops on overflow) */
   if (bleLogEnabled) {
-    const char *p = ptr - len;  /* ptr was incremented above */
+    const char *p = ptr;
     for (int i = 0; i < len; i++) {
       uint16_t next = (uint16_t)((bleLogHead + 1) % BLE_LOG_RING_SIZE);
       if (next == bleLogTail) break;  /* full — drop remaining */

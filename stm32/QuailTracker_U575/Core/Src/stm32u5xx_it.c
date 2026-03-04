@@ -22,7 +22,9 @@
 #include "stm32u5xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <string.h>
 #include "cmsis_os2.h"
+#include "SEGGER_RTT.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -52,14 +54,14 @@
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-static void hf_tx(char c) {
-    while (!(USART1->ISR & USART_ISR_TXE_TXFNF)) {}
-    USART1->TDR = (uint8_t)c;
+static void hf_puts(const char *s) {
+    SEGGER_RTT_Write(0, s, strlen(s));
 }
-static void hf_puts(const char *s) { while (*s) hf_tx(*s++); }
 static void hf_hex32(uint32_t v) {
     const char hex[] = "0123456789ABCDEF";
-    for (int i = 28; i >= 0; i -= 4) hf_tx(hex[(v >> i) & 0xF]);
+    char buf[8];
+    for (int i = 0; i < 8; i++) buf[i] = hex[(v >> (28 - i * 4)) & 0xF];
+    SEGGER_RTT_Write(0, buf, 8);
 }
 /* USER CODE END 0 */
 
@@ -124,9 +126,9 @@ void HardFault_Handler(void)
     hf_puts("R2="); hf_hex32(frame[2]); hf_puts(" R3="); hf_hex32(frame[3]); hf_puts("\r\n");
     hf_puts("R12="); hf_hex32(frame[4]); hf_puts("\r\n");
   }
-  /* Rapid-blink red LED */
+  /* Rapid-blink status LED */
   for (;;) {
-    GPIOG->ODR ^= GPIO_PIN_2;
+    GPIOD->ODR ^= GPIO_PIN_13;
     for (volatile int i = 0; i < 500000; i++) {}
   }
   /* USER CODE END HardFault_IRQn 0 */
@@ -143,7 +145,7 @@ void HardFault_Handler(void)
 void MemManage_Handler(void)
 {
   /* USER CODE BEGIN MemoryManagement_IRQn 0 */
-  GPIOG->BSRR = GPIO_PIN_2; /* RED LED on (PG2) */
+  GPIOD->BSRR = GPIO_PIN_13; /* status LED on (PD13) */
   /* USER CODE END MemoryManagement_IRQn 0 */
   while (1)
   {
@@ -158,7 +160,7 @@ void MemManage_Handler(void)
 void BusFault_Handler(void)
 {
   /* USER CODE BEGIN BusFault_IRQn 0 */
-  GPIOG->BSRR = GPIO_PIN_2; /* RED LED on (PG2) */
+  GPIOD->BSRR = GPIO_PIN_13; /* status LED on (PD13) */
   /* USER CODE END BusFault_IRQn 0 */
   while (1)
   {
@@ -173,7 +175,7 @@ void BusFault_Handler(void)
 void UsageFault_Handler(void)
 {
   /* USER CODE BEGIN UsageFault_IRQn 0 */
-  GPIOG->BSRR = GPIO_PIN_2; /* RED LED on (PG2) */
+  GPIOD->BSRR = GPIO_PIN_13; /* status LED on (PD13) */
   /* USER CODE END UsageFault_IRQn 0 */
   while (1)
   {
@@ -201,20 +203,6 @@ void DebugMon_Handler(void)
 /* For the available peripheral interrupt handler names,                      */
 /* please refer to the startup file (startup_stm32u5xx.s).                    */
 /******************************************************************************/
-
-/**
-  * @brief This function handles EXTI Line13 interrupt.
-  */
-void EXTI13_IRQHandler(void)
-{
-  /* USER CODE BEGIN EXTI13_IRQn 0 */
-
-  /* USER CODE END EXTI13_IRQn 0 */
-  BSP_PB_IRQHandler(BUTTON_USER);
-  /* USER CODE BEGIN EXTI13_IRQn 1 */
-
-  /* USER CODE END EXTI13_IRQn 1 */
-}
 
 /**
   * @brief This function handles GPDMA1 Channel 0 global interrupt.
@@ -254,29 +242,19 @@ void USART1_IRQHandler(void)
 {
     if (USART1->ISR & USART_ISR_RXNE_RXFNE) {
         uint8_t ch = (uint8_t)(USART1->RDR & 0xFF);
-        extern osMessageQueueId_t cliRxQueue;
-        osMessageQueuePut(cliRxQueue, &ch, 0, 0);
+        extern osMessageQueueId_t gpsRxQueue;
+        osMessageQueuePut(gpsRxQueue, &ch, 0, 0);
     }
     USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
 }
 
-void LPUART1_IRQHandler(void)
+void USART2_IRQHandler(void)
 {
-    if (LPUART1->ISR & USART_ISR_RXNE_RXFNE) {
-        uint8_t ch = (uint8_t)(LPUART1->RDR & 0xFF);
-        extern osMessageQueueId_t gpsRxQueue;
-        osMessageQueuePut(gpsRxQueue, &ch, 0, 0);
-    }
-    LPUART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
-}
-
-void USART3_IRQHandler(void)
-{
-    if (USART3->ISR & USART_ISR_RXNE_RXFNE) {
-        uint8_t ch = (uint8_t)(USART3->RDR & 0xFF);
+    if (USART2->ISR & USART_ISR_RXNE_RXFNE) {
+        uint8_t ch = (uint8_t)(USART2->RDR & 0xFF);
         extern osMessageQueueId_t bleRxQueue;
         osMessageQueuePut(bleRxQueue, &ch, 0, 0);
     }
-    USART3->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
+    USART2->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
 }
 /* USER CODE END 1 */

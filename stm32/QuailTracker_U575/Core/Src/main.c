@@ -24,6 +24,7 @@
 /* USER CODE BEGIN Includes */
 #include <string.h>
 #include <stdio.h>
+#include "SEGGER_RTT.h"
 #include "fatfs.h"
 #include "user_diskio.h"
 #include "app_freertos.h"
@@ -47,15 +48,14 @@
 
 /* Private variables ---------------------------------------------------------*/
 
-COM_InitTypeDef BspCOMInit;
 MDF_HandleTypeDef AdfHandle0;
 MDF_FilterConfigTypeDef AdfFilterConfig0;
 DMA_NodeTypeDef Node_GPDMA1_Channel0;
 DMA_QListTypeDef List_GPDMA1_Channel0;
 DMA_HandleTypeDef handle_GPDMA1_Channel0;
 
-UART_HandleTypeDef hlpuart1;
-UART_HandleTypeDef husart3;
+UART_HandleTypeDef husart1;
+UART_HandleTypeDef husart2;
 
 SPI_HandleTypeDef hspi1;
 
@@ -87,9 +87,8 @@ flac_enc_t flacEncoder;
 uint8_t recFormat = REC_FMT_FLAC;
 
 /* UART RX queues — fed by RXNE interrupts, consumed by tasks */
-osMessageQueueId_t cliRxQueue;    /* USART1 — VCP CLI */
-osMessageQueueId_t gpsRxQueue;    /* LPUART1 — GPS */
-osMessageQueueId_t bleRxQueue;    /* USART3 — BLE */
+osMessageQueueId_t gpsRxQueue;    /* USART1 — GPS */
+osMessageQueueId_t bleRxQueue;    /* USART2 — BLE */
 
 /* Printf mutex — serializes _write() across FreeRTOS tasks */
 osMutexId_t printMutex;
@@ -158,8 +157,8 @@ static void MX_GPIO_Init(void);
 static void MX_GPDMA1_Init(void);
 static void MX_ICACHE_Init(void);
 static void MX_SPI1_Init(void);
-static void MX_LPUART1_UART_Init(void);
-static void MX_USART3_UART_Init(void);
+static void MX_USART1_UART_Init(void);
+static void MX_USART2_UART_Init(void);
 static void MX_ADF1_Init(void);
 /* USER CODE BEGIN PFP */
 
@@ -177,13 +176,19 @@ extern float configGetSurveyAlt(void);
 #define CMD_START_REC 1
 #define CMD_STOP_REC  2
 
-/* Blocking char read with timeout (ms). Returns byte or -1 on timeout. */
+/* Blocking char read with timeout (ms). Returns byte or -1 on timeout.
+ * Production board has no VCP UART — CLI input comes from RTT Viewer. */
 int getChar(uint32_t timeoutMs)
 {
-    uint8_t ch;
-    if (osMessageQueueGet(cliRxQueue, &ch, NULL, timeoutMs) == osOK)
-        return (int)ch;
-    return -1;
+    uint32_t start = HAL_GetTick();
+    for (;;) {
+        int c = SEGGER_RTT_GetKey();
+        if (c >= 0) return c;
+        if (timeoutMs != osWaitForever &&
+            (HAL_GetTick() - start) >= timeoutMs)
+            return -1;
+        osDelay(10);
+    }
 }
 
 int getCharGps(uint32_t timeoutMs)
@@ -204,7 +209,7 @@ int getCharBle(uint32_t timeoutMs)
 
 void bleSend(const char *s)
 {
-    HAL_UART_Transmit(&husart3, (const uint8_t *)s, strlen(s), 100);
+    HAL_UART_Transmit(&husart2, (const uint8_t *)s, strlen(s), 100);
 }
 
 void WAV_WriteHeader(FIL *fp, uint32_t sampleRate, uint32_t dataSize)
@@ -766,14 +771,32 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
+  /* Earliest possible LED blink — before any clock/peripheral init.
+   * Running on default MSI 4MHz here. Proves MCU boots. */
+  {
+    __HAL_RCC_GPIOD_CLK_ENABLE();
+    GPIO_InitTypeDef gi = {0};
+    gi.Pin = GPIO_PIN_13;
+    gi.Mode = GPIO_MODE_OUTPUT_PP;
+    gi.Pull = GPIO_NOPULL;
+    gi.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOD, &gi);
+    for (int i = 0; i < 5; i++) {
+      HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);
+      HAL_Delay(200);
+      HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_RESET);
+      HAL_Delay(200);
+    }
+  }
   /* USER CODE END Init */
 
   /* Configure the System Power */
   SystemPower_Config();
+  HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 1: power ok */
 
   /* Configure the system clock */
   SystemClock_Config();
+  HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 2: clock ok */
 
   /* USER CODE BEGIN SysInit */
 
@@ -781,35 +804,40 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 3: gpio ok */
   MX_GPDMA1_Init();
+  HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 4: dma ok */
   MX_ICACHE_Init();
+  HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 5: icache ok */
   MX_SPI1_Init();
-  MX_LPUART1_UART_Init();
-  MX_USART3_UART_Init();
+  HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 6: spi ok */
+  MX_USART1_UART_Init();
+  HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 7: usart1 ok */
+  MX_USART2_UART_Init();
+  HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 8: usart2 ok */
   MX_ADF1_Init();
+  HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 9: adf ok */
   /* USER CODE BEGIN 2 */
-  setvbuf(stdout, NULL, _IONBF, 0);
-
-  /* BSP init must happen before scheduler — COM1 needed for printf */
-  BSP_LED_Init(LED_GREEN);
-  BSP_LED_Init(LED_BLUE);
-  BSP_LED_Init(LED_RED);
-  BSP_PB_Init(BUTTON_USER, BUTTON_MODE_EXTI);
-
-  BspCOMInit.BaudRate   = 115200;
-  BspCOMInit.WordLength = COM_WORDLENGTH_8B;
-  BspCOMInit.StopBits   = COM_STOPBITS_1;
-  BspCOMInit.Parity     = COM_PARITY_NONE;
-  BspCOMInit.HwFlowCtl  = COM_HWCONTROL_NONE;
-  if (BSP_COM_Init(COM1, &BspCOMInit) != BSP_ERROR_NONE)
-  {
-    Error_Handler();
+  /* Quick LED heartbeat — 3 blinks to confirm all inits passed */
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_RESET);
+  HAL_Delay(200);
+  for (int i = 0; i < 3; i++) {
+    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);
+    HAL_Delay(100);
+    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_RESET);
+    HAL_Delay(100);
   }
+
+  /* Explicit RTT init + test write before first printf */
+  SEGGER_RTT_Init();
+  SEGGER_RTT_WriteString(0, "\r\n[RTT OK]\r\n");
+
+  setvbuf(stdout, NULL, _IONBF, 0);
 
   printf("\r\n\r\n");
   printf("================================================\r\n");
   printf("  QuailTracker U575 - PDM Audio Recorder\r\n");
-  printf("  Nucleo-U575ZI-Q  v%s  [FreeRTOS]\r\n", FW_VERSION);
+  printf("  STM32U575  v%s  [FreeRTOS]\r\n", FW_VERSION);
   printf("  SYSCLK: %lu MHz\r\n",
          (unsigned long)(HAL_RCC_GetSysClockFreq() / 1000000UL));
   printf("================================================\r\n");
@@ -833,6 +861,13 @@ int main(void)
     }
   }
 
+  /* STM32U5 SPI1 workaround: peripheral reset before first use.
+   * HAL_SPI_Init alone leaves the SPI in a state where MISO reads 0.
+   * A full peripheral reset + re-init fixes it. */
+  __HAL_RCC_SPI1_FORCE_RESET();
+  __HAL_RCC_SPI1_RELEASE_RESET();
+  MX_SPI1_Init();
+
   /* Init FatFS and mount SD card */
   MX_FATFS_Init();
 
@@ -851,25 +886,18 @@ int main(void)
       }
   }
   /* Create UART RX queues (must exist before RXNE interrupts are enabled) */
-  cliRxQueue = osMessageQueueNew(64, sizeof(uint8_t), NULL);
   gpsRxQueue = osMessageQueueNew(128, sizeof(uint8_t), NULL);
   bleRxQueue = osMessageQueueNew(128, sizeof(uint8_t), NULL);
 
   /* Enable RXNE interrupts — ISRs push bytes into queues above.
    * Priority 6 >= configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY (5), safe for FreeRTOS API. */
-  __HAL_UART_ENABLE_IT(&hlpuart1, UART_IT_RXNE);
-  HAL_NVIC_SetPriority(LPUART1_IRQn, 6, 0);
-  HAL_NVIC_EnableIRQ(LPUART1_IRQn);
-
-  __HAL_UART_ENABLE_IT(&husart3, UART_IT_RXNE);
-  HAL_NVIC_SetPriority(USART3_IRQn, 6, 0);
-  HAL_NVIC_EnableIRQ(USART3_IRQn);
-
-  /* USART1 RXNE: enabled here but the CubeMX-generated BSP_COM_Init below
-   * osKernelInitialize() will re-init USART1 and clear it. StartCliTask
-   * re-enables RXNE after the scheduler starts. */
+  __HAL_UART_ENABLE_IT(&husart1, UART_IT_RXNE);
   HAL_NVIC_SetPriority(USART1_IRQn, 6, 0);
   HAL_NVIC_EnableIRQ(USART1_IRQn);
+
+  __HAL_UART_ENABLE_IT(&husart2, UART_IT_RXNE);
+  HAL_NVIC_SetPriority(USART2_IRQn, 6, 0);
+  HAL_NVIC_EnableIRQ(USART2_IRQn);
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -881,25 +909,6 @@ int main(void)
 
   /* Call init function for freertos objects (in app_freertos.c) */
   MX_FREERTOS_Init();
-
-  /* Initialize leds */
-  BSP_LED_Init(LED_GREEN);
-  BSP_LED_Init(LED_BLUE);
-  BSP_LED_Init(LED_RED);
-
-  /* Initialize USER push-button, will be used to trigger an interrupt each time it's pressed.*/
-  BSP_PB_Init(BUTTON_USER, BUTTON_MODE_EXTI);
-
-  /* Initialize COM1 port (115200, 8 bits (7-bit data + 1 stop bit), no parity */
-  BspCOMInit.BaudRate   = 115200;
-  BspCOMInit.WordLength = COM_WORDLENGTH_8B;
-  BspCOMInit.StopBits   = COM_STOPBITS_1;
-  BspCOMInit.Parity     = COM_PARITY_NONE;
-  BspCOMInit.HwFlowCtl  = COM_HWCONTROL_NONE;
-  if (BSP_COM_Init(COM1, &BspCOMInit) != BSP_ERROR_NONE)
-  {
-    Error_Handler();
-  }
 
   /* Start scheduler */
   osKernelStart();
@@ -986,12 +995,9 @@ static void SystemPower_Config(void)
   HAL_PWREx_DisableUCPDDeadBattery();
 
   /*
-   * Switch to SMPS regulator instead of LDO
+   * Nucleo board uses SMPS variant — production PCB uses LDO variant.
+   * LDO is the default after reset, no ConfigSupply call needed.
    */
-  if (HAL_PWREx_ConfigSupply(PWR_SMPS_SUPPLY) != HAL_OK)
-  {
-    Error_Handler();
-  }
 /* USER CODE BEGIN PWR */
 /* USER CODE END PWR */
 }
@@ -1114,80 +1120,46 @@ static void MX_ICACHE_Init(void)
 }
 
 /**
-  * @brief LPUART1 Initialization Function
-  * @param None
+  * @brief USART1 Initialization Function — GPS (L76K, 9600 baud, PA9/PA10)
   * @retval None
   */
-static void MX_LPUART1_UART_Init(void)
+static void MX_USART1_UART_Init(void)
 {
-
-  /* USER CODE BEGIN LPUART1_Init 0 */
-
-  /* USER CODE END LPUART1_Init 0 */
-
-  /* USER CODE BEGIN LPUART1_Init 1 */
-
-  /* USER CODE END LPUART1_Init 1 */
-  hlpuart1.Instance = LPUART1;
-  hlpuart1.Init.BaudRate = 115200;
-  hlpuart1.Init.WordLength = UART_WORDLENGTH_8B;
-  hlpuart1.Init.StopBits = UART_STOPBITS_1;
-  hlpuart1.Init.Parity = UART_PARITY_NONE;
-  hlpuart1.Init.Mode = UART_MODE_TX_RX;
-  hlpuart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  hlpuart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
-  hlpuart1.Init.ClockPrescaler = UART_PRESCALER_DIV1;
-  hlpuart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-  hlpuart1.FifoMode = UART_FIFOMODE_DISABLE;
-  if (HAL_UART_Init(&hlpuart1) != HAL_OK)
+  husart1.Instance = USART1;
+  husart1.Init.BaudRate = 9600;
+  husart1.Init.WordLength = UART_WORDLENGTH_8B;
+  husart1.Init.StopBits = UART_STOPBITS_1;
+  husart1.Init.Parity = UART_PARITY_NONE;
+  husart1.Init.Mode = UART_MODE_TX_RX;
+  husart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  husart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  husart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  husart1.Init.ClockPrescaler = UART_PRESCALER_DIV1;
+  husart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&husart1) != HAL_OK)
   {
     Error_Handler();
   }
-  if (HAL_UARTEx_SetTxFifoThreshold(&hlpuart1, UART_TXFIFO_THRESHOLD_1_8) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_UARTEx_SetRxFifoThreshold(&hlpuart1, UART_RXFIFO_THRESHOLD_1_8) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_UARTEx_DisableFifoMode(&hlpuart1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN LPUART1_Init 2 */
-  /* Override for L76K GPS (9600 baud).
-   * LPUART BRR is 20-bit: at 160MHz/DIV1, 9600 needs BRR=4,266,667 (overflow!).
-   * DIV8 → 20MHz effective clock → BRR=533,333 (fits). */
-  hlpuart1.Init.BaudRate = 9600;
-  hlpuart1.Init.ClockPrescaler = UART_PRESCALER_DIV8;
-  if (HAL_UART_Init(&hlpuart1) != HAL_OK) {
-      printf("LPUART1 9600 init FAILED!\r\n");
-  }
-  /* USER CODE END LPUART1_Init 2 */
-
 }
 
 /**
-  * @brief USART3 Initialization Function — BLE module (HM-19)
-  *        Nucleo: PC10/PC11 (PD8/PD9 conflict with VCP solder bridges)
-  *        Production: PD8/PD9
+  * @brief USART2 Initialization Function — BLE module (PB-03F, 115200 baud, PA2/PA3)
   * @retval None
   */
-static void MX_USART3_UART_Init(void)
+static void MX_USART2_UART_Init(void)
 {
-  husart3.Instance = USART3;
-  husart3.Init.BaudRate = 9600;
-  husart3.Init.WordLength = UART_WORDLENGTH_8B;
-  husart3.Init.StopBits = UART_STOPBITS_1;
-  husart3.Init.Parity = UART_PARITY_NONE;
-  husart3.Init.Mode = UART_MODE_TX_RX;
-  husart3.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  husart3.Init.OverSampling = UART_OVERSAMPLING_16;
-  husart3.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
-  husart3.Init.ClockPrescaler = UART_PRESCALER_DIV1;
-  husart3.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-  if (HAL_UART_Init(&husart3) != HAL_OK)
+  husart2.Instance = USART2;
+  husart2.Init.BaudRate = 115200;
+  husart2.Init.WordLength = UART_WORDLENGTH_8B;
+  husart2.Init.StopBits = UART_STOPBITS_1;
+  husart2.Init.Parity = UART_PARITY_NONE;
+  husart2.Init.Mode = UART_MODE_TX_RX;
+  husart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  husart2.Init.OverSampling = UART_OVERSAMPLING_16;
+  husart2.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  husart2.Init.ClockPrescaler = UART_PRESCALER_DIV1;
+  husart2.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&husart2) != HAL_OK)
   {
     Error_Handler();
   }
@@ -1279,6 +1251,16 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(SD_CS_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
+  __HAL_RCC_GPIOD_CLK_ENABLE();
+
+  /* PD13 — Status LED (active high) */
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_RESET);
+  GPIO_InitStruct.Pin = GPIO_PIN_13;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+
   /* PA8 — GPS PPS input, rising-edge EXTI */
   GPIO_InitStruct.Pin = GPIO_PIN_8;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;

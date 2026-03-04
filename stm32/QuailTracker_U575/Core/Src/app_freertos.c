@@ -31,6 +31,7 @@
 #include "flac_encoder.h"
 #include "mel_spectrogram.h"
 #include "tflite_inference.h"
+#include "SEGGER_RTT.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -49,7 +50,7 @@ typedef struct {
 /* ---- Flash-persisted device configuration ---- */
 #define CONFIG_MAGIC      0x51544346   /* "QTCF" */
 #define CONFIG_VERSION    7
-#define CONFIG_FLASH_ADDR 0x081FE000   /* Bank 2, page 127 (last 8KB page of 2MB) */
+#define CONFIG_FLASH_ADDR 0x080FE000   /* Bank 2, last page (1MB flash: pages 0-63 per bank) */
 
 typedef struct __attribute__((packed, aligned(16))) {
     uint32_t magic;
@@ -109,9 +110,9 @@ typedef struct {
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define OTA_PAGE_SIZE     8192
-#define OTA_BANK2_BASE    0x08100000
-#define OTA_CONFIG_PAGE   127
-#define OTA_CONFIG_MIRROR 0x080FE000
+#define OTA_BANK2_BASE    0x08080000   /* Bank 2 start for 1MB flash */
+#define OTA_CONFIG_PAGE   63           /* Last page of Bank 2 (1MB: 64 pages/bank) */
+#define OTA_CONFIG_MIRROR 0x0807E000   /* Last page of Bank 1 (config backup during OTA) */
 #define OTA_TIMEOUT_MS    30000
 /* USER CODE END PD */
 
@@ -717,16 +718,20 @@ skip_write:
 void StartCliTask(void *argument)
 {
   /* USER CODE BEGIN cliTask */
-  /* Re-enable USART1 RXNE -the CubeMX-generated BSP_COM_Init after
-   * osKernelInitialize() re-inits USART1 and clears our earlier enable. */
-  USART1->CR1 |= USART_CR1_RXNEIE_RXFNEIE;
-
   /* Let GPS + BLE tasks finish their init messages before showing menu */
   osDelay(3000);
   printMenu();
 
+  uint32_t lastHeartbeat = HAL_GetTick();
+
   for (;;)
   {
+    /* Heartbeat: toggle PD13 every 1s so user can see RTOS is alive */
+    if ((HAL_GetTick() - lastHeartbeat) >= 1000) {
+        HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
+        lastHeartbeat = HAL_GetTick();
+    }
+
     int c = getChar(10);  /* block up to 10ms -replaces poll + osDelay(10) */
     if (c >= 0) {
       switch (c) {
@@ -915,13 +920,10 @@ void StartCliTask(void *argument)
 
 /* ========================= FreeRTOS hooks ========================= */
 
-/* Polling UART write - works with interrupts disabled */
-static void uart_poll_puts(const char *s)
+/* RTT write — works with interrupts disabled (no UART needed) */
+static void rtt_poll_puts(const char *s)
 {
-    while (*s) {
-        while (!(USART1->ISR & USART_ISR_TXE_TXFNF)) {}
-        USART1->TDR = (uint8_t)*s++;
-    }
+    SEGGER_RTT_Write(0, s, strlen(s));
 }
 
 void vAssertCalled(const char *file, int line)
@@ -929,10 +931,10 @@ void vAssertCalled(const char *file, int line)
     taskDISABLE_INTERRUPTS();
     char buf[80];
     snprintf(buf, sizeof(buf), "\r\n!!! ASSERT: %s:%d\r\n", file, line);
-    uart_poll_puts(buf);
-    /* Blink red LED (PG2) to signal fault */
+    rtt_poll_puts(buf);
+    /* Blink status LED (PD13) to signal fault */
     for (;;) {
-        HAL_GPIO_TogglePin(GPIOG, GPIO_PIN_2);
+        HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
         for (volatile int i = 0; i < 500000; i++) {}
     }
 }
@@ -942,10 +944,10 @@ void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
     taskDISABLE_INTERRUPTS();
     char buf[80];
     snprintf(buf, sizeof(buf), "\r\n!!! STACK OVERFLOW: %s\r\n", pcTaskName);
-    uart_poll_puts(buf);
-    /* Blink red LED (PG2) to signal fault */
+    rtt_poll_puts(buf);
+    /* Blink status LED (PD13) to signal fault */
     for (;;) {
-        HAL_GPIO_TogglePin(GPIOG, GPIO_PIN_2);
+        HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
         for (volatile int i = 0; i < 500000; i++) {}
     }
 }
@@ -1506,7 +1508,7 @@ static void StartGpsTask(void *argument)
     char buf[128];
     int pos = 0;
 
-    printf("GPS: Listening on LPUART1 (9600 baud)\r\n");
+    printf("GPS: Listening on USART1 (9600 baud)\r\n");
 
     for (;;) {
         int c = getCharGps(osWaitForever);
@@ -1567,12 +1569,18 @@ static void surveyAccumulate(float lat, float lon, float alt)
     }
 }
 
-/* ========================= BLE / HM-19 ========================= */
+/* ========================= BLE / PB-03F ========================= */
 
 /* Send AT command and wait for response (blocking, with timeout) */
 static int bleSendCmd(const char *cmd, char *resp, int respSize, int timeoutMs)
 {
-    bleSend(cmd);
+    /* PB-03F requires \r\n line termination on AT commands */
+    char cmdBuf[128];
+    int cmdLen = snprintf(cmdBuf, sizeof(cmdBuf), "%s\r\n", cmd);
+    if (cmdLen > 0 && cmdLen < (int)sizeof(cmdBuf))
+        bleSend(cmdBuf);
+    else
+        bleSend(cmd);
     int pos = 0;
     uint32_t start = HAL_GetTick();
 
@@ -1592,7 +1600,7 @@ static int bleSendCmd(const char *cmd, char *resp, int respSize, int timeoutMs)
             }
         }
     }
-    /* Some HM-19 responses don't end with newline (e.g. "OK") */
+    /* Some responses don't end with newline (e.g. "OK") */
     if (pos > 0) {
         resp[pos] = '\0';
         return pos;
@@ -1603,7 +1611,7 @@ static int bleSendCmd(const char *cmd, char *resp, int respSize, int timeoutMs)
 static void printBleStatus(void)
 {
     printf("\r\n=== BLE Status ===\r\n");
-    printf("Module:    %s\r\n", bleReady ? "HM-19 (CC2640)" : "Not detected");
+    printf("Module:    %s\r\n", bleReady ? "PB-03F (PHY6252)" : "Not detected");
     if (bleReady) {
         printf("Name:      %s\r\n", bleName);
         printf("Address:   %s\r\n", bleAddr);
@@ -1628,7 +1636,7 @@ static void printBleStatus(void)
 void printBleStatusBrief(void)
 {
     printf("BLE:\r\n");
-    printf("  Module: %s\r\n", bleReady ? "HM-19 (CC2640)" : "Not detected");
+    printf("  Module: %s\r\n", bleReady ? "PB-03F (PHY6252)" : "Not detected");
     if (bleReady) {
         printf("  Name:   %s\r\n", bleName);
         printf("  Addr:   %s\r\n", bleAddr);
@@ -1654,7 +1662,7 @@ static void StartBleTask(void *argument)
            cfg.stationId, cfg.gain,
            cfg.recFormat == REC_FMT_FLAC ? "FLAC" : "WAV");
 
-    printf("BLE: Probing HM-19 on USART3 (PC10/PC11, 9600 baud)\r\n");
+    printf("BLE: Probing PB-03F on USART2 (115200 baud)\r\n");
 
     /* Wait for module to power up */
     osDelay(500);
@@ -1665,7 +1673,10 @@ static void StartBleTask(void *argument)
         while (osMessageQueueGet(bleRxQueue, &discard, NULL, 0) == osOK) {}
     }
 
-    /* Probe with AT (HM-19 expects bare commands, no \r\n) */
+    /* Disable echo (PB-03F has echo ON by default) */
+    bleSendCmd("ATE0", resp, sizeof(resp), 1000);
+
+    /* Probe with AT */
     if (bleSendCmd("AT", resp, sizeof(resp), 1000) > 0) {
         printf("BLE: AT -> %s\r\n", resp);
         bleReady = 1;
@@ -1676,8 +1687,8 @@ static void StartBleTask(void *argument)
 
     if (bleReady) {
         /* Get module name */
-        if (bleSendCmd("AT+NAME?", resp, sizeof(resp), 1000) > 0) {
-            /* Response format: OK+NAME:xxx or +NAME=xxx depending on firmware */
+        if (bleSendCmd("AT+BLENAME?", resp, sizeof(resp), 1000) > 0) {
+            /* Response format: +BLENAME:<name> */
             const char *name = resp;
             const char *p = strchr(resp, ':');
             if (!p) p = strchr(resp, '=');
@@ -1688,7 +1699,8 @@ static void StartBleTask(void *argument)
         }
 
         /* Get MAC address */
-        if (bleSendCmd("AT+ADDR?", resp, sizeof(resp), 1000) > 0) {
+        if (bleSendCmd("AT+BLEMAC?", resp, sizeof(resp), 1000) > 0) {
+            /* Response format: +BLEMAC:<mac> */
             const char *addr = resp;
             const char *p = strchr(resp, ':');
             if (!p) p = strchr(resp, '=');
@@ -1729,10 +1741,10 @@ static void StartBleTask(void *argument)
                     if (buf[0] == '$') {
                         /* Protocol command from app */
                         bleHandleCommand(buf);
-                    } else if (strncmp(buf, "OK+CONN", 7) == 0) {
+                    } else if (strstr(buf, "BLE_CONNECTED") != NULL) {
                         bleConnected = 1;
                         printf("BLE: Connected\r\n");
-                    } else if (strncmp(buf, "OK+LOST", 7) == 0) {
+                    } else if (strstr(buf, "BLE_DISCONNECTED") != NULL) {
                         bleConnected = 0;
                         streamAudioInterval = 0;  /* stop streaming on disconnect */
                         streamRecInterval = 0;
@@ -2649,7 +2661,7 @@ static int otaWritePage(void)
 
 static int otaCopyConfig(void)
 {
-    /* Read config from inactive bank (0x081FE000) */
+    /* Read config from Bank 2 last page */
     const device_config_t *src = (const device_config_t *)CONFIG_FLASH_ADDR;
     device_config_t tmp;
     memcpy(&tmp, src, sizeof(tmp));

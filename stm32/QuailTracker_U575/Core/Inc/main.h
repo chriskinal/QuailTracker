@@ -28,7 +28,6 @@ extern "C" {
 
 /* Includes ------------------------------------------------------------------*/
 #include "stm32u5xx_hal.h"
-#include "stm32u5xx_nucleo.h"
 #include <stdio.h>
 
 /* Private includes ----------------------------------------------------------*/
@@ -63,7 +62,7 @@ void Error_Handler(void);
 #define SD_CS_GPIO_Port GPIOA
 
 /* USER CODE BEGIN Private defines */
-#define FW_VERSION "0.8.14"
+#define FW_VERSION "0.8.18"
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus
