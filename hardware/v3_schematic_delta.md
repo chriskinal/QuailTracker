@@ -160,12 +160,12 @@ Delete these from the V2 schematic:
 
 ## 7. New BOM Items
 
-| Designator | Part | Package | LCSC | Qty | Notes |
-|------------|------|---------|------|-----|-------|
-| U2 | ATGM336H-5N31 GPS+BDS module | LCC-18 (10.1x9.7mm) | C90770 | 1 | Replaces L76K breakout |
-| C17 | 10uF X5R 25V | 0805 | C15850 | 1 | GPS VCC decoupling (same part as C11) |
-| L1 | 47nH multilayer inductor | 0402 | C97998 | 1 | Murata LQG15HS47NJ02D — bias tee |
-| J1 | U.FL/IPEX MHF receptacle | SMD | C88374 | 1 | HRS U-FL-R-SMT-1 — antenna connector |
+| Designator | Part | Package | LCSC | Mouser | Qty | Notes |
+|------------|------|---------|------|--------|-----|-------|
+| U2 | ATGM336H-5N31 GPS+BDS module | LCC-18 (10.1x9.7mm) | C90770 | N/A (LCSC only) | 1 | Replaces L76K breakout |
+| C17 | 10uF X5R 25V (YAGEO CC0805KFX5R8BB106) | 0805 | C15850 | 603-CC0805KFX5R8BB10 | 1 | GPS VCC decoupling (same part as C11) |
+| L1 | 47nH multilayer inductor (Murata LQG15HS47NJ02D) | 0402 | C97998 | 81-LQG15HS47NJ02D | 1 | Bias tee |
+| J1 | U.FL receptacle (HRS U-FL-R-SMT-1(80)) | SMD | C88374 | 798-U-FL-R-SMT-1-80 | 1 | GPS antenna connector |
 
 ### Removed BOM Items
 
