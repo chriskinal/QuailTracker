@@ -2,7 +2,7 @@ Designator,Comment,Footprint,LCSC Part #,Qty,Notes
 # MCU & Modules
 U1,STM32U575VGT6,LQFP-100,C5270988,1,MCU 160MHz Cortex-M33 1MB flash 784KB RAM (non-SMPS / LDO variant)
 COMM1,PB-03F (Ai-Thinker),Module,C2980027,1,BLE 5.2 module UART AT commands
-U2,Seeed L76K GPS Module,XIAO footprint,,1,Off-board GPS breakout (hand-solder)
+U2,ATGM336H-5N31 GPS Module,LCC-18 (10.1x9.7mm),C90770,1,GPS+BDS GNSS module SMD (JLCPCB assembleable)
 # Power Supply
 Q1,XC6220B331MR-G,SOT-23-5,C86534,1,LDO 3.3V 20mV dropout 8uA Iq 1A (Torex)
 # Decoupling - 100nF (x10)
@@ -11,6 +11,7 @@ Q1,XC6220B331MR-G,SOT-23-5,C86534,1,LDO 3.3V 20mV dropout 8uA Iq 1A (Torex)
 C1-C10,100nF X7R 16V,0402,C1525,10,Decoupling (Samsung CL05B104KO5NNNC)
 # Decoupling - 10uF bulk
 C11,10uF X5R 25V,0805,C15850,1,VDD bulk (near pin 11)
+C17,10uF X5R 25V,0805,C15850,1,GPS VCC decoupling (U2 pin 8)
 # VCAP - internal LDO output bypass (non-SMPS variant)
 # Pin 48 (VCAP) to GND — required for internal 1.1V LDO regulator
 C12,4.7uF X5R 10V,0402,C23733,1,VCAP pin 48 internal LDO bypass
@@ -23,6 +24,9 @@ X1,32.768kHz NX3215SA,SMD3215,C156244,1,LSE RTC crystal NDK 14pF CL
 # GPS Power Control
 Q2,SI2301CDS P-FET,SOT-23,C10487,1,GPS VCC switch (BASIC)
 Q3,MMBT3904 NPN,SOT-23,C20526,1,GPS FET gate drive (BASIC)
+# GPS RF — Active Antenna Bias Tee
+L1,47nH multilayer,0402,C97998,1,Bias tee inductor VCC_RF→RF_IN (Murata LQG15HS47NJ02D)
+J1,U.FL / IPEX MHF receptacle,SMD,C88374,1,GPS active antenna connector (HRS U-FL-R-SMT-1)
 # Resistors - 10k (x3)
 # R1: Q2 gate pull-up, R2: Q3 base, R6: BOOT0 pull-down
 R1 R2 R6,10k 1%,0603,C25804,3,GPS circuit + BOOT0 (BASIC)
@@ -49,9 +53,10 @@ SW2,Tactile switch 3x6mm SMD,SMD,C318884,1,BOOT0 button (PH3 to 3V3 for DFU entr
 # PASSIVE SUMMARY
 # -------------------------------------------------------
 # 100nF 0402 (C1525): 10 total (C1-C10)
-# 10uF 0805 (C15850): 1 total (C11)
+# 10uF 0805 (C15850): 2 total (C11, C17)
 # 4.7uF 0402 (C23733): 1 total (C12 VCAP)
 # 1uF 0402 (C52923): 4 total (C13-C16)
+# 47nH 0402 (C97998): 1 total (L1 bias tee)
 # 10k 0603 (C25804): 3 total (R1 R2 R6)
 # 4.7k 0603 (C23162): 2 total (R3-R4)
 # 1M 0603 (C22935): 2 total (R7-R8)
@@ -60,14 +65,16 @@ SW2,Tactile switch 3x6mm SMD,SMD,C318884,1,BOOT0 button (PH3 to 3V3 for DFU entr
 # COST ESTIMATE (per board, qty 10)
 # -------------------------------------------------------
 # STM32U575VGT6: $6.36
+# ATGM336H-5N31 GPS: $1.93
 # PB-03F BLE: $1.26
 # SHT30 module (pre-made, off-board): $1.50
 # XC6220 LDO: $0.47
-# All passives+discretes: ~$0.45
-# Connectors (SMD): ~$0.50
+# All passives+discretes+inductor: ~$0.50
+# Connectors (SMD) + U.FL: ~$0.55
 # Crystal: $0.38
+# Active GPS antenna (off-board): ~$3.50
 # PCB + assembly: ~$8-10
-# Total: ~$19-21 per unit
+# Total: ~$25-27 per unit
 # -------------------------------------------------------
 # JLCPCB BASIC PARTS (no $3 extended fee)
 # -------------------------------------------------------
@@ -82,12 +89,15 @@ SW2,Tactile switch 3x6mm SMD,SMD,C318884,1,BOOT0 button (PH3 to 3V3 for DFU entr
 # C21190 - 1k 0603
 # C2297 - Green LED 0805
 # -------------------------------------------------------
-# EXTENDED PARTS (7 unique x $3 = $21 per order)
+# EXTENDED PARTS (10 unique x $3 = $30 per order)
 # -------------------------------------------------------
 # C5270988 - STM32U575VGT6
+# C90770 - ATGM336H-5N31 GPS module
 # C2980027 - PB-03F BLE module
 # C86534 - XC6220B331MR-G LDO
 # C23733 - 4.7uF 0402 VCAP (verify BASIC/extended status)
+# C97998 - 47nH 0402 inductor (bias tee)
+# C88374 - U.FL connector (GPS antenna)
 # C156244 - 32.768kHz crystal
 # C113206 - MicroSD TF-015
 # C131337 - JST PH 2-pin (battery)

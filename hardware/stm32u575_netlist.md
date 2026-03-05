@@ -24,9 +24,10 @@ Cross-reference: `stm32u575_pinout.md` (pin assignments), `stm32u575_bom_lcsc.cs
 | **VBAT+** | Battery positive rail | CN1.1, Q1.VIN(1), Q1.CE(3), C16.+, R7.1 |
 | **3V3** | 3.3V regulated rail | Q1.VOUT(5), C15.+, C11.+, U1 VDD pins (11, 28, 50, 75, 100), U1.VDDA(22), U1.VREF+(21), U1.VDDUSB(73), U1.VBAT(6), C1.+, C2.+, C3.+, C4.+, C5.+, C6.+, C7.+, C8.+, C9.+, C13.+, C14.+, R1.1, R3.1, R4.1, Q2.Source, COMM1.VCC, CARD1.VDD, CN2.3, H1.1, H2.1, SW2.1 |
 | **GND** | Ground | *(see dedicated GND table below)* |
-| **GPS_VCC** | Switched 3.3V to GPS module | Q2.Drain, U2.VCC |
+| **GPS_VCC** | Switched 3.3V to GPS module | Q2.Drain, U2.pin8 (VCC), C17.+ |
 | **VBAT_SENSE** | Battery ADC midpoint | R7.2, R8.1, U1.pin15 (PC0/ADC1_IN1) |
 | **Q2_GATE** | GPS P-FET gate drive | Q2.Gate, R1.2, Q3.Collector |
+| **GPS_VBAT** | GPS RTC/SRAM backup (always-on) | U2.pin6 (VBAT), 3V3 rail |
 
 ### GND Net — All Ground Connections
 
@@ -38,7 +39,8 @@ Place the **GND** net port label on every pin listed below.
 | LDO | Q1.VSS(2) |
 | Decoupling caps (−) | C1.−, C2.−, C3.−, C4.−, C5.−, C6.−, C7.−, C8.−, C9.−, C10.−, C11.−, C12.−, C13.−, C14.−, C15.−, C16.− |
 | Connectors | CN1.2, CN2.4, CARD1.VSS, COMM1.GND, H1.2, H2.2, SW1.2 |
-| GPS module | U2.GND |
+| GPS module | U2.pin1 (GND), U2.pin10 (GND), U2.pin12 (GND) |
+| GPS RF | J1.GND, C17.− |
 | Transistors | Q3.Emitter |
 | Divider low side | R8.2 |
 | BOOT0 pull-down | R6.2 |
@@ -52,20 +54,23 @@ Place the **GND** net port label on every pin listed below.
 
 | Net Port | Description | Connected Pins |
 |----------|-------------|----------------|
-| **GPS_TX** | GPS UART data out (GPS→MCU) | U2.TX, U1.pin69 (PA10 / USART1_RX, AF7) |
-| **GPS_RX** | GPS UART data in (MCU→GPS) | U2.RX, U1.pin68 (PA9 / USART1_TX, AF7) |
-| **GPS_PPS** | Pulse-per-second sync | U2.pin3, U1.pin67 (PA8 / EXTI) |
-| **GPS_WAKE** | GPS wakeup control | U2.WAKEUP, U1.pin61 (PD14) |
-| **GPS_RST** | GPS reset (active low) | U2.RESET, U1.pin62 (PD15) |
+| **GPS_TX** | GPS UART data out (GPS→MCU) | U2.pin2 (TXD), U1.pin69 (PA10 / USART1_RX, AF7) |
+| **GPS_RX** | GPS UART data in (MCU→GPS) | U2.pin3 (RXD), U1.pin68 (PA9 / USART1_TX, AF7) |
+| **GPS_PPS** | Pulse-per-second sync | U2.pin4 (1PPS), U1.pin67 (PA8 / EXTI) |
+| **GPS_WAKE** | GPS ON/OFF control | U2.pin5 (ON/OFF), U1.pin61 (PD14) |
+| **GPS_RST** | GPS reset (active low) | U2.pin9 (nRESET), U1.pin62 (PD15) |
 | **GPS_EN** | GPS power enable (MCU→Q3) | R2.1, U1.pin59 (PD12, GPIO) |
 
-### L76K Bodge Wires (on GPS module, not main board)
+### GPS RF — Active Antenna Bias Tee
 
-The Seeed L76K XIAO footprint doesn't expose PPS or VBKP on standard header pins.
-Solder bodge wires directly on the L76K module:
+| Net Port | Description | Connected Pins |
+|----------|-------------|----------------|
+| **GPS_VCC_RF** | Antenna LNA power (from module) | U2.pin14 (VCC_RF), L1.1 |
+| **GPS_RF_IN** | RF signal + DC bias to antenna | L1.2, U2.pin11 (RF_IN), J1.signal |
 
-- **PPS**: L76K PPS pad → XIAO header pin 3 → main board GPS_PPS net → PA8
-- **VBKP**: L76K VBKP pad → bodge wire to module header pin 4 (unused) → main board 3V3 rail (always-on, NOT switched GPS_VCC) — keeps RTC/hot-start alive when GPS power is off
+L1 (47nH inductor) forms a bias tee: passes DC from VCC_RF to power the active antenna LNA
+through the coax, while the antenna's RF signal passes through to RF_IN.
+J1 (U.FL connector) connects to the active GPS antenna via coax pigtail.
 
 ### GPS Power Switch — How It Works
 
@@ -254,8 +259,8 @@ Only pins with net port connections are listed — all others are unused (config
 
 ## Decoupling Capacitor Assignment
 
-No SMPS components — internal LDO only. Removed L1, old C12/C13 (SMPS caps).
-Added VCAP cap (C12) for internal LDO bypass.
+No SMPS components — internal LDO only. VCAP cap (C12) for internal LDO bypass.
+L1 is the GPS antenna bias tee inductor (not SMPS-related).
 
 | Cap | Value | MCU Pin / Function | Net (+) | Net (−) |
 |-----|-------|--------------------|---------|---------|
@@ -276,7 +281,9 @@ Added VCAP cap (C12) for internal LDO bypass.
 | C15 | 1uF | LDO output (Q1.VOUT) | 3V3 | GND |
 | C16 | 1uF | LDO input (Q1.VIN) | VBAT+ | GND |
 
-**Totals:** 10x 100nF, 1x 10uF, 1x 4.7uF, 4x 1uF = 16 caps.
+| C17 | 10uF | GPS VCC (U2 pin 8) | GPS_VCC | GND |
+
+**Totals:** 10x 100nF, 2x 10uF, 1x 4.7uF, 4x 1uF = 17 caps.
 
 ---
 
@@ -284,12 +291,16 @@ Added VCAP cap (C12) for internal LDO bypass.
 
 - [ ] Every U1 pin from `stm32u575_pinout.md` appears in a net or marked unused
 - [ ] No MCU pin used in two different nets
-- [ ] All 16 decoupling caps connected (10x 100nF + 1x 10uF + 1x 4.7uF + 4x 1uF)
+- [ ] All 17 decoupling caps connected (10x 100nF + 2x 10uF + 1x 4.7uF + 4x 1uF)
 - [ ] VCAP (pin 48): 4.7uF cap to GND (pin 49)
 - [ ] VREF- (pin 20): tied to VSSA/GND
 - [ ] All component VCC pins on 3V3, all GND pins on GND
 - [ ] GPS: Q2 P-FET Source=3V3, Drain=GPS_VCC, Gate=Q2_GATE
-- [ ] GPS: U2.VCC on GPS_VCC (switched), U2.pin3 on GPS_PPS
+- [ ] GPS: U2.pin8 (VCC) on GPS_VCC (switched), U2.pin6 (VBAT) on 3V3 (always-on)
+- [ ] GPS: U2.pin4 (1PPS) on GPS_PPS, U2.pin5 (ON/OFF) on GPS_WAKE, U2.pin9 (nRESET) on GPS_RST
+- [ ] GPS: U2.pin1/10/12 (GND) all on GND net
+- [ ] GPS RF: L1 between U2.pin14 (VCC_RF) and U2.pin11 (RF_IN), J1 on RF_IN side
+- [ ] GPS: C17 (10uF) on GPS_VCC near U2.pin8
 - [ ] I2C: R3/R4 pull-ups between 3V3 and I2C_SCL/I2C_SDA
 - [ ] Battery divider: R7 (VBAT+→midpoint), R8 (midpoint→GND), midpoint=VBAT_SENSE
 - [ ] BOOT0 (PH3 pin 94): R6 pull-down to GND, SW2 to 3V3

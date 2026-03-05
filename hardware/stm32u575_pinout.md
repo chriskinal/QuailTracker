@@ -16,8 +16,8 @@ C5270988 is the non-SMPS variant — uses internal LDO, no external inductor.
 |----------|------|-------------|-----|------------|-------|
 | PDM Mic Clock | PE9 | 40 | AF3 | ADF1_CCK0 | Clock out to IM72D128 |
 | PDM Mic Data | PE10 | 41 | AF3 | ADF1_SDI0 | Data in from IM72D128 |
-| GPS UART TX | PA9 | 68 | AF7 | USART1_TX | To L76K RX |
-| GPS UART RX | PA10 | 69 | AF7 | USART1_RX | From L76K TX |
+| GPS UART TX | PA9 | 68 | AF7 | USART1_TX | To ATGM336H RXD (pin 3) |
+| GPS UART RX | PA10 | 69 | AF7 | USART1_RX | From ATGM336H TXD (pin 2) |
 | BLE UART TX | PA2 | 25 | AF7 | USART2_TX | To PB-03F RX |
 | BLE UART RX | PA3 | 26 | AF7 | USART2_RX | From PB-03F TX |
 | Debug UART TX | PD8 | 55 | AF7 | USART3_TX | Debug serial on H2 header |
@@ -30,9 +30,9 @@ C5270988 is the non-SMPS variant — uses internal LDO, no external inductor.
 | SHT30 SCL | PB6 | 92 | AF4 | I2C1_SCL | 4.7k pull-up R3 |
 | SHT30 SDA | PB7 | 93 | AF4 | I2C1_SDA | 4.7k pull-up R4 |
 | Battery ADC | PC0 | 15 | analog | ADC1_IN1 | 1M/1M divider R7/R8 |
-| GPS PPS | PA8 | 67 | GPIO | EXTI input, rising | 1ms sync accuracy |
-| GPS WAKEUP | PD14 | 61 | GPIO | Output | L76K WAKEUP pin |
-| GPS RESET | PD15 | 62 | GPIO | Output, active low | L76K RESET pin |
+| GPS PPS | PA8 | 67 | GPIO | EXTI input, rising | ATGM336H 1PPS (pin 4) |
+| GPS ON/OFF | PD14 | 61 | GPIO | Output | ATGM336H ON/OFF (pin 5) |
+| GPS RESET | PD15 | 62 | GPIO | Output, active low | ATGM336H nRESET (pin 9) |
 | GPS Power EN | PD12 | 59 | GPIO | Output | HIGH=GPS on, LOW=GPS off |
 | Status LED | PD13 | 60 | GPIO | Output | Via 1k R9 to LED1 |
 | SWO Trace | PB3 | 89 | AF0 | TRACESWO | Serial Wire Output for debug trace |
@@ -97,25 +97,36 @@ Selected PE9/PE10 over PB3/PB4 because:
 ADF1 provides hardware decimation filtering for the PDM bitstream.
 Supports LPBAM for autonomous audio capture in Stop 2 mode.
 
-### USART1 — GPS (L76K breakout)
+### USART1 — GPS (ATGM336H-5N31)
 
-PA9/PA10 are the boot-default USART1 pins. 3.3V logic levels match L76K.
-GPS module (U2, Seeed L76K on XIAO footprint):
+PA9/PA10 are the boot-default USART1 pins. 3.3V logic levels match ATGM336H.
+GPS module (U2, ATGM336H-5N31 LCC-18 SMD, 10.1x9.7mm):
 
-| XIAO Pin | Signal | MCU Pin | Direction | Notes |
-|----------|--------|---------|-----------|-------|
-| 1 | RXD (MCU→GPS) | PA9 / USART1_TX | Output | |
-| 7 | WAKEUP | PD14 | Output | |
-| 8 | 5V | NC | - | Not used |
-| 9 | GND | - | - | |
-| 10 | VCC (3v3) | GPS_VCC (switched) | Power | Via Q2 P-FET |
-| 11 | RESET | PD15 | Output | Active low |
-| 14 | TXD (GPS→MCU) | PA10 / USART1_RX | Input | |
-| 3 | PPS | PA8 / EXTI | Input | Bodge wire on L76K: PPS pad → XIAO pin 3 |
+| U2 Pin | Name | I/O | MCU Pin / Connection | Notes |
+|--------|------|-----|---------------------|-------|
+| 1 | GND | - | GND | |
+| 2 | TXD | O | PA10 / USART1_RX | NMEA output (9600 default) |
+| 3 | RXD | I | PA9 / USART1_TX | Command input |
+| 4 | 1PPS | O | PA8 / EXTI | UTC-aligned pulse-per-second |
+| 5 | ON/OFF | I | PD14 (GPS_WAKE) | Shutdown control (low=off) |
+| 6 | VBAT | I | 3V3 (always-on) | RTC/SRAM backup, NOT switched GPS_VCC |
+| 7 | NC | - | NC | |
+| 8 | VCC | I | GPS_VCC (switched) | Main power 2.7-3.6V via Q2 P-FET |
+| 9 | nRESET | I | PD15 (GPS_RST) | Active low, internal pull-up |
+| 10 | GND | - | GND | |
+| 11 | RF_IN | I | L1 / J1 (antenna) | Via bias tee from U.FL connector |
+| 12 | GND | - | GND | |
+| 13 | NC | - | NC | |
+| 14 | VCC_RF | O | L1 (bias tee) | 3.3V antenna LNA power output |
+| 15 | Reserved | - | NC | Float |
+| 16 | SDA | I/O | NC | I2C unused |
+| 17 | SCL | O | NC | I2C unused |
+| 18 | Reserved | - | NC | Float |
 
-**L76K bodge wires** (soldered on the GPS module, not the main board):
-- **PPS**: L76K PPS pad → XIAO header pin 3
-- **VBKP**: L76K VBKP pad → XIAO 3V3 pin (keeps RTC/hot-start alive when GPS_VCC off)
+**RF bias tee** (active antenna power injection, per ATGM336H datasheet §2.7.1):
+- L1 (47nH): connects VCC_RF (pin 14) to RF_IN (pin 11) — injects DC to power antenna LNA
+- J1 (U.FL): connects to RF_IN side of L1 — antenna coax attaches here
+- C17 (10uF): GPS VCC decoupling on pin 8
 
 ### USART2 — BLE Module (PB-03F)
 
@@ -161,7 +172,7 @@ Note: PB11 is NOT bonded out on LQFP100 (neither SMPS nor non-SMPS variant).
 1. **Power** — Q1 (LDO), C1-C16 (decoupling), CN1 (battery)
 2. **MCU** — U1 (STM32U575VGT6), X1 (LSE crystal), R6 (BOOT0 pull-down)
 3. **Audio** — CN2 (JST PH 4-pin to mic breakout: CLK, DATA, VDD, GND)
-4. **GPS** — U2 (L76K module), Q2 (P-FET switch), Q3 (gate drive), R1/R2 (10k)
+4. **GPS** — U2 (ATGM336H-5N31), Q2 (P-FET switch), Q3 (gate drive), R1/R2 (10k), L1 (47nH bias tee), J1 (U.FL antenna), C17 (10uF GPS decoupling)
 5. **Storage** — CARD1 (MicroSD slot), SPI1 on PA4-PA7
 6. **BLE** — COMM1 (PB-03F module), USART2 on PA2/PA3
 7. **Sensor** — H1 (4-pin header to off-board SHT30), R3/R4 (I2C pull-ups)
@@ -178,5 +189,6 @@ Note: PB11 is NOT bonded out on LQFP100 (neither SMPS nor non-SMPS variant).
 - ADF PDM traces (PE9/PE10) kept short — mic JST connector near MCU
 - BLE module (PB-03F) antenna area: no copper pour within 5mm of antenna
 - SD card slot at board edge
-- GPS header at board edge
+- GPS module (U2) near board edge, U.FL connector (J1) at board edge for antenna cable
+- GPS RF traces (RF_IN, bias tee) kept short — L1 and J1 close to U2
 - All decoupling caps placed as close as possible to their respective VDD pins
