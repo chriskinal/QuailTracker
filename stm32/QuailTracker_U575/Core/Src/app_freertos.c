@@ -202,6 +202,7 @@ extern float ppsAltitude;
 /* GPS state */
 static gps_data_t gpsData;
 static volatile uint8_t gpsRawOutput;
+static uint8_t gpsPowered = 1;
 
 /* Survey-in state */
 static uint8_t surveyActive = 0;       /* 1 = survey in progress */
@@ -335,6 +336,8 @@ static void StartGpsTask(void *argument);
 static void StartBleTask(void *argument);
 static void StartInferenceTask(void *argument);
 static void printGpsStatus(void);
+static void gpsSetPower(uint8_t on);
+static void gpsReset(void);
 static void printBleStatus(void);
 void printBleStatusBrief(void);
 
@@ -844,9 +847,42 @@ void StartCliTask(void *argument)
       }
 
       case '8':
+      {
         printGpsStatus();
+        printf("\r\nGPS Commands:\r\n");
+        printf("  1. GPS Power ON\r\n");
+        printf("  2. GPS Power OFF\r\n");
+        printf("  3. GPS Reset\r\n");
+        printf("  4. Toggle Raw Output\r\n");
+        printf("  ESC/other: Back to main menu\r\n");
+        printf("[GPS] > ");
+        fflush(stdout);
+        int gc = -1;
+        while (gc < 0) {
+          gc = getChar(osWaitForever);
+          if (gc == '\r' || gc == '\n') gc = -1;
+        }
+        printf("%c\r\n", gc);
+        switch (gc) {
+        case '1':
+          gpsSetPower(1);
+          break;
+        case '2':
+          gpsSetPower(0);
+          break;
+        case '3':
+          gpsReset();
+          break;
+        case '4':
+          gpsRawOutput = !gpsRawOutput;
+          printf("GPS raw output: %s\r\n", gpsRawOutput ? "ON" : "OFF");
+          break;
+        default:
+          break;
+        }
         printMenu();
         break;
+      }
 
       case '9':
         printBleStatus();
@@ -1498,8 +1534,35 @@ static void printGpsStatus(void)
         printf("  Lon:      %c%ld.%06ld\r\n", sos, (long)slon_d, (long)slon_f);
         printf("  Alt:      %c%ld.%01ld m\r\n", sas, (long)salt_d, (long)salt_f);
     }
+    printf("Power:      %s\r\n", gpsPowered ? "ON" : "OFF");
     printf("Raw output: %s\r\n", gpsRawOutput ? "ON" : "OFF");
     printf("==================\r\n");
+}
+
+static void gpsSetPower(uint8_t on)
+{
+    if (on) {
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_SET);   /* GPS_EN high */
+        osDelay(10);
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_SET);   /* ON/OFF high */
+        gpsPowered = 1;
+        printf("GPS: Power ON\r\n");
+    } else {
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_RESET); /* ON/OFF low */
+        osDelay(10);
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_RESET); /* GPS_EN low */
+        gpsPowered = 0;
+        printf("GPS: Power OFF\r\n");
+    }
+}
+
+static void gpsReset(void)
+{
+    printf("GPS: Resetting...\r\n");
+    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_RESET);     /* nRESET low */
+    osDelay(100);
+    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_SET);       /* nRESET high */
+    printf("GPS: Reset complete\r\n");
 }
 
 static void StartGpsTask(void *argument)
