@@ -44,8 +44,8 @@ CARD1,MicroSD TF-015,SMD push-push,C113206,1,SD card slot SPI mode
 # Connectors - Through-hole
 CN1,JST PH 2-pin B2B-PH-K-S,TH 2.0mm pitch,C131337,1,Battery connector (vertical)
 CN2,JST PH 4-pin B4B-PH-K-S,TH 2.0mm pitch,C131334,1,Mic breakout connector CLK DATA VDD GND (vertical)
-H1,1x4 Male Header 2.54mm,TH,C124378,1,SHT30 module connector
-H2,1x7 Male Header 2.54mm,TH,C124378,1,Debug header: 3V3 GND SWDIO SWCLK SWO DBG_TX DBG_RX (cut from 1x40 strip)
+H1,1x4 Male Header 2.54mm,TH,,1,SHT30 module connector (hand-solder from stock)
+H2,1x7 Male Header 2.54mm,TH,,1,Debug header: 3V3 GND SWDIO SWCLK SWO DBG_TX DBG_RX (hand-solder from stock)
 # Tactile Buttons
 SW1,Tactile switch 3x6mm SMD,SMD,C318884,1,RESET button (NRST to GND)
 SW2,Tactile switch 3x6mm SMD,SMD,C318884,1,BOOT0 button (PH3 to 3V3 for DFU entry)
@@ -89,7 +89,7 @@ SW2,Tactile switch 3x6mm SMD,SMD,C318884,1,BOOT0 button (PH3 to 3V3 for DFU entr
 # C21190 - 1k 0603
 # C2297 - Green LED 0805
 # -------------------------------------------------------
-# EXTENDED PARTS (10 unique x $3 = $30 per order)
+# EXTENDED PARTS (9 unique x $3 = $27 per order)
 # -------------------------------------------------------
 # C5270988 - STM32U575VGT6
 # C90770 - ATGM336H-5N31 GPS module
@@ -102,4 +102,3 @@ SW2,Tactile switch 3x6mm SMD,SMD,C318884,1,BOOT0 button (PH3 to 3V3 for DFU entr
 # C113206 - MicroSD TF-015
 # C131337 - JST PH 2-pin (battery)
 # C131334 - JST PH 4-pin (mic breakout)
-# C124378 - 4-pin header TH (x2, but same part = 1 unique)
