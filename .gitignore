@@ -37,6 +37,9 @@ stm32/**/*/com.st.stm32cube.ide.mcu.sfrview.prefs
 # Audio recordings
 *.wav
 
+# Python
+__pycache__/
+
 # Training data and model outputs
 training/data/
 training/output/
