@@ -199,6 +199,10 @@ extern float ppsLatitude;
 extern float ppsLongitude;
 extern float ppsAltitude;
 
+/* Battery from main.c */
+extern uint32_t batteryMv;
+extern uint32_t battReadMv(void);
+
 /* GPS state */
 static gps_data_t gpsData;
 static volatile uint8_t gpsRawOutput;

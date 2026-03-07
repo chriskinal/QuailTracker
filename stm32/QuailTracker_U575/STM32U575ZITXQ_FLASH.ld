@@ -114,6 +114,13 @@ SECTIONS
     PROVIDE_HIDDEN (__fini_array_end = .);
   } >FLASH
 
+  /* SEGGER RTT control block — pinned at start of RAM so the address
+   * never changes when BSS grows.  RTT Viewer address: 0x20000000 */
+  .rtt (NOLOAD) :
+  {
+    KEEP(*(.rtt_cb))
+  } >RAM
+
   /* Used by the startup to initialize data */
   _sidata = LOADADDR(.data);
 

@@ -59,6 +59,8 @@ UART_HandleTypeDef husart2;
 
 SPI_HandleTypeDef hspi1;
 
+ADC_HandleTypeDef hadc1;
+
 /* USER CODE BEGIN PV */
 #define AUDIO_BUF_SIZE 1024
 #define SAMPLE_RATE    48000
@@ -111,6 +113,10 @@ float ppsLatitude = 0.0f;
 float ppsLongitude = 0.0f;
 float ppsAltitude = 0.0f;
 
+/* Battery voltage (millivolts, updated by battReadMv()) */
+uint32_t batteryMv = 0;
+uint32_t battReadMv(void);
+
 /* Station ID (copied from config by app_freertos.c, used for FLAC metadata) */
 char deviceStationId[16] = "QT001";
 
@@ -161,7 +167,7 @@ static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_ADF1_Init(void);
 /* USER CODE BEGIN PFP */
-
+static void MX_ADC1_Init(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -545,6 +551,17 @@ void printStatus(void)
         }
     }
 
+    printf("Battery:\r\n");
+    {
+        uint32_t mv = battReadMv();
+        printf("  Voltage: %lu.%03lu V\r\n",
+               (unsigned long)(mv / 1000), (unsigned long)(mv % 1000));
+        int pct = (int)(mv - 3000) * 100 / 1200;
+        if (pct < 0) pct = 0;
+        if (pct > 100) pct = 100;
+        printf("  Level:   %d%%\r\n", pct);
+    }
+
     extern void printBleStatusBrief(void);
     printBleStatusBrief();
 
@@ -841,6 +858,9 @@ int main(void)
   printf("  SYSCLK: %lu MHz\r\n",
          (unsigned long)(HAL_RCC_GetSysClockFreq() / 1000000UL));
   printf("================================================\r\n");
+
+  /* ADC1 — battery voltage on PC0 / IN1 */
+  MX_ADC1_Init();
 
   /* Start ADF1 DMA acquisition before scheduler */
   {
@@ -1290,6 +1310,82 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+/* ADC1 init — CubeMX-generated config for PC0/IN1 battery voltage */
+static uint32_t vddaMv = 3300;  /* Measured VDDA — updated at init via VREFINT */
+
+/* Read a single ADC channel (helper) */
+static uint32_t adcReadRaw(uint32_t channel, uint32_t sampTime)
+{
+    ADC_ChannelConfTypeDef sConfig = {0};
+    sConfig.Channel = channel;
+    sConfig.Rank = ADC_REGULAR_RANK_1;
+    sConfig.SamplingTime = sampTime;
+    sConfig.SingleDiff = ADC_SINGLE_ENDED;
+    sConfig.OffsetNumber = ADC_OFFSET_NONE;
+    sConfig.Offset = 0;
+    if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK) return 0;
+    if (HAL_ADC_Start(&hadc1) != HAL_OK) return 0;
+    if (HAL_ADC_PollForConversion(&hadc1, 10) != HAL_OK) {
+        HAL_ADC_Stop(&hadc1);
+        return 0;
+    }
+    uint32_t raw = HAL_ADC_GetValue(&hadc1);
+    HAL_ADC_Stop(&hadc1);
+    return raw;
+}
+
+static void MX_ADC1_Init(void)
+{
+    hadc1.Instance = ADC1;
+    hadc1.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV4;
+    hadc1.Init.Resolution = ADC_RESOLUTION_14B;
+    hadc1.Init.GainCompensation = 0;
+    hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
+    hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+    hadc1.Init.LowPowerAutoWait = DISABLE;
+    hadc1.Init.ContinuousConvMode = DISABLE;
+    hadc1.Init.NbrOfConversion = 1;
+    hadc1.Init.DiscontinuousConvMode = DISABLE;
+    hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+    hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
+    hadc1.Init.DMAContinuousRequests = DISABLE;
+    hadc1.Init.TriggerFrequencyMode = ADC_TRIGGER_FREQ_HIGH;
+    hadc1.Init.Overrun = ADC_OVR_DATA_PRESERVED;
+    hadc1.Init.LeftBitShift = ADC_LEFTBITSHIFT_NONE;
+    hadc1.Init.ConversionDataManagement = ADC_CONVERSIONDATA_DR;
+    hadc1.Init.OversamplingMode = DISABLE;
+    if (HAL_ADC_Init(&hadc1) != HAL_OK) {
+        printf("ADC1: Init FAILED\r\n");
+        return;
+    }
+
+    if (HAL_ADCEx_Calibration_Start(&hadc1, ADC_CALIB_OFFSET, ADC_SINGLE_ENDED) != HAL_OK) {
+        printf("ADC1: Calibration FAILED\r\n");
+    }
+
+    /* Measure actual VDDA using factory-calibrated VREFINT (14-bit). */
+    uint32_t vref_raw = adcReadRaw(ADC_CHANNEL_VREFINT, ADC_SAMPLETIME_391CYCLES);
+    if (vref_raw > 0) {
+        uint16_t vrefCal = *VREFINT_CAL_ADDR;
+        vddaMv = (VREFINT_CAL_VREF * (uint32_t)vrefCal) / vref_raw;
+        printf("ADC1: VDDA=%lu mV (VREFINT raw=%lu, cal=%u)\r\n",
+               (unsigned long)vddaMv, (unsigned long)vref_raw, vrefCal);
+    }
+
+    printf("ADC1: OK\r\n");
+}
+
+/* Read battery voltage via ADC1 CH1 (PC0).
+ * 1M/1M divider: VBAT = ADC_mV * 2.  Returns millivolts. */
+uint32_t battReadMv(void)
+{
+    uint32_t raw = adcReadRaw(ADC_CHANNEL_1, ADC_SAMPLETIME_68CYCLES);
+    if (raw > 0)
+        batteryMv = (raw * vddaMv * 2) / 16383;
+    return batteryMv;
+}
+
 /* ADF1 DMA callbacks — copy PCM data into ring buffer directly from ISR.
  * This runs in ~5µs at 160MHz (512 shift+store ops) and guarantees data is
  * captured before the circular DMA overwrites the buffer.  The previous
