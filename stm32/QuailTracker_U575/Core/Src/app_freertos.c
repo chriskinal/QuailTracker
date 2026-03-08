@@ -1764,6 +1764,17 @@ static void StartBleTask(void *argument)
             printf("BLE: Name = %s\r\n", bleName);
         }
 
+        /* Set broadcast name to station ID */
+        {
+            char nameCmd[48];
+            snprintf(nameCmd, sizeof(nameCmd), "AT+BLENAME=%s", cfg.stationId);
+            if (bleSendCmd(nameCmd, resp, sizeof(resp), 1000) > 0) {
+                strncpy(bleName, cfg.stationId, sizeof(bleName) - 1);
+                bleName[sizeof(bleName) - 1] = '\0';
+                printf("BLE: Name set to %s\r\n", bleName);
+            }
+        }
+
         /* Get MAC address */
         if (bleSendCmd("AT+BLEMAC?", resp, sizeof(resp), 1000) > 0) {
             /* Response format: +BLEMAC:<mac> */
@@ -1775,6 +1786,11 @@ static void StartBleTask(void *argument)
             bleAddr[sizeof(bleAddr) - 1] = '\0';
             printf("BLE: Addr = %s\r\n", bleAddr);
         }
+    }
+
+    /* Put BLE into light sleep to save ~1mA */
+    if (bleReady) {
+        bleSendCmd("AT+SLEEP=1", resp, sizeof(resp), 1000);
     }
 
     /* Main loop: read incoming BLE data (transparent mode) */
@@ -2444,6 +2460,15 @@ static void bleHandleSet(const char *args)
         if (strlen(val) > 15) { bleSendLine("$ERR,BADARG"); return; }
         strncpy(cfg.stationId, val, sizeof(cfg.stationId));
         strncpy(deviceStationId, cfg.stationId, sizeof(deviceStationId));
+        /* Update BLE broadcast name immediately */
+        {
+            char nameCmd[48];
+            char nameResp[32];
+            snprintf(nameCmd, sizeof(nameCmd), "AT+BLENAME=%s", cfg.stationId);
+            bleSendCmd(nameCmd, nameResp, sizeof(nameResp), 1000);
+            strncpy(bleName, cfg.stationId, sizeof(bleName) - 1);
+            bleName[sizeof(bleName) - 1] = '\0';
+        }
     } else if (strcmp(key, "GAIN") == 0) {
         int v = atoi(val);
         if (v < 0 || v > 24 || (v % 3) != 0) { bleSendLine("$ERR,BADARG"); return; }
