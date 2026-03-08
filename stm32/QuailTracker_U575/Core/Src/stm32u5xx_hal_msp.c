@@ -370,6 +370,28 @@ void HAL_SPI_MspDeInit(SPI_HandleTypeDef* hspi)
 
 /* USER CODE BEGIN 1 */
 
+void HAL_RTC_MspInit(RTC_HandleTypeDef* hrtc)
+{
+  RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
+  if(hrtc->Instance==RTC)
+  {
+    /* Select LSE as RTC clock source (LSE configured in SystemClock_Config) */
+    PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_RTC;
+    PeriphClkInit.RTCClockSelection = RCC_RTCCLKSOURCE_LSE;
+    if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
+    {
+      Error_Handler();
+    }
+
+    __HAL_RCC_RTC_ENABLE();
+    __HAL_RCC_RTCAPB_CLK_ENABLE();
+    __HAL_RCC_RTCAPB_CLKAM_ENABLE();  /* autonomous mode — RTC runs in Stop */
+
+    HAL_NVIC_SetPriority(RTC_IRQn, 0, 0);
+    HAL_NVIC_EnableIRQ(RTC_IRQn);
+  }
+}
+
 void HAL_ADC_MspInit(ADC_HandleTypeDef* hadc)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};

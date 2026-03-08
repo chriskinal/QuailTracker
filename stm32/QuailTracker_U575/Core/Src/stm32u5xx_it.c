@@ -233,6 +233,13 @@ void TIM17_IRQHandler(void)
 }
 
 /* USER CODE BEGIN 1 */
+extern RTC_HandleTypeDef hrtc;
+
+void RTC_IRQHandler(void)
+{
+    HAL_RTCEx_WakeUpTimerIRQHandler(&hrtc);
+}
+
 void EXTI8_IRQHandler(void)
 {
     HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_8);

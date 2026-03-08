@@ -54,7 +54,7 @@ extern "C" {
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
-
+void enterStop2(uint32_t seconds);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
@@ -62,7 +62,7 @@ void Error_Handler(void);
 #define SD_CS_GPIO_Port GPIOA
 
 /* USER CODE BEGIN Private defines */
-#define FW_VERSION "0.8.21"
+#define FW_VERSION "0.8.25"
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

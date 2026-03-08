@@ -61,6 +61,8 @@ SPI_HandleTypeDef hspi1;
 
 ADC_HandleTypeDef hadc1;
 
+RTC_HandleTypeDef hrtc;
+
 /* USER CODE BEGIN PV */
 #define AUDIO_BUF_SIZE 1024
 #define SAMPLE_RATE    48000
@@ -168,6 +170,7 @@ static void MX_USART2_UART_Init(void);
 static void MX_ADF1_Init(void);
 /* USER CODE BEGIN PFP */
 static void MX_ADC1_Init(void);
+static void MX_RTC_Init(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -505,6 +508,7 @@ void printMenu(void)
     printf("R. Toggle Recording\r\n");
     printf("S. Toggle GPS Survey-In (%s)\r\n",
            configGetSurveyCount() > 0 ? "has data" : "no data");
+    printf("Z. Sleep (Stop 2)\r\n");
     printf("================\r\n");
     printf("[%s] > ", isRecording ? "REC" : "IDLE");
     fflush(stdout);
@@ -862,6 +866,9 @@ int main(void)
   /* ADC1 — battery voltage on PC0 / IN1 */
   MX_ADC1_Init();
 
+  /* RTC — for Stop 2 wake-up timer */
+  MX_RTC_Init();
+
   /* Start ADF1 DMA acquisition before scheduler */
   {
     AdfFilterConfig0.DecimationRatio = 64;
@@ -958,9 +965,18 @@ void SystemClock_Config(void)
     Error_Handler();
   }
 
+  /** Configure LSE Drive Capability
+  */
+  HAL_PWR_EnableBkUpAccess();
+  __HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_LOW);
+
   /** Initializes the CPU, AHB and APB buses clocks
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_MSI;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_LSE
+                              |RCC_OSCILLATORTYPE_MSI;
+  RCC_OscInitStruct.LSEState = RCC_LSE_ON_RTC_ONLY;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.MSIState = RCC_MSI_ON;
   RCC_OscInitStruct.MSICalibrationValue = RCC_MSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_4;
@@ -1384,6 +1400,112 @@ uint32_t battReadMv(void)
     if (raw > 0)
         batteryMv = (raw * vddaMv * 2) / 16383;
     return batteryMv;
+}
+
+static void MX_RTC_Init(void)
+{
+    RTC_PrivilegeStateTypeDef privilegeState = {0};
+
+    hrtc.Instance = RTC;
+    hrtc.Init.HourFormat = RTC_HOURFORMAT_24;
+    hrtc.Init.AsynchPrediv = 127;
+    hrtc.Init.SynchPrediv = 255;
+    hrtc.Init.OutPut = RTC_OUTPUT_DISABLE;
+    hrtc.Init.OutPutRemap = RTC_OUTPUT_REMAP_NONE;
+    hrtc.Init.OutPutPolarity = RTC_OUTPUT_POLARITY_HIGH;
+    hrtc.Init.OutPutType = RTC_OUTPUT_TYPE_OPENDRAIN;
+    hrtc.Init.OutPutPullUp = RTC_OUTPUT_PULLUP_NONE;
+    hrtc.Init.BinMode = RTC_BINARY_NONE;
+    if (HAL_RTC_Init(&hrtc) != HAL_OK) {
+        printf("RTC: Init FAILED\r\n");
+        return;
+    }
+
+    privilegeState.rtcPrivilegeFull = RTC_PRIVILEGE_FULL_NO;
+    privilegeState.backupRegisterPrivZone = RTC_PRIVILEGE_BKUP_ZONE_NONE;
+    privilegeState.backupRegisterStartZone2 = RTC_BKP_DR0;
+    privilegeState.backupRegisterStartZone3 = RTC_BKP_DR0;
+    if (HAL_RTCEx_PrivilegeModeSet(&hrtc, &privilegeState) != HAL_OK) {
+        printf("RTC: Privilege FAILED\r\n");
+        return;
+    }
+
+    /* Initial wake-up timer config (overridden at runtime by enterStop2) */
+    if (HAL_RTCEx_SetWakeUpTimer_IT(&hrtc, 0, RTC_WAKEUPCLOCK_RTCCLK_DIV16, 0) != HAL_OK) {
+        printf("RTC: WakeUp FAILED\r\n");
+        return;
+    }
+
+    printf("RTC: OK (LSE 32.768kHz)\r\n");
+}
+
+void enterStop2(uint32_t seconds)
+{
+    if (seconds == 0 || seconds > 65535) return;
+
+    uint8_t wasAudioStarted = audioStarted;
+
+    /* Stop ADF1 DMA if running */
+    if (audioStarted) {
+        extern MDF_HandleTypeDef AdfHandle0;
+        HAL_MDF_AcqStop_DMA(&AdfHandle0);
+        audioStarted = 0;
+    }
+
+    /* Disable UART RXNE interrupts */
+    __HAL_UART_DISABLE_IT(&husart1, UART_IT_RXNE);
+    __HAL_UART_DISABLE_IT(&husart2, UART_IT_RXNE);
+
+    /* Disable SysTick */
+    SysTick->CTRL &= ~(SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk);
+
+    /* Deactivate previous wake-up timer, then reconfigure for requested seconds.
+     * Use WP disable/enable around HAL calls to work around STM32U5 HAL v1.8.0
+     * which doesn't manage write protection in SetWakeUpTimer_IT. */
+    __HAL_RTC_WRITEPROTECTION_DISABLE(&hrtc);
+    HAL_RTCEx_DeactivateWakeUpTimer(&hrtc);
+    HAL_RTCEx_SetWakeUpTimer_IT(&hrtc, seconds - 1,
+                                 RTC_WAKEUPCLOCK_CK_SPRE_16BITS, 0);
+    __HAL_RTC_WRITEPROTECTION_ENABLE(&hrtc);
+
+    /* EXTI line 19 = RTC wake-up timer (configurable event on U5) */
+    EXTI->RTSR1 |= EXTI_RTSR1_RT19;
+    EXTI->IMR1  |= EXTI_IMR1_IM19;
+    EXTI->RPR1   = EXTI_RPR1_RPIF19;
+
+    /* Enter Stop 2 */
+    HAL_PWREx_EnterSTOP2Mode(PWR_STOPENTRY_WFI);
+
+    /* --- CPU resumes here after RTC wake-up --- */
+
+    /* Restore PLL / 160MHz system clock */
+    SystemClock_Config();
+
+    /* Re-enable SysTick */
+    SysTick->CTRL |= SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk;
+
+    /* Deactivate RTC wake-up timer */
+    __HAL_RTC_WRITEPROTECTION_DISABLE(&hrtc);
+    HAL_RTCEx_DeactivateWakeUpTimer(&hrtc);
+    __HAL_RTC_WRITEPROTECTION_ENABLE(&hrtc);
+
+    /* Re-enable UART RXNE interrupts */
+    __HAL_UART_ENABLE_IT(&husart1, UART_IT_RXNE);
+    __HAL_UART_ENABLE_IT(&husart2, UART_IT_RXNE);
+
+    /* Restart ADF1 DMA if it was running */
+    if (wasAudioStarted) {
+        extern MDF_HandleTypeDef AdfHandle0;
+        extern MDF_FilterConfigTypeDef AdfFilterConfig0;
+        extern int32_t audioBuffer[];
+        MDF_DmaConfigTypeDef dmaConfig = {0};
+        dmaConfig.Address = (uint32_t)audioBuffer;
+        dmaConfig.DataLength = AUDIO_BUF_SIZE * 4;
+        dmaConfig.MsbOnly = DISABLE;
+        if (HAL_MDF_AcqStart_DMA(&AdfHandle0, &AdfFilterConfig0, &dmaConfig) == HAL_OK) {
+            audioStarted = 1;
+        }
+    }
 }
 
 /* ADF1 DMA callbacks — copy PCM data into ring buffer directly from ISR.

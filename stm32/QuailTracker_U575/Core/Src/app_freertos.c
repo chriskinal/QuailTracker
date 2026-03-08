@@ -945,6 +945,45 @@ void StartCliTask(void *argument)
         printMenu();
         break;
 
+      case 'z':
+      case 'Z':
+        if (isRecording) {
+          printf("Stop recording first!\r\n");
+        } else {
+          printf("Sleep duration (seconds, 1-65535) > ");
+          fflush(stdout);
+          char sleepBuf[8];
+          int si = 0;
+          for (;;) {
+            int sc = getChar(osWaitForever);
+            if (sc == '\r' || sc == '\n') break;
+            if (sc == 0x7f || sc == '\b') {
+              if (si > 0) { si--; printf("\b \b"); fflush(stdout); }
+              continue;
+            }
+            if (sc >= '0' && sc <= '9' && si < 6) {
+              sleepBuf[si++] = (char)sc;
+              printf("%c", sc); fflush(stdout);
+            }
+          }
+          sleepBuf[si] = '\0';
+          printf("\r\n");
+          uint32_t sleepSec = (uint32_t)atoi(sleepBuf);
+          if (sleepSec < 1 || sleepSec > 65535) {
+            printf("Invalid (1-65535)\r\n");
+          } else {
+            printf("Entering Stop 2 for %lu seconds...\r\n",
+                   (unsigned long)sleepSec);
+            fflush(stdout);
+            osDelay(50);
+            enterStop2(sleepSec);
+            printf("\r\nWoke from Stop 2 (%lu seconds)\r\n",
+                   (unsigned long)sleepSec);
+          }
+        }
+        printMenu();
+        break;
+
       case '\r':
       case '\n':
         break;
