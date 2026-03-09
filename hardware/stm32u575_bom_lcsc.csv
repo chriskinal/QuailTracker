@@ -11,7 +11,7 @@ Q1,XC6220B331MR-G,SOT-23-5,C86534,1,LDO 3.3V 20mV dropout 8uA Iq 1A (Torex)
 C1-C10,100nF X7R 16V,0402,C1525,10,Decoupling (Samsung CL05B104KO5NNNC)
 # Decoupling - 10uF bulk
 C11,10uF X5R 25V,0805,C15850,1,VDD bulk (near pin 11)
-C17,10uF X5R 25V,0805,C15850,1,GPS VCC decoupling (U2 pin 8)
+C17,10uF X5R 25V,0805,C15850,1,SW_VCC decoupling (switched peripheral rail)
 # VCAP - internal LDO output bypass (non-SMPS variant)
 # Pin 48 (VCAP) to GND — required for internal 1.1V LDO regulator
 C12,4.7uF X5R 10V,0402,C23733,1,VCAP pin 48 internal LDO bypass
@@ -22,7 +22,7 @@ C13-C16,1uF X5R 25V,0402,C52923,4,Analog + LDO decoupling
 X1,32.768kHz NX3215SA,SMD3215,C156244,1,LSE RTC crystal NDK 14pF CL
 # Crystal load caps - using STM32U5 internal trimming caps so external caps optional
 # GPS Power Control
-Q2,SI2301CDS P-FET,SOT-23,C10487,1,GPS VCC switch (BASIC)
+Q2,SI2301CDS P-FET,SOT-23,C10487,1,SW_VCC peripheral power switch (BASIC)
 Q3,MMBT3904 NPN,SOT-23,C20526,1,GPS FET gate drive (BASIC)
 # GPS RF — Active Antenna Bias Tee
 L1,47nH multilayer,0402,C97998,1,Bias tee inductor VCC_RF→RF_IN (Murata LQG15HS47NJ02D)

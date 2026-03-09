@@ -972,6 +972,16 @@ void StartCliTask(void *argument)
           if (sleepSec < 1 || sleepSec > 65535) {
             printf("Invalid (1-65535)\r\n");
           } else {
+            /* Unmount SD before sleep to prevent FAT corruption */
+            uint8_t wasMounted = sdMounted;
+            if (sdMounted) {
+              extern char USERPath[];
+              osMutexAcquire(fileMtxHandle, osWaitForever);
+              f_mount(NULL, USERPath, 0);
+              USER_disk_deinit();
+              sdMounted = 0;
+              osMutexRelease(fileMtxHandle);
+            }
             printf("Entering Stop 2 for %lu seconds...\r\n",
                    (unsigned long)sleepSec);
             fflush(stdout);
@@ -979,6 +989,19 @@ void StartCliTask(void *argument)
             enterStop2(sleepSec);
             printf("\r\nWoke from Stop 2 (%lu seconds)\r\n",
                    (unsigned long)sleepSec);
+            /* Remount SD after wake */
+            if (wasMounted) {
+              extern FATFS USERFatFS;
+              extern char USERPath[];
+              osMutexAcquire(fileMtxHandle, osWaitForever);
+              if (f_mount(&USERFatFS, USERPath, 1) == FR_OK) {
+                sdMounted = 1;
+                printf("SD: remounted OK\r\n");
+              } else {
+                printf("SD: remount failed\r\n");
+              }
+              osMutexRelease(fileMtxHandle);
+            }
           }
         }
         printMenu();

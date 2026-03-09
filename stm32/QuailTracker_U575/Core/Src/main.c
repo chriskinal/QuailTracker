@@ -1456,6 +1456,29 @@ void enterStop2(uint32_t seconds)
     __HAL_UART_DISABLE_IT(&husart1, UART_IT_RXNE);
     __HAL_UART_DISABLE_IT(&husart2, UART_IT_RXNE);
 
+    /* Set all peripheral-facing GPIOs to analog (hi-Z) to prevent
+     * back-powering unpowered modules through ESD protection diodes.
+     * MODER = 0b11 per pin = analog mode (highest impedance). */
+    uint32_t moder_a = GPIOA->MODER;
+    uint32_t moder_b = GPIOB->MODER;
+    GPIOA->MODER |= (0x3u << (2*2))   /* PA2  USART2_TX (BLE RX)  */
+                   | (0x3u << (3*2))   /* PA3  USART2_RX (BLE TX)  */
+                   | (0x3u << (4*2))   /* PA4  SD_CS               */
+                   | (0x3u << (5*2))   /* PA5  SPI1_SCK  (SD CLK)  */
+                   | (0x3u << (6*2))   /* PA6  SPI1_MISO (SD MISO) */
+                   | (0x3u << (7*2))   /* PA7  SPI1_MOSI (SD MOSI) */
+                   | (0x3u << (9*2))   /* PA9  USART1_TX (GPS RX)  */
+                   | (0x3u << (10*2)); /* PA10 USART1_RX (GPS TX)  */
+    GPIOB->MODER |= (0x3u << (6*2))   /* PB6  I2C1_SCL  (SHT30)  */
+                   | (0x3u << (7*2));  /* PB7  I2C1_SDA  (SHT30)  */
+    /* Drive GPS control pins LOW to prevent ESD back-powering SW_VCC.
+     * Keep as outputs (don't change MODER) — floating PD12 turns on
+     * the power switch, floating PD14 glitches the GPS back on. */
+    uint32_t odr_d = GPIOD->ODR;
+    GPIOD->BSRR = (1u << (12+16))   /* PD12 GPS_EN    → LOW */
+                 | (1u << (14+16))   /* PD14 GPS_ON/OFF → LOW */
+                 | (1u << (15+16));  /* PD15 GPS_nRESET → LOW */
+
     /* Disable SysTick */
     SysTick->CTRL &= ~(SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk);
 
@@ -1488,6 +1511,11 @@ void enterStop2(uint32_t seconds)
     __HAL_RTC_WRITEPROTECTION_DISABLE(&hrtc);
     HAL_RTCEx_DeactivateWakeUpTimer(&hrtc);
     __HAL_RTC_WRITEPROTECTION_ENABLE(&hrtc);
+
+    /* Restore peripheral GPIO states (saved before sleep) */
+    GPIOD->ODR = odr_d;
+    GPIOA->MODER = moder_a;
+    GPIOB->MODER = moder_b;
 
     /* Re-enable UART RXNE interrupts */
     __HAL_UART_ENABLE_IT(&husart1, UART_IT_RXNE);

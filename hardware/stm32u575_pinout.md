@@ -1,4 +1,4 @@
-# STM32U575VGT6 Production Board — Pin Assignments (V2)
+# STM32U575VGT6 Production Board — Pin Assignments (V3)
 
 MCU: STM32U575VGT6, LQFP-100, non-SMPS (LDO) variant
 Datasheet: DS13737 Rev 10 (July 2024), **Figure 15 — LQFP100 pinout**
@@ -33,7 +33,7 @@ C5270988 is the non-SMPS variant — uses internal LDO, no external inductor.
 | GPS PPS | PA8 | 67 | GPIO | EXTI input, rising | ATGM336H 1PPS (pin 4) |
 | GPS ON/OFF | PD14 | 61 | GPIO | Output | ATGM336H ON/OFF (pin 5) |
 | GPS RESET | PD15 | 62 | GPIO | Output, active low | ATGM336H nRESET (pin 9) |
-| GPS Power EN | PD12 | 59 | GPIO | Output | HIGH=GPS on, LOW=GPS off |
+| SW_VCC EN | PD12 | 59 | GPIO | Output | HIGH=peripherals on, LOW=off |
 | Status LED | PD13 | 60 | GPIO | Output | Via 1k R9 to LED1 |
 | SWO Trace | PB3 | 89 | AF0 | TRACESWO | Serial Wire Output for debug trace |
 | SWDIO | PA13 | 72 | AF0 | SWD debug | Default after reset |
@@ -109,9 +109,9 @@ GPS module (U2, ATGM336H-5N31 LCC-18 SMD, 10.1x9.7mm):
 | 3 | RXD | I | PA9 / USART1_TX | Command input |
 | 4 | 1PPS | O | PA8 / EXTI | UTC-aligned pulse-per-second |
 | 5 | ON/OFF | I | PD14 (GPS_WAKE) | Shutdown control (low=off) |
-| 6 | VBAT | I | 3V3 (always-on) | RTC/SRAM backup, NOT switched GPS_VCC |
+| 6 | VBAT | I | 3V3 (always-on) | RTC/SRAM backup, NOT switched SW_VCC |
 | 7 | NC | - | NC | |
-| 8 | VCC | I | GPS_VCC (switched) | Main power 2.7-3.6V via Q2 P-FET |
+| 8 | VCC | I | SW_VCC (switched) | Main power 2.7-3.6V via Q2 P-FET |
 | 9 | nRESET | I | PD15 (GPS_RST) | Active low, internal pull-up |
 | 10 | GND | - | GND | |
 | 11 | RF_IN | I | L1 / J1 (antenna) | Via bias tee from U.FL connector |
@@ -126,7 +126,7 @@ GPS module (U2, ATGM336H-5N31 LCC-18 SMD, 10.1x9.7mm):
 **RF bias tee** (active antenna power injection, per ATGM336H datasheet §2.7.1):
 - L1 (47nH): connects VCC_RF (pin 14) to RF_IN (pin 11) — injects DC to power antenna LNA
 - J1 (U.FL): connects to RF_IN side of L1 — antenna coax attaches here
-- C17 (10uF): GPS VCC decoupling on pin 8
+- C17 (10uF): SW_VCC decoupling on GPS pin 8
 
 ### USART2 — BLE Module (PB-03F)
 
@@ -137,19 +137,21 @@ Default baud rate: 115200. 3.3V logic.
 |------------|--------|---------|
 | TX | BLE→MCU | PA3 / USART2_RX |
 | RX | MCU→BLE | PA2 / USART2_TX |
-| VCC | 3.3V | Power rail |
+| VCC | 3.3V | SW_VCC (switched rail) |
 | GND | Ground | GND |
 
 ### SPI1 — SD Card
 
 PA5/PA6/PA7 are the boot-default SPI1 pins. PA4 used as GPIO chip select.
 SD card operates in SPI mode. Max SPI clock ~25MHz for SD.
+CARD1 VDD on SW_VCC (switched rail) — power cut during Stop 2 sleep.
 
 ### I2C1 — SHT30
 
 PB6/PB7 are the boot-default I2C1 pins.
 SHT30 address: 0x44 (ADDR pin low).
 4.7k pull-ups on SDA and SCL to 3.3V.
+SHT30 VDD (H1.1) on SW_VCC (switched rail) — power cut during Stop 2 sleep.
 
 ### ADC1 — Battery Monitoring
 
@@ -172,7 +174,8 @@ Note: PB11 is NOT bonded out on LQFP100 (neither SMPS nor non-SMPS variant).
 1. **Power** — Q1 (LDO), C1-C16 (decoupling), CN1 (battery)
 2. **MCU** — U1 (STM32U575VGT6), X1 (LSE crystal), R6 (BOOT0 pull-down)
 3. **Audio** — CN2 (JST PH 4-pin to mic breakout: CLK, DATA, VDD, GND)
-4. **GPS** — U2 (ATGM336H-5N31), Q2 (P-FET switch), Q3 (gate drive), R1/R2 (10k), L1 (47nH bias tee), J1 (U.FL antenna), C17 (10uF GPS decoupling)
+4. **GPS** — U2 (ATGM336H-5N31), Q2 (P-FET switch for SW_VCC), Q3 (gate drive), R1/R2 (10k), L1 (47nH bias tee), J1 (U.FL antenna), C17 (10uF SW_VCC decoupling)
+
 5. **Storage** — CARD1 (MicroSD slot), SPI1 on PA4-PA7
 6. **BLE** — COMM1 (PB-03F module), USART2 on PA2/PA3
 7. **Sensor** — H1 (4-pin header to off-board SHT30), R3/R4 (I2C pull-ups)
