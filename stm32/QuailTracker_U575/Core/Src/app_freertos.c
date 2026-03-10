@@ -2164,10 +2164,17 @@ static void bleHandleStatusEx(const char *tag)
     bleSendLine("id=%s", cfg.stationId);
     bleSendLine("fw=" FW_VERSION);
 
-    /* Battery -not yet implemented */
-    bleSendLine("bat_v=0");
-    bleSendLine("bat_pct=0");
-    bleSendLine("bat_lvl=0");
+    /* Battery */
+    {
+        uint32_t mv = battReadMv();
+        int pct = (int)(mv - 3000) * 100 / 1200;
+        if (pct < 0) pct = 0;
+        if (pct > 100) pct = 100;
+        int lvl = (pct <= 5) ? 2 : (pct <= 20) ? 1 : 0;  /* 0=ok, 1=low, 2=critical */
+        bleSendLine("bat_v=%lu.%03lu", (unsigned long)(mv / 1000), (unsigned long)(mv % 1000));
+        bleSendLine("bat_pct=%d", pct);
+        bleSendLine("bat_lvl=%d", lvl);
+    }
 
     /* GPS */
     bleSendLine("gps_valid=%d", gpsData.valid);
@@ -2292,9 +2299,16 @@ static void bleHandleStatusPage(int page)
     case 0: /* Device + battery */
         bleSendLine("id=%s", cfg.stationId);
         bleSendLine("fw=" FW_VERSION);
-        bleSendLine("bat_v=0");
-        bleSendLine("bat_pct=0");
-        bleSendLine("bat_lvl=0");
+        {
+            uint32_t mv = battReadMv();
+            int pct = (int)(mv - 3000) * 100 / 1200;
+            if (pct < 0) pct = 0;
+            if (pct > 100) pct = 100;
+            int lvl = (pct <= 5) ? 2 : (pct <= 20) ? 1 : 0;
+            bleSendLine("bat_v=%lu.%03lu", (unsigned long)(mv / 1000), (unsigned long)(mv % 1000));
+            bleSendLine("bat_pct=%d", pct);
+            bleSendLine("bat_lvl=%d", lvl);
+        }
         bleSendLine("ble_ready=%d", bleReady ? 1 : 0);
         bleSendLine("ble_name=%s", bleName);
         bleSendLine("ble_addr=%s", bleAddr);

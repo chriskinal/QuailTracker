@@ -53,8 +53,8 @@ public partial class HealthViewModel : ObservableObject
 
     // SD Card
     [ObservableProperty] private string _sdStatus = "Not Mounted";
-    [ObservableProperty] private string _sdUsage = "-- / -- GB";
-    [ObservableProperty] private int _sdUsagePercent = 0;
+    [ObservableProperty] private string _sdFree = "-- GB free";
+    [ObservableProperty] private int _sdFreePercent = 0;
     [ObservableProperty] private string _sdColor = "#808080";
 
     // BLE Connection
@@ -128,18 +128,17 @@ public partial class HealthViewModel : ObservableObject
         SdStatus = status.SdCardMounted ? "Mounted" : "Not Mounted";
         if (status.SdCardMounted)
         {
-            var totalGb = status.SdTotalBytes / (1024.0 * 1024.0 * 1024.0);
-            var usedGb = status.SdUsedBytes / (1024.0 * 1024.0 * 1024.0);
-            SdUsage = $"{usedGb:F1} / {totalGb:F1} GB";
-            SdUsagePercent = status.SdTotalBytes > 0
-                ? (int)(100 * status.SdUsedBytes / status.SdTotalBytes)
+            var freeGb = status.SdFreeBytes / (1024.0 * 1024.0 * 1024.0);
+            SdFree = $"{freeGb:F1} GB free";
+            SdFreePercent = status.SdTotalBytes > 0
+                ? (int)(100 * status.SdFreeBytes / status.SdTotalBytes)
                 : 0;
-            SdColor = SdUsagePercent > 90 ? "#F44336" : "#4CAF50";
+            SdColor = SdFreePercent < 10 ? "#F44336" : SdFreePercent < 25 ? "#FF9800" : "#4CAF50";
         }
         else
         {
-            SdUsage = "-- / -- GB";
-            SdUsagePercent = 0;
+            SdFree = "-- GB free";
+            SdFreePercent = 0;
             SdColor = "#F44336";
         }
 

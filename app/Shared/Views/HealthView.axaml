@@ -56,13 +56,13 @@
                         </Border>
                     </Grid>
                     <Grid ColumnDefinitions="*,Auto">
-                        <ProgressBar Value="{Binding SdUsagePercent}" Maximum="100"
+                        <ProgressBar Value="{Binding SdFreePercent}" Maximum="100"
                                      Height="8" CornerRadius="4"
                                      Foreground="{Binding SdColor}" />
-                        <TextBlock Grid.Column="1" Text="{Binding SdUsagePercent, StringFormat={}{0}%}"
-                                   Margin="8,0,0,0" Foreground="White" />
+                        <TextBlock Grid.Column="1" Text="{Binding SdFreePercent, StringFormat={}{0}%}"
+                                   Margin="8,0,0,0" FontWeight="Bold" Foreground="White" />
                     </Grid>
-                    <TextBlock Text="{Binding SdUsage}" Classes="DataLabel" />
+                    <TextBlock Text="{Binding SdFree}" Classes="DataLabel" />
                 </StackPanel>
             </Border>
 

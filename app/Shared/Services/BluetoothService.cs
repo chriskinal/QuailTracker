@@ -37,15 +37,19 @@ namespace QuailTracker.Shared.Services;
 /// </summary>
 public class BluetoothService : IBluetoothService
 {
-    // HM-19 / PB-03F transparent UART UUIDs
-    private static readonly Guid ServiceUuid =
+    // Known service UUIDs to SKIP during transparent UART discovery.
+    // 0x180A = Device Information (read-only), FF01 = PB-03F control (not passthrough).
+    private static readonly string SkipServicePrefix180A = "0000180a-";
+    private static readonly string SkipServicePrefix5833 = "5833ff01-";  // PB-03F FF01 control svc
+
+    // HM-19 uses FFE0/FFE1 on standard Bluetooth Base UUID (single combined char).
+    private static readonly Guid HmServiceUuid =
         Guid.Parse("0000FFE0-0000-1000-8000-00805F9B34FB");
-    private static readonly Guid CharacteristicUuid =
-        Guid.Parse("0000FFE1-0000-1000-8000-00805F9B34FB");
 
     private readonly IAdapter _adapter;
     private IDevice? _device;
-    private ICharacteristic? _characteristic;
+    private ICharacteristic? _writeCharacteristic;  // TX: app → device
+    private ICharacteristic? _notifyCharacteristic; // RX: device → app
     private int _mtu = 20; // BLE default, updated after negotiation
 
     // RX line assembly
@@ -71,10 +75,14 @@ public class BluetoothService : IBluetoothService
     public ConnectionState CurrentState { get; private set; } = ConnectionState.Disconnected;
     public string? ConnectedDeviceName { get; private set; }
 
+    // Discovered devices during scan (for device picker)
+    private readonly Dictionary<Guid, (DiscoveredDevice Info, IDevice Device)> _discoveredDevices = new();
+
     public event EventHandler<ConnectionState>? ConnectionStateChanged;
     public event EventHandler<DeviceStatus>? StatusReceived;
     public event EventHandler<DeviceConfig>? ConfigReceived;
     public event EventHandler<DetectionEvent>? DetectionReceived;
+    public event EventHandler<DiscoveredDevice>? DeviceDiscovered;
 
     public BluetoothService()
     {
@@ -97,7 +105,6 @@ public class BluetoothService : IBluetoothService
         try
         {
             await _adapter.StartScanningForDevicesAsync(
-                serviceUuids: new[] { ServiceUuid },
                 cancellationToken: _scanCts.Token);
         }
         catch (OperationCanceledException)
@@ -123,37 +130,13 @@ public class BluetoothService : IBluetoothService
             await _adapter.ConnectToDeviceAsync(found, connectParams);
             _device = found;
 
-            // Request larger MTU for efficient writes
             _mtu = await _device.RequestMtuAsync(185);
-
-            // Discover service and characteristic
-            var service = await _device.GetServiceAsync(ServiceUuid);
-            if (service == null)
-                throw new InvalidOperationException("UART service not found");
-
-            _characteristic = await service.GetCharacteristicAsync(CharacteristicUuid);
-            if (_characteristic == null)
-                throw new InvalidOperationException("UART characteristic not found");
-
-            // Subscribe to notifications
-            _characteristic.ValueUpdated += OnValueUpdated;
-            await _characteristic.StartUpdatesAsync();
+            await DiscoverUartCharacteristicsAsync(CancellationToken.None);
 
             ConnectedDeviceName = _device.Name ?? "QuailTracker";
             SetState(ConnectionState.Connected);
 
-            // Verify connection with PING
-            try
-            {
-                var pong = await SendRawAsync("$PING");
-                // $PONG expected — if we got here, link is working
-            }
-            catch
-            {
-                // PING timeout is non-fatal; device may be busy
-            }
-
-            // Auto-request status
+            try { await SendRawAsync("$PING"); } catch { }
             _ = RequestStatusAsync();
         }
         catch
@@ -167,9 +150,194 @@ public class BluetoothService : IBluetoothService
         void OnDiscovered(object? s, DeviceEventArgs e)
         {
             found = e.Device;
-            // Stop scanning — we connect to the first device found
             _scanCts?.Cancel();
         }
+    }
+
+    public async Task StartScanAsync()
+    {
+        if (CurrentState != ConnectionState.Disconnected)
+            return;
+
+        SetState(ConnectionState.Scanning);
+        _scanCts = new CancellationTokenSource();
+        _discoveredDevices.Clear();
+
+        _adapter.DeviceDiscovered += OnScanDiscovered;
+        // DeviceAdvertised fires for SUBSEQUENT advertisements of already-known
+        // devices.  On iOS, the first DeviceDiscovered uses cached CBPeripheral
+        // data (stale name, no local name in ad records).  DeviceAdvertised
+        // carries fresh scan-response data including the current local name.
+        _adapter.DeviceAdvertised += OnScanDiscovered;
+        try
+        {
+            await _adapter.StartScanningForDevicesAsync(
+                allowDuplicatesKey: true,
+                cancellationToken: _scanCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Scan stopped by user or timeout
+        }
+        finally
+        {
+            _adapter.DeviceDiscovered -= OnScanDiscovered;
+            _adapter.DeviceAdvertised -= OnScanDiscovered;
+        }
+
+        if (CurrentState == ConnectionState.Scanning)
+            SetState(ConnectionState.Disconnected);
+    }
+
+    private void OnScanDiscovered(object? sender, DeviceEventArgs e)
+    {
+        var dev = e.Device;
+
+        // Prefer the advertisement local name over dev.Name — iOS caches
+        // CBPeripheral.Name across sessions, so it can return a stale name
+        // (e.g. "AI-Thinker") even after the device renamed to "QT001".
+        var name = dev.Name ?? "Unknown";
+        var recs = dev.AdvertisementRecords;
+        if (recs != null)
+        {
+            foreach (var rec in recs)
+            {
+                if (rec.Type == Plugin.BLE.Abstractions.AdvertisementRecordType.CompleteLocalName
+                    || rec.Type == Plugin.BLE.Abstractions.AdvertisementRecordType.ShortLocalName)
+                {
+                    var advName = Encoding.UTF8.GetString(rec.Data).TrimEnd('\0');
+                    if (advName.Length > 0)
+                    {
+                        name = advName;
+                        break;
+                    }
+                }
+            }
+        }
+
+        var rssi = dev.Rssi;
+        var info = new DiscoveredDevice(dev.Id, name, rssi, DateTimeOffset.Now);
+        _discoveredDevices[dev.Id] = (info, dev);
+        DeviceDiscovered?.Invoke(this, info);
+    }
+
+    public async Task ConnectToDeviceAsync(DiscoveredDevice device)
+    {
+        // Explicitly stop the adapter's scan and await completion.
+        // StopScan() only cancels the CTS; the adapter may still be scanning
+        // at the CoreBluetooth level.  On iOS, connecting while a scan with
+        // allowDuplicatesKey:true is active can silently fail.
+        _scanCts?.Cancel();
+        if (_adapter.IsScanning)
+            await _adapter.StopScanningForDevicesAsync();
+
+        // Let CoreBluetooth fully settle after stopping the scan.
+        await Task.Delay(500);
+
+        SetState(ConnectionState.Connecting);
+
+        // Wrap the entire connect + service-discovery sequence in a 15s timeout.
+        // Without this, any step (connect, MTU, service discovery) can hang forever.
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+
+        try
+        {
+            // Use ConnectToKnownDeviceAsync which connects by UUID, retrieving a
+            // fresh CBPeripheral on iOS.  This avoids stale IDevice references that
+            // can occur when allowDuplicatesKey scanning fires DeviceAdvertised
+            // multiple times, replacing the dictionary entry.
+            var connectParams = new ConnectParameters(autoConnect: false, forceBleTransport: true);
+            _device = await _adapter.ConnectToKnownDeviceAsync(device.Id, connectParams, timeoutCts.Token);
+
+            timeoutCts.Token.ThrowIfCancellationRequested();
+            _mtu = await _device.RequestMtuAsync(185);
+
+            await DiscoverUartCharacteristicsAsync(timeoutCts.Token);
+
+            ConnectedDeviceName = device.Name is { Length: > 0 } ? device.Name : (_device.Name ?? "QuailTracker");
+            SetState(ConnectionState.Connected);
+
+            try { await SendRawAsync("$PING"); } catch { }
+            _ = RequestStatusAsync();
+        }
+        catch
+        {
+            await CleanupConnection();
+            SetState(ConnectionState.Disconnected);
+        }
+    }
+
+    /// <summary>
+    /// Discover the UART write and notify characteristics on the connected device.
+    /// Strategy: try HM-19 service (FFE0) first, then scan all services skipping
+    /// known non-UART ones (180A Device Info, 5833FF01 PB-03F control).
+    /// PB-03F transparent UART is on the PhyPlus 55535343 service with split chars.
+    /// </summary>
+    private async Task DiscoverUartCharacteristicsAsync(CancellationToken ct)
+    {
+        if (_device == null)
+            throw new InvalidOperationException("Not connected");
+
+        // Try HM-19 known service first (single combined characteristic)
+        ct.ThrowIfCancellationRequested();
+        var hmService = await _device.GetServiceAsync(HmServiceUuid);
+        if (hmService != null)
+        {
+            var chars = await hmService.GetCharacteristicsAsync();
+            foreach (var ch in chars)
+            {
+                if (ch.CanWrite && ch.CanUpdate)
+                {
+                    _writeCharacteristic = ch;
+                    _notifyCharacteristic = ch;
+                    break;
+                }
+            }
+        }
+
+        // Scan all services for transparent UART (skip known non-UART services)
+        if (_writeCharacteristic == null || _notifyCharacteristic == null)
+        {
+            var services = await _device.GetServicesAsync();
+            foreach (var svc in services)
+            {
+                ct.ThrowIfCancellationRequested();
+                var svcId = svc.Id.ToString().ToLowerInvariant();
+
+                // Skip Device Information and PB-03F control service
+                if (svcId.StartsWith(SkipServicePrefix180A) ||
+                    svcId.StartsWith(SkipServicePrefix5833))
+                    continue;
+
+                var chars = await svc.GetCharacteristicsAsync();
+                ICharacteristic? w = null, n = null;
+                foreach (var ch in chars)
+                {
+                    if (ch.CanWrite && ch.CanUpdate) { w = ch; n = ch; }
+                    else if (ch.CanWrite) w = ch;
+                    else if (ch.CanUpdate) n = ch;
+                }
+
+                if (w != null && n != null)
+                {
+                    _writeCharacteristic = w;
+                    _notifyCharacteristic = n;
+                    break;
+                }
+            }
+        }
+
+        if (_writeCharacteristic == null)
+            throw new InvalidOperationException("No writable characteristic found");
+        if (_notifyCharacteristic == null)
+            throw new InvalidOperationException("No notifiable characteristic found");
+
+        // Use WriteWithoutResponse if the characteristic supports it.
+        if (_writeCharacteristic.Properties.HasFlag(CharacteristicPropertyType.WriteWithoutResponse))
+            _writeCharacteristic.WriteType = CharacteristicWriteType.WithoutResponse;
+
+        _notifyCharacteristic.ValueUpdated += OnValueUpdated;
+        await _notifyCharacteristic.StartUpdatesAsync();
     }
 
     public void StopScan()
@@ -460,7 +628,7 @@ public class BluetoothService : IBluetoothService
         await _cmdLock.WaitAsync();
         try
         {
-            if (_characteristic == null)
+            if (_writeCharacteristic == null)
                 throw new InvalidOperationException("Not connected");
 
             _responseTcs = new TaskCompletionSource<string>(
@@ -475,7 +643,7 @@ public class BluetoothService : IBluetoothService
                 var len = Math.Min(chunkSize, bytes.Length - offset);
                 var chunk = new byte[len];
                 Array.Copy(bytes, offset, chunk, 0, len);
-                await _characteristic.WriteAsync(chunk);
+                await _writeCharacteristic.WriteAsync(chunk);
             }
 
             // Await response with 5s timeout
@@ -630,7 +798,8 @@ public class BluetoothService : IBluetoothService
             // Unexpected disconnect
             _responseTcs?.TrySetCanceled();
             _device = null;
-            _characteristic = null;
+            _writeCharacteristic = null;
+            _notifyCharacteristic = null;
             ConnectedDeviceName = null;
             SetState(ConnectionState.Disconnected);
         }
@@ -640,16 +809,17 @@ public class BluetoothService : IBluetoothService
     {
         _responseTcs?.TrySetCanceled();
 
-        if (_characteristic != null)
+        if (_notifyCharacteristic != null)
         {
             try
             {
-                _characteristic.ValueUpdated -= OnValueUpdated;
-                await _characteristic.StopUpdatesAsync();
+                _notifyCharacteristic.ValueUpdated -= OnValueUpdated;
+                await _notifyCharacteristic.StopUpdatesAsync();
             }
             catch { /* best-effort */ }
-            _characteristic = null;
+            _notifyCharacteristic = null;
         }
+        _writeCharacteristic = null;
 
         if (_device != null)
         {
@@ -735,8 +905,8 @@ public class BluetoothService : IBluetoothService
             PpsAgeMs = GetLong(d, "pps_ms"),
             GpsTime = gpsTime,
 
-            Temperature = GetFloat(d, "temp"),
-            Humidity = GetFloat(d, "hum"),
+            Temperature = GetFloat(d, "temp") / 100f,
+            Humidity = GetFloat(d, "hum") / 100f,
 
             SdCardMounted = GetBool(d, "sd"),
             SdTotalBytes = sdTotal,
