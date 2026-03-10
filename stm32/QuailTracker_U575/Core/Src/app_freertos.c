@@ -50,7 +50,7 @@ typedef struct {
 /* ---- Flash-persisted device configuration ---- */
 #define CONFIG_MAGIC      0x51544346   /* "QTCF" */
 #define CONFIG_VERSION    7
-#define CONFIG_FLASH_ADDR 0x080FE000   /* Bank 2, last page (1MB flash: pages 0-63 per bank) */
+#define CONFIG_FLASH_ADDR 0x080FE000   /* Last page of Bank 1 on 2MB (Nucleo ZI), Bank 2 page 63 on 1MB (VGT6) */
 
 typedef struct __attribute__((packed, aligned(16))) {
     uint32_t magic;
@@ -237,7 +237,7 @@ static volatile uint8_t bleLiveProbeReady;
 static char bleLiveProbeResp[64];
 
 /* Flash-persisted device config (loaded at BLE task start) */
-static device_config_t cfg;
+static device_config_t cfg __attribute__((aligned(16)));
 
 /* ---- BPF filter state (reset on recording start) ---- */
 static int32_t  hpfPrevIn  = 0;
@@ -2093,13 +2093,24 @@ static int configSave(void)
 {
     cfg.crc32 = configComputeCrc(&cfg);
 
+    /* ICACHE must be disabled during flash erase/program on STM32U5 */
+    HAL_ICACHE_Disable();
+
     HAL_FLASH_Unlock();
 
-    /* Erase page 127 of Bank 2 */
+    /* Clear any sticky error flags from previous operations */
+    __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_ALL_ERRORS);
+
+    /* Compute bank and page from address (works on both 1MB VGT6 and 2MB ZIT6Q) */
     FLASH_EraseInitTypeDef erase = {0};
     erase.TypeErase = FLASH_TYPEERASE_PAGES;
-    erase.Banks = FLASH_BANK_2;
-    erase.Page = 127;
+    if (CONFIG_FLASH_ADDR < FLASH_BASE + FLASH_BANK_SIZE) {
+        erase.Banks = FLASH_BANK_1;
+        erase.Page = (CONFIG_FLASH_ADDR - FLASH_BASE) / FLASH_PAGE_SIZE;
+    } else {
+        erase.Banks = FLASH_BANK_2;
+        erase.Page = (CONFIG_FLASH_ADDR - FLASH_BASE - FLASH_BANK_SIZE) / FLASH_PAGE_SIZE;
+    }
     erase.NbPages = 1;
     uint32_t pageError = 0;
 
@@ -2107,6 +2118,7 @@ static int configSave(void)
         printf("Config: Flash erase FAILED (err=0x%lx)\r\n",
                (unsigned long)HAL_FLASH_GetError());
         HAL_FLASH_Lock();
+        HAL_ICACHE_Enable();
         return 0;
     }
 
@@ -2119,14 +2131,13 @@ static int configSave(void)
             printf("Config: Flash program FAILED at offset %d (err=0x%lx)\r\n",
                    i * 16, (unsigned long)HAL_FLASH_GetError());
             HAL_FLASH_Lock();
+            HAL_ICACHE_Enable();
             return 0;
         }
     }
 
     HAL_FLASH_Lock();
-
-    /* Invalidate ICACHE so readback comes from flash, not stale cache */
-    HAL_ICACHE_Invalidate();
+    HAL_ICACHE_Enable();
 
     /* Verify readback */
     if (memcmp((const void *)CONFIG_FLASH_ADDR, &cfg, sizeof(cfg)) != 0) {
