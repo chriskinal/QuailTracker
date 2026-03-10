@@ -63,6 +63,8 @@ ADC_HandleTypeDef hadc1;
 
 RTC_HandleTypeDef hrtc;
 
+I2C_HandleTypeDef hi2c1;
+
 /* USER CODE BEGIN PV */
 #define AUDIO_BUF_SIZE 1024
 #define SAMPLE_RATE    48000
@@ -119,6 +121,10 @@ float ppsAltitude = 0.0f;
 uint32_t batteryMv = 0;
 uint32_t battReadMv(void);
 
+/* SHT30 temperature/humidity (updated by sht30Read()) */
+int16_t  sht30TempC100 = 0;    /* temperature in 0.01 °C units */
+uint16_t sht30HumRH100 = 0;    /* humidity in 0.01 %RH units */
+
 /* Station ID (copied from config by app_freertos.c, used for FLAC metadata) */
 char deviceStationId[16] = "QT001";
 
@@ -171,6 +177,7 @@ static void MX_ADF1_Init(void);
 /* USER CODE BEGIN PFP */
 static void MX_ADC1_Init(void);
 static void MX_RTC_Init(void);
+static void MX_I2C1_Init(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -566,6 +573,18 @@ void printStatus(void)
         printf("  Level:   %d%%\r\n", pct);
     }
 
+    printf("Environment:\r\n");
+    sht30Read();
+    {
+        int t = sht30TempC100;
+        int sign = (t < 0) ? -1 : 1;
+        int whole = t / 100;
+        int frac = (t % 100) * sign;
+        printf("  Temp:     %d.%02d C\r\n", whole, frac);
+    }
+    printf("  Humidity: %u.%u%%\r\n",
+           (unsigned)(sht30HumRH100 / 100), (unsigned)(sht30HumRH100 / 10 % 10));
+
     extern void printBleStatusBrief(void);
     printBleStatusBrief();
 
@@ -868,6 +887,10 @@ int main(void)
 
   /* RTC — for Stop 2 wake-up timer */
   MX_RTC_Init();
+
+  /* I2C1 — SHT30 temperature/humidity sensor (PB6/PB7) */
+  MX_I2C1_Init();
+  sht30Read();  /* initial reading */
 
   /* Start ADF1 DMA acquisition before scheduler */
   {
@@ -1400,6 +1423,69 @@ uint32_t battReadMv(void)
     if (raw > 0)
         batteryMv = (raw * vddaMv * 2) / 16383;
     return batteryMv;
+}
+
+/* ---- I2C1 init (SHT30 on PB6/PB7) ---- */
+static void MX_I2C1_Init(void)
+{
+    hi2c1.Instance = I2C1;
+    hi2c1.Init.Timing = 0x30909DEC;  /* 100 kHz @ 160 MHz (from CubeMX) */
+    hi2c1.Init.OwnAddress1 = 0;
+    hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+    hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+    hi2c1.Init.OwnAddress2 = 0;
+    hi2c1.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+    hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+    hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+    if (HAL_I2C_Init(&hi2c1) != HAL_OK) {
+        printf("I2C1: Init FAILED\r\n");
+        return;
+    }
+    /* Enable analog filter, disable digital filter */
+    if (HAL_I2CEx_ConfigAnalogFilter(&hi2c1, I2C_ANALOGFILTER_ENABLED) != HAL_OK) {
+        printf("I2C1: Filter FAILED\r\n");
+        return;
+    }
+    printf("I2C1: OK (100kHz, SHT30 @ 0x44)\r\n");
+}
+
+/* ---- SHT30 CRC-8 (poly 0x31, init 0xFF) ---- */
+static uint8_t sht30Crc(const uint8_t *data, uint8_t len)
+{
+    uint8_t crc = 0xFF;
+    for (uint8_t i = 0; i < len; i++) {
+        crc ^= data[i];
+        for (uint8_t b = 0; b < 8; b++)
+            crc = (crc & 0x80) ? ((crc << 1) ^ 0x31) : (crc << 1);
+    }
+    return crc;
+}
+
+/* Read SHT30 single-shot, high repeatability, no clock stretch.
+ * Updates sht30TempC100 and sht30HumRH100.  Silently keeps old values on error. */
+void sht30Read(void)
+{
+    uint8_t cmd[2] = { 0x24, 0x00 };
+    if (HAL_I2C_Master_Transmit(&hi2c1, 0x44 << 1, cmd, 2, 100) != HAL_OK)
+        return;
+
+    HAL_Delay(16);  /* 15 ms max for high repeatability */
+
+    uint8_t rx[6];
+    if (HAL_I2C_Master_Receive(&hi2c1, 0x44 << 1, rx, 6, 100) != HAL_OK)
+        return;
+
+    /* Verify CRC on both words */
+    if (sht30Crc(rx, 2) != rx[2] || sht30Crc(rx + 3, 2) != rx[5])
+        return;
+
+    uint16_t rawT = ((uint16_t)rx[0] << 8) | rx[1];
+    uint16_t rawH = ((uint16_t)rx[3] << 8) | rx[4];
+
+    /* temp = -45 + 175 * rawT / 65535  →  in 0.01 °C units */
+    sht30TempC100 = (int16_t)(-4500 + (int32_t)17500 * rawT / 65535);
+    /* hum = 100 * rawH / 65535  →  in 0.01 %RH units */
+    sht30HumRH100 = (uint16_t)((uint32_t)10000 * rawH / 65535);
 }
 
 static void MX_RTC_Init(void)

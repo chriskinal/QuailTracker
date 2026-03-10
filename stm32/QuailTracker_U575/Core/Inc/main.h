@@ -55,6 +55,7 @@ void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
 void enterStop2(uint32_t seconds);
+void sht30Read(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
@@ -62,7 +63,7 @@ void enterStop2(uint32_t seconds);
 #define SD_CS_GPIO_Port GPIOA
 
 /* USER CODE BEGIN Private defines */
-#define FW_VERSION "0.8.30"
+#define FW_VERSION "0.8.32"
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

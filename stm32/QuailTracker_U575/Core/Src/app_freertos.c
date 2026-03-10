@@ -166,6 +166,8 @@ static uint32_t streamAudioInterval = 0;
 static uint32_t streamRecInterval = 0;
 static uint32_t lastAudioTick = 0;
 static uint32_t lastRecTick = 0;
+static uint32_t lastSht30Tick = 0;
+#define SHT30_INTERVAL_MS 5000
 
 /* BLE log forwarding -ring buffer fed by _write(), drained by BLE task */
 #define BLE_LOG_RING_SIZE 512
@@ -202,6 +204,11 @@ extern float ppsAltitude;
 /* Battery from main.c */
 extern uint32_t batteryMv;
 extern uint32_t battReadMv(void);
+
+/* SHT30 from main.c */
+extern int16_t  sht30TempC100;
+extern uint16_t sht30HumRH100;
+extern void sht30Read(void);
 
 /* GPS state */
 static gps_data_t gpsData;
@@ -1792,8 +1799,9 @@ static void StartBleTask(void *argument)
 
     printf("BLE: Probing PB-03F on USART2 (115200 baud)\r\n");
 
-    /* Wait for module to power up */
-    osDelay(500);
+    /* Wait for module to power up.
+     * PB-03F needs up to 1s to be ready for AT commands on some boots. */
+    osDelay(1000);
 
     /* Flush any bytes received during power-up */
     {
@@ -1846,20 +1854,22 @@ static void StartBleTask(void *argument)
             printf("BLE: Name = %s\r\n", bleName);
         }
 
-        /* Set name if different from station ID.
-         * Stop advertising → set name → restart advertising
-         * so BLE stack rebuilds scan response with new name. */
-        if (strcmp(bleName, cfg.stationId) != 0) {
+        /* Always cycle advertising on boot.  Even when the GATT name
+         * matches cfg.stationId, the scan-response packet can revert to
+         * "AI-Thinker" after power-cycle.  Toggling adv off/on forces the
+         * BLE stack to rebuild the scan response from the current GATT name. */
+        {
             /* Stop advertising */
             if (bleSendCmd("AT+BLEADVEN=0", resp, sizeof(resp), 1000) > 0)
                 printf("BLE: BLEADVEN=0 -> %s\r\n", resp);
             osDelay(100);
 
-            /* Set GATT name */
+            /* Set GATT name (unconditional — cheap, idempotent) */
             char nameCmd[48];
             snprintf(nameCmd, sizeof(nameCmd), "AT+BLENAME=%s", cfg.stationId);
             if (bleSendCmd(nameCmd, resp, sizeof(resp), 1000) > 0)
                 printf("BLE: BLENAME=%s -> %s\r\n", cfg.stationId, resp);
+            osDelay(100);
 
             /* Restart advertising */
             if (bleSendCmd("AT+BLEADVEN=1", resp, sizeof(resp), 1000) > 0)
@@ -1941,6 +1951,12 @@ static void StartBleTask(void *argument)
             (HAL_GetTick() - lastRecTick) >= streamRecInterval) {
             lastRecTick = HAL_GetTick();
             bleHandleStreamRec();
+        }
+
+        /* Periodic SHT30 temperature/humidity read (~every 5s) */
+        if ((HAL_GetTick() - lastSht30Tick) >= SHT30_INTERVAL_MS) {
+            lastSht30Tick = HAL_GetTick();
+            sht30Read();
         }
 
         /* Drain log ring buffer over BLE */
@@ -2200,9 +2216,9 @@ static void bleHandleStatusEx(const char *tag)
     bleSendLine("pps_count=%lu", (unsigned long)ppsCount);
     bleSendLine("pps_ms=%lu", (unsigned long)(HAL_GetTick() - ppsTick));
 
-    /* Temperature/humidity -not yet implemented */
-    bleSendLine("temp=0");
-    bleSendLine("hum=0");
+    /* Temperature/humidity */
+    bleSendLine("temp=%d", (int)sht30TempC100);
+    bleSendLine("hum=%u", (unsigned)sht30HumRH100);
 
     /* SD card */
     bleSendLine("sd=%d", sdMounted ? 1 : 0);
@@ -2372,8 +2388,8 @@ static void bleHandleStatusPage(int page)
         bleSendLine("aud_buf=%lu", (unsigned long)(ringHead - ringTail));
         bleSendLine("aud_cap=%d", PCM_RING_SIZE);
         bleSendLine("aud_clip=%lu", (unsigned long)limiterClipCount);
-        bleSendLine("temp=0");
-        bleSendLine("hum=0");
+        bleSendLine("temp=%d", (int)sht30TempC100);
+        bleSendLine("hum=%u", (unsigned)sht30HumRH100);
         int32_t slat7 = (int32_t)(cfg.surveyLat * 10000000.0f);
         int32_t slon7 = (int32_t)(cfg.surveyLon * 10000000.0f);
         int32_t salt_mm = (int32_t)(cfg.surveyAlt * 1000.0f);
