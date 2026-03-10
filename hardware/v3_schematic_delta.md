@@ -15,8 +15,13 @@ Changes from V2 schematic:
 | Add J1 | U.FL/IPEX MHF receptacle | GPS active antenna coax connector |
 | Add C17 | 10uF 0805 capacitor | SW_VCC decoupling |
 | Remove | L76K bodge wires (PPS, VBKP) | All pins directly accessible on ATGM336H |
-| Rename net | GPS_VCC → **SW_VCC** | Switched rail now powers ALL peripherals |
-| Move to SW_VCC | CARD1.VDD, COMM1.VCC, H1.1 | SD card, BLE module, SHT30 off 3V3, onto switched rail |
+| Rename net | GPS_VCC → **SW_VCC** | GPS-only switched rail |
+| Add net | **PERIPH_VCC** | New switched rail for BLE, SD, SHT30 |
+| Add Q4 | SI2301CDS P-FET | Peripheral power switch (same part as Q2) |
+| Add Q5 | MMBT3904 NPN | Peripheral FET gate drive (same part as Q3) |
+| Add R10, R11 | 10k 0603 | Q4 gate pull-up + Q5 base resistor |
+| Add C18 | 10uF 0805 | PERIPH_VCC decoupling |
+| Move to PERIPH_VCC | CARD1.VDD, COMM1.VCC, H1.1 | SD card, BLE module, SHT30 off 3V3, onto peripheral rail |
 | New net: GPS_VBAT | U2.pin6 → 3V3 (always-on) | RTC/hot-start backup power |
 | New net: GPS_VCC_RF | U2.pin14 → L1.1 | Antenna LNA power from module |
 | New net: GPS_RF_IN | L1.2 → U2.pin11 + J1.signal | RF signal + DC bias path |
@@ -138,40 +143,78 @@ Delete these from the V2 schematic:
 
 ---
 
-## 6. Switched Peripheral Rail (SW_VCC)
+## 6. Two Switched Power Rails (SW_VCC + PERIPH_VCC)
 
-V2 had only the GPS module on the switched power rail (GPS_VCC). V3 renames this net to **SW_VCC** and moves all peripheral VDD pins onto it. One GPIO (PD12 via Q3/Q2) now cuts power to everything for Stop 2 sleep.
+V2 had only the GPS module on a switched power rail (GPS_VCC). V3 splits peripherals across two independent switched rails so GPS can be powered on/off for periodic clock sync without interrupting SD card recording.
 
-**Peripherals on SW_VCC (all powered off during sleep):**
+**Why two rails?** During recording, SD card and BLE must stay powered while GPS is toggled periodically for time sync. A single shared rail would kill recording every time GPS powers down. Additionally, GPS control pins (PD14/PD15) must stay driven during Stop 2 and can back-power GPS VCC through ESD diodes — separate rails prevent this from parasitically powering other peripherals.
+
+### SW_VCC — GPS switched rail (existing circuit)
+
+Controlled by **PD12** (pin 59) via Q3 (NPN) + Q2 (P-FET). GPS module only — toggled periodically for clock sync during recording.
+
+| Component | Pin | Net | Notes |
+|-----------|-----|-----|-------|
+| U2 (ATGM336H) | pin 8 (VCC) | SW_VCC | GPS main power |
+| C17 | 10uF | SW_VCC | Decoupling |
+
+### PERIPH_VCC — Peripheral switched rail (new circuit)
+
+Controlled by **PD11** (pin 58) via Q5 (NPN) + Q4 (P-FET). Same circuit topology as GPS switch. Stays on during recording, off during Stop 2 sleep.
 
 | Component | Pin | V2 Net | V3 Net | Notes |
 |-----------|-----|--------|--------|-------|
-| U2 (ATGM336H) | pin 8 (VCC) | GPS_VCC | SW_VCC | GPS main power |
-| CARD1 (SD card) | VDD (pin 4) | 3V3 | SW_VCC | Unmount FS before power cut |
-| COMM1 (PB-03F BLE) | VCC | 3V3 | SW_VCC | Re-init AT config on wake |
-| H1 (SHT30 header) | pin 1 | 3V3 | SW_VCC | Stateless, just works on power-up |
+| CARD1 (SD card) | VDD (pin 4) | 3V3 | PERIPH_VCC | Unmount FS before power cut |
+| COMM1 (PB-03F BLE) | VCC | 3V3 | PERIPH_VCC | Re-init AT config on wake |
+| H1 (SHT30 header) | pin 1 | 3V3 | PERIPH_VCC | Stateless, just works on power-up |
 
-**Still on always-on 3V3:**
+### Peripheral power switch circuit (Q4/Q5 — identical to Q2/Q3)
+
+```
+3V3 ──── R10 (10k) ──┬── Q4.Gate (P-FET SI2301CDS)
+                      │
+                Q5.Collector (NPN MMBT3904)
+                      │
+PD11 ── R11 (10k) ── Q5.Base
+                      │
+                Q5.Emitter ── GND
+
+Q4.Source ── 3V3
+Q4.Drain ── PERIPH_VCC ── C18 (10uF) ── GND
+```
+
+- **PERIPH_EN HIGH** (PD11) → Q5 ON → Q4 gate LOW → P-FET ON → PERIPH_VCC = 3.3V
+- **PERIPH_EN LOW** (PD11) → Q5 OFF → R10 pulls gate HIGH → P-FET OFF → PERIPH_VCC = 0V
+
+### Still on always-on 3V3
 
 | Component | Pin | Why |
 |-----------|-----|-----|
 | U2 (ATGM336H) | pin 6 (VBAT) | GPS RTC/SRAM for hot-start (~7µA) |
 | U1 (STM32U575) | all VDD/VDDA | MCU must stay powered for Stop 2 SRAM retention |
-| R3, R4 | I2C pull-ups | On 3V3 — will pull SDA/SCL high when SHT30 unpowered (safe) |
+| R3, R4 | I2C pull-ups | On 3V3 — move to PERIPH_VCC in future rev to eliminate leakage |
 
-**PCB layout note:** Do NOT route 3V3 through H1 pin 1 as a via. V1 board had a hidden bottom-layer 3V3 trace through H1.1 that kept peripherals powered during Stop 2. H1.1 must connect ONLY to SW_VCC.
+**PCB layout note:** Do NOT route 3V3 through H1 pin 1 as a via. V1 board had a hidden bottom-layer 3V3 trace through H1.1 that kept peripherals powered during Stop 2. H1.1 must connect ONLY to PERIPH_VCC.
 
-**Power budget:** System active ~72mA → SW_VCC off → ~25mA → MCU Stop 2 → <1mA.
-Estimated deep sleep: ~12µA (MCU Stop 2 4µA + LDO Iq 8µA + GPS VBAT ~7µA).
+### Power modes
 
-**Firmware sequence for sleep:**
+| Mode | SW_VCC (GPS) | PERIPH_VCC | MCU | Current |
+|------|-------------|------------|-----|---------|
+| Active + GPS fix | ON | ON | Run | ~72mA |
+| Recording (GPS off) | OFF | ON | Run | ~25mA |
+| Recording (GPS sync) | ON | ON | Run | ~72mA |
+| Deep sleep (Stop 2) | OFF | OFF | Stop 2 | <1mA |
+
+### Firmware sequence for sleep
+
 1. `f_close()` / `f_mount(NULL)` — unmount SD card
 2. Flush BLE, disable UART interrupts
 3. Set peripheral GPIO pins to analog (hi-Z) — prevents ESD back-powering
-4. PD12 LOW → Q3 OFF → Q2 OFF → SW_VCC off
-5. `enterStop2(seconds)` — MCU enters Stop 2
-6. On wake: PD12 HIGH → SW_VCC on, delay for power stabilize
-7. Restore GPIO modes, re-init SPI/SD, re-init BLE AT config, GPS hot-start from VBAT
+4. PD12 LOW → SW_VCC off (GPS)
+5. PD11 LOW → PERIPH_VCC off (BLE, SD, SHT30)
+6. `enterStop2(seconds)` — MCU enters Stop 2
+7. On wake: PD11 HIGH → PERIPH_VCC on, PD12 HIGH → SW_VCC on, delay for stabilization
+8. Restore GPIO modes, re-init SPI/SD, re-init BLE AT config, GPS hot-start from VBAT
 
 ---
 
@@ -186,7 +229,7 @@ Estimated deep sleep: ~12µA (MCU Stop 2 4µA + LDO Iq 8µA + GPS VBAT ~7µA).
 | GPS_PPS | U2.pin3 (XIAO bodge) | U2.pin4 (1PPS) |
 | GPS_WAKE | U2.WAKEUP (XIAO pin 7) | U2.pin5 (ON/OFF) |
 | GPS_RST | U2.RESET (XIAO pin 11) | U2.pin9 (nRESET) |
-| SW_VCC | Q2.Drain, U2.VCC | Q2.Drain, U2.pin8, C17.+, CARD1.VDD, COMM1.VCC, H1.1 |
+| SW_VCC | Q2.Drain, U2.VCC | Q2.Drain, U2.pin8, C17.+ |
 | GND | U2.GND | U2.pin1, U2.pin10, U2.pin12, J1.GND, C17.− |
 
 ### New nets
@@ -196,6 +239,9 @@ Estimated deep sleep: ~12µA (MCU Stop 2 4µA + LDO Iq 8µA + GPS VBAT ~7µA).
 | **GPS_VBAT** | U2.pin6, 3V3 rail | Always-on backup power |
 | **GPS_VCC_RF** | U2.pin14, L1.1 | Antenna LNA power from module |
 | **GPS_RF_IN** | L1.2, U2.pin11, J1.signal | RF + DC bias to antenna |
+| **PERIPH_VCC** | Q4.Drain, C18.+, CARD1.VDD, COMM1.VCC, H1.1 | Peripheral switched rail |
+| **PERIPH_EN** | R11.1, U1.pin58 (PD11) | Peripheral power enable |
+| **Q4_GATE** | Q4.Gate, R10.2, Q5.Collector | Peripheral P-FET gate drive |
 
 ---
 
@@ -207,6 +253,11 @@ Estimated deep sleep: ~12µA (MCU Stop 2 4µA + LDO Iq 8µA + GPS VBAT ~7µA).
 | C17 | 10uF X5R 25V (YAGEO CC0805KFX5R8BB106) | 0805 | C15850 | 603-CC0805KFX5R8BB10 | 1 | SW_VCC decoupling (same part as C11) |
 | L1 | 47nH multilayer inductor (Murata LQG15HS47NJ02D) | 0402 | C97998 | 81-LQG15HS47NJ02D | 1 | Bias tee |
 | J1 | U.FL receptacle (HRS U-FL-R-SMT-1(80)) | SMD | C88374 | 798-U-FL-R-SMT-1-80 | 1 | GPS antenna connector |
+| Q4 | SI2301CDS P-FET | SOT-23 | C10487 | 781-SI2301CDS-E3 | 1 | PERIPH_VCC power switch (same as Q2) |
+| Q5 | MMBT3904 NPN | SOT-23 | C20526 | 637-MMBT3904 | 1 | Peripheral FET gate drive (same as Q3) |
+| R10 | 10k 1% | 0603 | C25804 | 603-RC0603FR-0710KL | 1 | Q4 gate pull-up |
+| R11 | 10k 1% | 0603 | C25804 | 603-RC0603FR-0710KL | 1 | Q5 base resistor |
+| C18 | 10uF X5R 25V (same as C11/C17) | 0805 | C15850 | 603-CC0805KFX5R8BB10 | 1 | PERIPH_VCC decoupling |
 
 ### Removed BOM Items
 
@@ -230,9 +281,7 @@ Estimated deep sleep: ~12µA (MCU Stop 2 4µA + LDO Iq 8µA + GPS VBAT ~7µA).
 
 ---
 
-## 10. MCU Pin Mapping — Unchanged
-
-No firmware changes needed. All MCU GPIO assignments are identical to V2:
+## 10. MCU Pin Mapping
 
 | MCU Pin | GPIO | Function | V2 Target | V3 Target |
 |---------|------|----------|-----------|-----------|
@@ -241,6 +290,7 @@ No firmware changes needed. All MCU GPIO assignments are identical to V2:
 | 67 | PA8 | EXTI (PPS) | L76K PPS (bodge) | ATGM336H 1PPS (pin 4) |
 | 61 | PD14 | GPIO out | L76K WAKEUP | ATGM336H ON/OFF (pin 5) |
 | 62 | PD15 | GPIO out | L76K RESET | ATGM336H nRESET (pin 9) |
-| 59 | PD12 | GPIO out | GPS_EN (Q3 base) | SW_VCC_EN (Q3 base) — controls all peripherals |
+| 59 | PD12 | GPIO out | GPS_EN (Q3 base) | SW_VCC_EN (Q3 base) — GPS only |
+| 58 | PD11 | GPIO out | — (new) | PERIPH_EN (Q5 base) — BLE, SD, SHT30 |
 
-NMEA 9600 baud, same UART, same PPS polarity. GPS power switch circuit (Q2/Q3/R1/R2) unchanged — now switches SW_VCC rail (GPS + SD + BLE + SHT30).
+NMEA 9600 baud, same UART, same PPS polarity. GPS power switch circuit (Q2/Q3/R1/R2) unchanged — switches SW_VCC (GPS only). New Q4/Q5/R10/R11 circuit on PD11 switches PERIPH_VCC (BLE + SD + SHT30).

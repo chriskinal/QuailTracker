@@ -1795,7 +1795,7 @@ static void StartBleTask(void *argument)
     /* Wait for module to power up */
     osDelay(500);
 
-    /* Flush any bytes received during power-up (noise, banners, etc.) */
+    /* Flush any bytes received during power-up */
     {
         uint8_t discard;
         while (osMessageQueueGet(bleRxQueue, &discard, NULL, 0) == osOK) {}
@@ -1808,15 +1808,35 @@ static void StartBleTask(void *argument)
     if (bleSendCmd("AT", resp, sizeof(resp), 1000) > 0) {
         printf("BLE: AT -> %s\r\n", resp);
         bleReady = 1;
-    } else {
-        printf("BLE: No response from module\r\n");
-        bleReady = 0;
+    }
+
+    if (!bleReady) {
+        printf("BLE: Module not responding\r\n");
     }
 
     if (bleReady) {
-        /* Get module name */
+        /* SAFETY: Only send commands listed in AT+HELP output.
+         * Sending unknown commands can brick the module.
+         * WARNING: NEVER send AT+RESTORE — erases firmware permanently. */
+
+        /* All commands below are confirmed in AT+HELP output (42 commands).
+         * NEVER send commands not in AT+HELP — can brick the module.
+         * Safe commands: AT, ATE0/1, AT+BLENAME, AT+BLEMAC, AT+BLEADVEN,
+         * AT+BLEADVDATA, AT+SLEEP, AT+RST, AT+BLEMODE, AT+GMR, etc. */
+
+        /* Get MAC address */
+        if (bleSendCmd("AT+BLEMAC?", resp, sizeof(resp), 1000) > 0) {
+            const char *addr = resp;
+            const char *p = strchr(resp, ':');
+            if (!p) p = strchr(resp, '=');
+            if (p) addr = p + 1;
+            strncpy(bleAddr, addr, sizeof(bleAddr) - 1);
+            bleAddr[sizeof(bleAddr) - 1] = '\0';
+            printf("BLE: Addr = %s\r\n", bleAddr);
+        }
+
+        /* Query current name */
         if (bleSendCmd("AT+BLENAME?", resp, sizeof(resp), 1000) > 0) {
-            /* Response format: +BLENAME:<name> */
             const char *name = resp;
             const char *p = strchr(resp, ':');
             if (!p) p = strchr(resp, '=');
@@ -1826,31 +1846,36 @@ static void StartBleTask(void *argument)
             printf("BLE: Name = %s\r\n", bleName);
         }
 
-        /* Set broadcast name to station ID */
-        {
+        /* Set name if different from station ID.
+         * Stop advertising → set name → restart advertising
+         * so BLE stack rebuilds scan response with new name. */
+        if (strcmp(bleName, cfg.stationId) != 0) {
+            /* Stop advertising */
+            if (bleSendCmd("AT+BLEADVEN=0", resp, sizeof(resp), 1000) > 0)
+                printf("BLE: BLEADVEN=0 -> %s\r\n", resp);
+            osDelay(100);
+
+            /* Set GATT name */
             char nameCmd[48];
             snprintf(nameCmd, sizeof(nameCmd), "AT+BLENAME=%s", cfg.stationId);
-            if (bleSendCmd(nameCmd, resp, sizeof(resp), 1000) > 0) {
-                strncpy(bleName, cfg.stationId, sizeof(bleName) - 1);
-                bleName[sizeof(bleName) - 1] = '\0';
-                printf("BLE: Name set to %s\r\n", bleName);
-            }
-        }
+            if (bleSendCmd(nameCmd, resp, sizeof(resp), 1000) > 0)
+                printf("BLE: BLENAME=%s -> %s\r\n", cfg.stationId, resp);
 
-        /* Get MAC address */
-        if (bleSendCmd("AT+BLEMAC?", resp, sizeof(resp), 1000) > 0) {
-            /* Response format: +BLEMAC:<mac> */
-            const char *addr = resp;
-            const char *p = strchr(resp, ':');
-            if (!p) p = strchr(resp, '=');
-            if (p) addr = p + 1;
-            strncpy(bleAddr, addr, sizeof(bleAddr) - 1);
-            bleAddr[sizeof(bleAddr) - 1] = '\0';
-            printf("BLE: Addr = %s\r\n", bleAddr);
+            /* Restart advertising */
+            if (bleSendCmd("AT+BLEADVEN=1", resp, sizeof(resp), 1000) > 0)
+                printf("BLE: BLEADVEN=1 -> %s\r\n", resp);
+            osDelay(100);
+
+            /* Verify name */
+            if (bleSendCmd("AT+BLENAME?", resp, sizeof(resp), 1000) > 0)
+                printf("BLE: Name verify = %s\r\n", resp);
+
+            strncpy(bleName, cfg.stationId, sizeof(bleName) - 1);
+            bleName[sizeof(bleName) - 1] = '\0';
         }
     }
 
-    /* Put BLE into light sleep to save ~1mA */
+    /* Put BLE into light sleep to save ~1mA (AT+SLEEP confirmed in AT+HELP) */
     if (bleReady) {
         bleSendCmd("AT+SLEEP=1", resp, sizeof(resp), 1000);
     }
@@ -2522,12 +2547,15 @@ static void bleHandleSet(const char *args)
         if (strlen(val) > 15) { bleSendLine("$ERR,BADARG"); return; }
         strncpy(cfg.stationId, val, sizeof(cfg.stationId));
         strncpy(deviceStationId, cfg.stationId, sizeof(deviceStationId));
-        /* Update BLE broadcast name immediately */
+        /* Update BLE name: stop adv → set name → restart adv */
         {
-            char nameCmd[48];
-            char nameResp[32];
-            snprintf(nameCmd, sizeof(nameCmd), "AT+BLENAME=%s", cfg.stationId);
-            bleSendCmd(nameCmd, nameResp, sizeof(nameResp), 1000);
+            char cmd[48];
+            char cmdResp[32];
+            bleSendCmd("AT+BLEADVEN=0", cmdResp, sizeof(cmdResp), 1000);
+            osDelay(100);
+            snprintf(cmd, sizeof(cmd), "AT+BLENAME=%s", cfg.stationId);
+            bleSendCmd(cmd, cmdResp, sizeof(cmdResp), 1000);
+            bleSendCmd("AT+BLEADVEN=1", cmdResp, sizeof(cmdResp), 1000);
             strncpy(bleName, cfg.stationId, sizeof(bleName) - 1);
             bleName[sizeof(bleName) - 1] = '\0';
         }

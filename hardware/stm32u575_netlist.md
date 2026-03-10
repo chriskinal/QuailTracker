@@ -22,11 +22,13 @@ Cross-reference: `stm32u575_pinout.md` (pin assignments), `stm32u575_bom_lcsc.cs
 | Net Port | Description | Connected Pins |
 |----------|-------------|----------------|
 | **VBAT+** | Battery positive rail | CN1.1, Q1.VIN(1), Q1.CE(3), C16.+, R7.1 |
-| **3V3** | 3.3V regulated rail (always-on) | Q1.VOUT(5), C15.+, C11.+, U1 VDD pins (11, 28, 50, 75, 100), U1.VDDA(22), U1.VREF+(21), U1.VDDUSB(73), U1.VBAT(6), C1.+, C2.+, C3.+, C4.+, C5.+, C6.+, C7.+, C8.+, C9.+, C13.+, C14.+, R1.1, R3.1, R4.1, Q2.Source, CN2.3, H2.1, SW2.1 |
+| **3V3** | 3.3V regulated rail (always-on) | Q1.VOUT(5), C15.+, C11.+, U1 VDD pins (11, 28, 50, 75, 100), U1.VDDA(22), U1.VREF+(21), U1.VDDUSB(73), U1.VBAT(6), C1.+, C2.+, C3.+, C4.+, C5.+, C6.+, C7.+, C8.+, C9.+, C13.+, C14.+, R1.1, R3.1, R4.1, R10.1, Q2.Source, Q4.Source, CN2.3, H2.1, SW2.1 |
 | **GND** | Ground | *(see dedicated GND table below)* |
-| **SW_VCC** | Switched 3.3V to all peripherals | Q2.Drain, U2.pin8 (VCC), C17.+, CARD1.VDD, COMM1.VCC, H1.1 |
+| **SW_VCC** | Switched 3.3V to GPS | Q2.Drain, U2.pin8 (VCC), C17.+ |
+| **PERIPH_VCC** | Switched 3.3V to peripherals | Q4.Drain, C18.+, CARD1.VDD, COMM1.VCC, H1.1 |
 | **VBAT_SENSE** | Battery ADC midpoint | R7.2, R8.1, U1.pin15 (PC0/ADC1_IN1) |
 | **Q2_GATE** | GPS P-FET gate drive | Q2.Gate, R1.2, Q3.Collector |
+| **Q4_GATE** | Peripheral P-FET gate drive | Q4.Gate, R10.2, Q5.Collector |
 | **GPS_VBAT** | GPS RTC/SRAM backup (always-on) | U2.pin6 (VBAT), 3V3 rail |
 
 ### GND Net — All Ground Connections
