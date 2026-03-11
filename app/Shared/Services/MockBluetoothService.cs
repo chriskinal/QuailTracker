@@ -40,6 +40,9 @@ public class MockBluetoothService : IBluetoothService
     public event EventHandler<DeviceStatus>? StatusReceived;
     public event EventHandler<DeviceConfig>? ConfigReceived;
     public event EventHandler<DetectionEvent>? DetectionReceived;
+    public event EventHandler<DiscoveredDevice>? DeviceDiscovered;
+
+    private DiscoveredDevice? _selectedDevice;
 
     public async Task ScanAndConnectAsync()
     {
@@ -66,6 +69,42 @@ public class MockBluetoothService : IBluetoothService
         {
             SetState(ConnectionState.Disconnected);
         }
+    }
+
+    public async Task StartScanAsync()
+    {
+        if (CurrentState != ConnectionState.Disconnected)
+            return;
+
+        SetState(ConnectionState.Scanning);
+
+        var fakeDevices = new[]
+        {
+            new DiscoveredDevice(Guid.NewGuid(), "QT001", -45, DateTimeOffset.Now),
+            new DiscoveredDevice(Guid.NewGuid(), "QT002", -62, DateTimeOffset.Now),
+            new DiscoveredDevice(Guid.NewGuid(), "AI-Thinker", -78, DateTimeOffset.Now),
+            new DiscoveredDevice(Guid.NewGuid(), "QT003", -85, DateTimeOffset.Now),
+        };
+
+        foreach (var dev in fakeDevices)
+        {
+            await Task.Delay(400);
+            if (CurrentState != ConnectionState.Scanning) return;
+            DeviceDiscovered?.Invoke(this, dev);
+        }
+    }
+
+    public async Task ConnectToDeviceAsync(DiscoveredDevice device)
+    {
+        _selectedDevice = device;
+        SetState(ConnectionState.Connecting);
+        await Task.Delay(800);
+
+        ConnectedDeviceName = device.Name;
+        SetState(ConnectionState.Connected);
+
+        await Task.Delay(200);
+        await RequestStatusAsync();
     }
 
     public async Task DisconnectAsync()

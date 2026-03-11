@@ -84,6 +84,8 @@ public partial class ConfigViewModel : ObservableObject
     [ObservableProperty] private bool _hasChanges = false;
     [ObservableProperty] private string _statusMessage = "";
 
+    public Action? RequestReturnToPicker { get; set; }
+
     // Options for ComboBoxes
     public string[] GainOptions { get; } = ["0 dB", "3 dB", "6 dB", "9 dB", "12 dB", "15 dB", "18 dB", "21 dB", "24 dB"];
     public string[] ActivityModeOptions { get; } = ["Off", "Monitor", "Squelch", "Gate"];
@@ -223,5 +225,19 @@ public partial class ConfigViewModel : ObservableObject
 
         HasChanges = true;
         StatusMessage = "Reset to defaults";
+    }
+
+    [RelayCommand]
+    private async Task ApplyAndNextAsync()
+    {
+        if (HasChanges)
+        {
+            StatusMessage = "Saving...";
+            await SaveConfigAsync();
+        }
+
+        StatusMessage = "Disconnecting...";
+        await _bluetoothService.DisconnectAsync();
+        RequestReturnToPicker?.Invoke();
     }
 }

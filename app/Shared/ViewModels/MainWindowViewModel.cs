@@ -43,6 +43,9 @@ public partial class MainWindowViewModel : ObservableObject
     private bool _isConnected = false;
 
     [ObservableProperty]
+    private bool _showDevicePicker = false;
+
+    [ObservableProperty]
     private int _selectedTabIndex = 0;
 
     [ObservableProperty]
@@ -60,6 +63,9 @@ public partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     private ConfigViewModel _configViewModel;
 
+    [ObservableProperty]
+    private DevicePickerViewModel _devicePickerViewModel;
+
     public MainWindowViewModel() : this(new MockBluetoothService())
     {
     }
@@ -72,6 +78,9 @@ public partial class MainWindowViewModel : ObservableObject
         _detectViewModel = new DetectViewModel(bluetoothService);
         _scheduleViewModel = new ScheduleViewModel(bluetoothService);
         _configViewModel = new ConfigViewModel(bluetoothService);
+        _devicePickerViewModel = new DevicePickerViewModel(bluetoothService);
+
+        _configViewModel.RequestReturnToPicker = NavigateToPicker;
 
         _bluetoothService.ConnectionStateChanged += OnConnectionStateChanged;
         _bluetoothService.StatusReceived += OnStatusReceived;
@@ -92,6 +101,11 @@ public partial class MainWindowViewModel : ObservableObject
     private void OnConnectionStateChanged(object? sender, ConnectionState state)
     {
         IsConnected = state == ConnectionState.Connected;
+
+        if (state == ConnectionState.Connected)
+            ShowDevicePicker = false;
+        // Don't hide picker on Disconnected — scan completion is expected.
+        // Picker is hidden by: connection success, Cancel button, or bottom-bar Stop.
 
         ConnectionStatus = state switch
         {
@@ -126,10 +140,18 @@ public partial class MainWindowViewModel : ObservableObject
         else if (_bluetoothService.CurrentState == ConnectionState.Scanning)
         {
             _bluetoothService.StopScan();
+            ShowDevicePicker = false;
         }
         else
         {
-            await _bluetoothService.ScanAndConnectAsync();
+            ShowDevicePicker = true;
+            await DevicePickerViewModel.ScanAsync();
         }
+    }
+
+    private async void NavigateToPicker()
+    {
+        ShowDevicePicker = true;
+        await DevicePickerViewModel.ScanAsync();
     }
 }

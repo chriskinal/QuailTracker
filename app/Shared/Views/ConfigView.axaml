@@ -263,6 +263,17 @@
                 </StackPanel>
             </Button>
 
+            <!-- Apply & Next (batch config workflow) -->
+            <Button HorizontalAlignment="Stretch"
+                    Classes="ToolbarButton"
+                    Command="{Binding ApplyAndNextCommand}">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8">
+                    <PathIcon Data="M4,11V13H16L10.5,18.5L11.92,19.92L19.84,12L11.92,4.08L10.5,5.5L16,11H4Z"
+                              Width="16" Height="16" />
+                    <TextBlock Text="Apply &amp; Next Device" />
+                </StackPanel>
+            </Button>
+
         </StackPanel>
     </ScrollViewer>
 </UserControl>

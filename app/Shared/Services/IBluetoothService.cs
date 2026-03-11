@@ -17,6 +17,7 @@
  */
 
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using QuailTracker.Shared.Models;
 
@@ -127,6 +128,22 @@ public interface IBluetoothService
     event EventHandler<DetectionEvent>? DetectionReceived;
 
     /// <summary>
+    /// Fired when a device is discovered during scanning.
+    /// </summary>
+    event EventHandler<DiscoveredDevice>? DeviceDiscovered;
+
+    /// <summary>
+    /// Scan for QuailTracker devices without auto-connecting.
+    /// Fires DeviceDiscovered for each device found. Scan runs until StopScan() or 30s timeout.
+    /// </summary>
+    Task StartScanAsync();
+
+    /// <summary>
+    /// Connect to a specific discovered device.
+    /// </summary>
+    Task ConnectToDeviceAsync(DiscoveredDevice device);
+
+    /// <summary>
     /// Send a model command (STATUS, RELOAD).
     /// </summary>
     Task SendModelCommandAsync(string operation);
@@ -152,6 +169,11 @@ public enum ConnectionState
     Connecting,
     Connected
 }
+
+/// <summary>
+/// A BLE device discovered during scanning.
+/// </summary>
+public record DiscoveredDevice(Guid Id, string Name, int Rssi, DateTimeOffset LastSeen);
 
 /// <summary>
 /// A detection event pushed by the device.

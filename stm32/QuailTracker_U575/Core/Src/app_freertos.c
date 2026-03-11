@@ -1809,6 +1809,11 @@ static void StartBleTask(void *argument)
         while (osMessageQueueGet(bleRxQueue, &discard, NULL, 0) == osOK) {}
     }
 
+    /* Wake module if it was sleeping from a previous boot */
+    bleSendCmd("AT", resp, sizeof(resp), 500);
+    osDelay(200);
+    while (getCharBle(10) >= 0) {}  /* flush wake garbage */
+
     /* Disable echo (PB-03F has echo ON by default) */
     bleSendCmd("ATE0", resp, sizeof(resp), 1000);
 
@@ -1883,11 +1888,6 @@ static void StartBleTask(void *argument)
             strncpy(bleName, cfg.stationId, sizeof(bleName) - 1);
             bleName[sizeof(bleName) - 1] = '\0';
         }
-    }
-
-    /* Put BLE into light sleep to save ~1mA (AT+SLEEP confirmed in AT+HELP) */
-    if (bleReady) {
-        bleSendCmd("AT+SLEEP=1", resp, sizeof(resp), 1000);
     }
 
     /* Main loop: read incoming BLE data (transparent mode) */

@@ -258,6 +258,8 @@ Q4.Drain ── PERIPH_VCC ── C18 (10uF) ── GND
 | R10 | 10k 1% | 0603 | C25804 | 603-RC0603FR-0710KL | 1 | Q4 gate pull-up |
 | R11 | 10k 1% | 0603 | C25804 | 603-RC0603FR-0710KL | 1 | Q5 base resistor |
 | C18 | 10uF X5R 25V (same as C11/C17) | 0805 | C15850 | 603-CC0805KFX5R8BB10 | 1 | PERIPH_VCC decoupling |
+| Q6 | SI2301CDS P-FET | SOT-23 | C10487 | 781-SI2301CDS-E3 | 1 | Battery reverse polarity protection (same as Q2/Q4) |
+| R12 | 100k 1% | 0603 | C25803 | 603-RC0603FR-07100KL | 1 | Q6 gate-source tie |
 
 ### Removed BOM Items
 
@@ -269,7 +271,47 @@ Q4.Drain ── PERIPH_VCC ── C18 (10uF) ── GND
 
 ---
 
-## 9. PCB Layout Notes
+## 9. Reverse Polarity Protection (Q6)
+
+Standard 18650 spring holders are symmetrical — cells can be inserted backwards. A reversed cell in the 1S4P pack would be force-discharged by the other three cells, damaging it and potentially the LDO. A P-channel MOSFET on the battery positive rail blocks reverse current with negligible voltage drop and zero quiescent current.
+
+**Circuit:**
+```
+BATT+ ── Q6.Source (P-FET SI2301CDS)
+              │
+         Q6.Gate ── R12 (100k) ── Q6.Source
+              │
+         Q6.Drain ── 3V3_IN (to LDO input)
+```
+
+- **Correct polarity:** BATT+ is positive. Gate is pulled to Source (BATT+) by R12, but Drain sits at ~0V initially. VGS = Drain−Source ≈ −3.7V (through body diode), which is well below Vth (−1.2V max), so the FET turns fully on. RDSon = 110mΩ → drop = 110mΩ × I. At 72mA active: 8mV drop. Negligible.
+- **Reversed polarity:** BATT+ is negative. Body diode is reverse-biased. VGS ≈ 0V (R12 holds gate at source). FET stays off. No current flows.
+
+**Why SI2301CDS:** Same part already used for Q2 and Q4 (power switches), no new BOM line. VDS(max) = −20V, ID(max) = −2.3A, RDSon = 110mΩ @ VGS = −4.5V.
+
+**Why 100k gate resistor (not direct tie):** R12 ensures a defined gate-source voltage during transients. Value is non-critical — 10k to 100k all work. 100k chosen to add zero measurable leakage (0.04µA at 4.2V).
+
+**EasyEDA steps:**
+1. Place Q6: SI2301CDS (LCSC C10487) — SOT-23, same as Q2/Q4
+2. Place R12: 100k 0603 (LCSC C25803)
+3. Q6.Source → BATT+ (battery positive terminal)
+4. Q6.Gate → R12.1; R12.2 → Q6.Source (gate tied to source through R12)
+5. Q6.Drain → LDO input (currently labeled 3V3_IN or VBAT on V2 schematic)
+6. Move LDO input connection from BATT+ to Q6.Drain
+
+**Connections:**
+
+| From | To | Net |
+|------|----|-----|
+| Battery + terminal | Q6.Source | BATT+ |
+| Q6.Gate | R12.1 | Q6_GATE |
+| R12.2 | Q6.Source | BATT+ |
+| Q6.Drain | U3.IN (NCP170 LDO) | VBAT_PROT |
+| Q6.Drain | C_IN.+ (LDO input cap) | VBAT_PROT |
+
+---
+
+## 10. PCB Layout Notes
 
 - Place U2 (ATGM336H) near board edge — RF trace to J1 should be short
 - J1 (U.FL) at board edge for antenna cable routing
@@ -281,7 +323,7 @@ Q4.Drain ── PERIPH_VCC ── C18 (10uF) ── GND
 
 ---
 
-## 10. MCU Pin Mapping
+## 11. MCU Pin Mapping
 
 | MCU Pin | GPIO | Function | V2 Target | V3 Target |
 |---------|------|----------|-----------|-----------|
