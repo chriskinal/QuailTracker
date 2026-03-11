@@ -22,13 +22,15 @@ Cross-reference: `stm32u575_pinout.md` (pin assignments), `stm32u575_bom_lcsc.cs
 | Net Port | Description | Connected Pins |
 |----------|-------------|----------------|
 | **VBAT+** | Battery positive rail | CN1.1, Q1.VIN(1), Q1.CE(3), C16.+, R7.1 |
-| **3V3** | 3.3V regulated rail (always-on) | Q1.VOUT(5), C15.+, C11.+, U1 VDD pins (11, 28, 50, 75, 100), U1.VDDA(22), U1.VREF+(21), U1.VDDUSB(73), U1.VBAT(6), C1.+, C2.+, C3.+, C4.+, C5.+, C6.+, C7.+, C8.+, C9.+, C13.+, C14.+, R1.1, R3.1, R4.1, R10.1, Q2.Source, Q4.Source, CN2.3, H2.1, SW2.1 |
+| **3V3** | 3.3V regulated rail (always-on) | Q1.VOUT(5), C15.+, C11.+, U1 VDD pins (11, 28, 50, 75, 100), U1.VDDA(22), U1.VREF+(21), U1.VDDUSB(73), U1.VBAT(6), C1.+, C2.+, C3.+, C4.+, C5.+, C6.+, C7.+, C8.+, C9.+, C13.+, C14.+, R3.1, R4.1, U4.VIN, U5.VIN, U6.VIN, CN2.3, H2.1, SW2.1 |
 | **GND** | Ground | *(see dedicated GND table below)* |
-| **SW_VCC** | Switched 3.3V to GPS | Q2.Drain, U2.pin8 (VCC), C17.+ |
-| **PERIPH_VCC** | Switched 3.3V to peripherals | Q4.Drain, C18.+, CARD1.VDD, COMM1.VCC, H1.1 |
+| **GPS_VCC** | Switched 3.3V to GPS | U4.VOUT, U2.pin8 (VCC), C17.+ |
+| **BLE_VCC** | Switched 3.3V to BLE | U5.VOUT, COMM1.VCC, C19.+ |
+| **PERIPH_VCC** | Switched 3.3V to SD + SHT30 | U6.VOUT, C18.+, CARD1.VDD, H1.1 |
+| **GPS_EN** | GPS load switch enable | U4.ON, U1.pin59 (PD12) |
+| **BLE_EN** | BLE load switch enable | U5.ON, U1.pin57 (PD10) |
+| **PERIPH_EN** | Peripheral load switch enable | U6.ON, U1.pin58 (PD11) |
 | **VBAT_SENSE** | Battery ADC midpoint | R7.2, R8.1, U1.pin15 (PC0/ADC1_IN1) |
-| **Q2_GATE** | GPS P-FET gate drive | Q2.Gate, R1.2, Q3.Collector |
-| **Q4_GATE** | Peripheral P-FET gate drive | Q4.Gate, R10.2, Q5.Collector |
 | **GPS_VBAT** | GPS RTC/SRAM backup (always-on) | U2.pin6 (VBAT), 3V3 rail |
 
 ### GND Net — All Ground Connections
@@ -43,7 +45,8 @@ Place the **GND** net port label on every pin listed below.
 | Connectors | CN1.2, CN2.4, CARD1.VSS, COMM1.GND, H1.2, H2.2, SW1.2 |
 | GPS module | U2.pin1 (GND), U2.pin10 (GND), U2.pin12 (GND) |
 | GPS RF | J1.GND, C17.− |
-| Transistors | Q3.Emitter |
+| Load switches | U4.GND, U5.GND, U6.GND |
+| Output caps | C18.−, C19.− |
 | Divider low side | R8.2 |
 | BOOT0 pull-down | R6.2 |
 | LED cathode | LED1.Cathode |
@@ -61,7 +64,7 @@ Place the **GND** net port label on every pin listed below.
 | **GPS_PPS** | Pulse-per-second sync | U2.pin4 (1PPS), U1.pin67 (PA8 / EXTI) |
 | **GPS_WAKE** | GPS ON/OFF control | U2.pin5 (ON/OFF), U1.pin61 (PD14) |
 | **GPS_RST** | GPS reset (active low) | U2.pin9 (nRESET), U1.pin62 (PD15) |
-| **GPS_EN** | GPS power enable (MCU→Q3) | R2.1, U1.pin59 (PD12, GPIO) |
+| **GPS_EN** | GPS power enable | U4.ON, U1.pin59 (PD12, GPIO) |
 
 ### GPS RF — Active Antenna Bias Tee
 
@@ -74,12 +77,22 @@ L1 (47nH inductor) forms a bias tee: passes DC from VCC_RF to power the active a
 through the coax, while the antenna's RF signal passes through to RF_IN.
 J1 (U.FL connector) connects to the active GPS antenna via coax pigtail.
 
-### Peripheral Power Switch — How It Works
+### Load Switches — How They Work
 
-Q2 = SI2301CDS P-FET, Q3 = MMBT3904 NPN. All pin connections are in the net tables above (Q2_GATE, SW_VCC, GPS_EN) and local-only wires below (R2→Q3, Q3.Emitter→GND).
+Three TPS22916 (or equivalent) single-channel load switches, one per rail.
+Each has a GPIO-controlled ON pin (active high, internal pull-down = OFF by default).
 
-- **GPS_EN HIGH** → Q3 ON → Q2 gate pulled LOW → P-FET ON → SW_VCC on (GPS + SD + BLE + SHT30 powered)
-- **GPS_EN LOW** → Q3 OFF → R1 pulls gate to 3V3 → P-FET OFF → SW_VCC off (all peripherals off)
+| Switch | Rail | GPIO | MCU Pin |
+|--------|------|------|---------|
+| U4 | GPS_VCC | PD12 | 59 |
+| U5 | BLE_VCC | PD10 | 57 |
+| U6 | PERIPH_VCC | PD11 | 58 |
+
+- **GPIO HIGH** → load switch ON → rail = 3.3V
+- **GPIO LOW** → load switch OFF → rail = 0V
+
+During Stop 2 sleep, STM32 GPIOs hold their output state. BLE_VCC stays ON
+(PD10 HIGH) for BLE advertising, GPS_VCC and PERIPH_VCC go OFF.
 
 ---
 
@@ -90,7 +103,7 @@ Q2 = SI2301CDS P-FET, Q3 = MMBT3904 NPN. All pin connections are in the net tabl
 | **BLE_TX** | BLE data out (BLE→MCU) | COMM1.TX, U1.pin26 (PA3 / USART2_RX, AF7) |
 | **BLE_RX** | BLE data in (MCU→BLE) | COMM1.RX, U1.pin25 (PA2 / USART2_TX, AF7) |
 
-COMM1 (PB-03F) VCC → SW_VCC (switched rail), GND → GND (already in power nets above).
+COMM1 (PB-03F) VCC → BLE_VCC (switched rail), GND → GND (already in power nets above).
 
 ---
 
@@ -104,7 +117,7 @@ COMM1 (PB-03F) VCC → SW_VCC (switched rail), GND → GND (already in power net
 | **SD_CS** | SPI chip select (active low) | CARD1.CD/DAT3, U1.pin29 (PA4, GPIO) |
 | **SD_CD** | Card detect (low = inserted) | CARD1.CD_SW, U1.pin33 (PC4, GPIO input) |
 
-CARD1 VDD → SW_VCC (switched rail), VSS → GND (already in power nets above).
+CARD1 VDD → PERIPH_VCC (switched rail), VSS → GND (already in power nets above).
 
 ---
 
@@ -127,7 +140,7 @@ CN2 (JST PH 4-pin): pin 1 = CLK, pin 2 = DATA, pin 3 = VDD (3V3), pin 4 = GND.
 | **I2C_SDA** | I2C data (4.7k pull-up) | H1.4, R4.2, U1.pin93 (PB7 / I2C1_SDA, AF4) |
 
 R3.1 → 3V3, R4.1 → 3V3 (pull-ups, already in power nets above).
-H1 (1x4 header): pin 1 = SW_VCC (switched rail), pin 2 = GND, pin 3 = SCL, pin 4 = SDA.
+H1 (1x4 header): pin 1 = PERIPH_VCC (switched rail), pin 2 = GND, pin 3 = SCL, pin 4 = SDA.
 
 ---
 
@@ -184,8 +197,9 @@ These connections are short enough to wire directly — no net port label needed
 |------|----|-------|
 | R9.2 | LED1.Anode | LED current limit, short wire |
 | LED1.Cathode | GND | Via GND net port on cathode |
-| R2.2 | Q3.Base | GPS enable base resistor |
-| Q3.Emitter | GND | Via GND net port |
+| U4.VIN | 3V3 net | GPS load switch input |
+| U5.VIN | 3V3 net | BLE load switch input |
+| U6.VIN | 3V3 net | Peripheral load switch input |
 | R6.1 | U1.pin94 (PH3/BOOT0) | BOOT0 pull-down |
 | R6.2 | GND | Via GND net port |
 | SW2.2 | U1.pin94 (PH3/BOOT0) | BOOT0 button (same node as R6.1) |
@@ -245,7 +259,9 @@ Only pins with net port connections are listed — all others are unused (config
 | 41 | PE10 | PDM_DATA | ADF1_SDI0 (AF3) |
 | 55 | PD8 | DBG_TX | USART3_TX (AF7) |
 | 56 | PD9 | DBG_RX | USART3_RX (AF7) |
-| 59 | PD12 | SW_VCC_EN | GPIO output |
+| 57 | PD10 | BLE_EN | GPIO output |
+| 58 | PD11 | PERIPH_EN | GPIO output |
+| 59 | PD12 | GPS_EN | GPIO output |
 | 60 | PD13 | LED_OUT | GPIO output |
 | 61 | PD14 | GPS_WAKE | GPIO output |
 | 62 | PD15 | GPS_RST | GPIO output |
@@ -283,9 +299,11 @@ L1 is the GPS antenna bias tee inductor (not SMPS-related).
 | C15 | 1uF | LDO output (Q1.VOUT) | 3V3 | GND |
 | C16 | 1uF | LDO input (Q1.VIN) | VBAT+ | GND |
 
-| C17 | 10uF | SW_VCC rail (near U2 pin 8) | SW_VCC | GND |
+| C17 | 10uF | GPS_VCC rail (near U2 pin 8) | GPS_VCC | GND |
+| C18 | 1uF | PERIPH_VCC load switch output | PERIPH_VCC | GND |
+| C19 | 1uF | BLE_VCC load switch output | BLE_VCC | GND |
 
-**Totals:** 10x 100nF, 2x 10uF, 1x 4.7uF, 4x 1uF = 17 caps.
+**Totals:** 10x 100nF, 2x 10uF, 1x 4.7uF, 6x 1uF = 19 caps.
 
 ---
 
@@ -293,18 +311,20 @@ L1 is the GPS antenna bias tee inductor (not SMPS-related).
 
 - [ ] Every U1 pin from `stm32u575_pinout.md` appears in a net or marked unused
 - [ ] No MCU pin used in two different nets
-- [ ] All 17 decoupling caps connected (10x 100nF + 2x 10uF + 1x 4.7uF + 4x 1uF)
+- [ ] All 19 decoupling caps connected (10x 100nF + 2x 10uF + 1x 4.7uF + 6x 1uF)
 - [ ] VCAP (pin 48): 4.7uF cap to GND (pin 49)
 - [ ] VREF- (pin 20): tied to VSSA/GND
-- [ ] All component VCC pins on 3V3, all GND pins on GND
-- [ ] Power switch: Q2 P-FET Source=3V3, Drain=SW_VCC, Gate=Q2_GATE
-- [ ] SW_VCC rail: U2.pin8, CARD1.VDD, COMM1.VCC, H1.1 all on SW_VCC (switched)
-- [ ] H1.1 connects ONLY to SW_VCC — do NOT route 3V3 through H1.1 as a via
-- [ ] GPS: U2.pin6 (VBAT) on 3V3 (always-on, NOT SW_VCC)
+- [ ] All component VCC pins on correct rail, all GND pins on GND
+- [ ] Load switches: U4/U5/U6 VIN on 3V3, GND on GND, ON on respective GPIO
+- [ ] GPS_VCC rail: U4.VOUT → U2.pin8 (VCC), C17
+- [ ] BLE_VCC rail: U5.VOUT → COMM1.VCC, C19
+- [ ] PERIPH_VCC rail: U6.VOUT → CARD1.VDD, H1.1, C18
+- [ ] H1.1 connects ONLY to PERIPH_VCC — do NOT route 3V3 through H1.1 as a via
+- [ ] GPS: U2.pin6 (VBAT) on 3V3 (always-on, NOT GPS_VCC)
 - [ ] GPS: U2.pin4 (1PPS) on GPS_PPS, U2.pin5 (ON/OFF) on GPS_WAKE, U2.pin9 (nRESET) on GPS_RST
 - [ ] GPS: U2.pin1/10/12 (GND) all on GND net
 - [ ] GPS RF: L1 between U2.pin14 (VCC_RF) and U2.pin11 (RF_IN), J1 on RF_IN side
-- [ ] SW_VCC: C17 (10uF) decoupling near U2.pin8
+- [ ] GPS_VCC: C17 (10uF) decoupling near U2.pin8
 - [ ] I2C: R3/R4 pull-ups between 3V3 and I2C_SCL/I2C_SDA
 - [ ] Battery divider: R7 (VBAT+→midpoint), R8 (midpoint→GND), midpoint=VBAT_SENSE
 - [ ] BOOT0 (PH3 pin 94): R6 pull-down to GND, SW2 to 3V3
