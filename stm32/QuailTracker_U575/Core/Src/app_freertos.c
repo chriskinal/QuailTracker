@@ -362,6 +362,7 @@ static int configSave(void);
 static void surveyAccumulate(float lat, float lon, float alt);
 
 /* BLE protocol */
+static int bleSendCmd(const char *cmd, char *resp, int respSize, int timeoutMs);
 static void bleSendLine(const char *fmt, ...);
 static void bleHandleCommand(const char *cmd);
 static void bleHandleStatusEx(const char *tag);
@@ -989,6 +990,18 @@ void StartCliTask(void *argument)
               sdMounted = 0;
               osMutexRelease(fileMtxHandle);
             }
+            /* Send BLE module to deep sleep with GPIO wake on pin 7 (RX).
+             * When MCU wakes and sends UART data, the start bit pulls RX low,
+             * triggering the low-level GPIO wake.  50µA, no advertising.
+             * Mode 0 keeps advertising but can only be woken by power cycle.
+             * Use bleSendCmd to wait for OK — confirms module accepted the
+             * command before we enter Stop 2. */
+            {
+              char sleepResp[32];
+              bleSendCmd("AT+SLEEP=2,2,7,0", sleepResp, sizeof(sleepResp), 1000);
+              osDelay(100);  /* let module settle into deep sleep */
+            }
+
             printf("Entering Stop 2 for %lu seconds...\r\n",
                    (unsigned long)sleepSec);
             fflush(stdout);
@@ -996,6 +1009,23 @@ void StartCliTask(void *argument)
             enterStop2(sleepSec);
             printf("\r\nWoke from Stop 2 (%lu seconds)\r\n",
                    (unsigned long)sleepSec);
+
+            /* Wake BLE module from deep sleep (mode 2).  The start bit of
+             * the first UART byte pulls RX low, triggering the GPIO wake.
+             * Module does a full reboot (~1s) and prints a boot banner
+             * (~300 bytes) before it's ready for AT commands.
+             * After ATE0, query AT+BLESTATE? to confirm the BLE stack is
+             * fully initialized — without this, a subsequent AT+SLEEP=2
+             * can leave the radio partially on (higher sleep current). */
+            bleSend("AT\r\n");
+            osDelay(1000);
+            { uint8_t d; while (osMessageQueueGet(bleRxQueue, &d, NULL, 0) == osOK) {} }
+            {
+              char wResp[32];
+              bleSendCmd("ATE0", wResp, sizeof(wResp), 500);
+              bleSendCmd("AT+BLESTATE?", wResp, sizeof(wResp), 500);
+            }
+            printf("BLE: Module rebooted from deep sleep\r\n");
             /* Remount SD after wake */
             if (wasMounted) {
               extern FATFS USERFatFS;
@@ -1888,6 +1918,7 @@ static void StartBleTask(void *argument)
             strncpy(bleName, cfg.stationId, sizeof(bleName) - 1);
             bleName[sizeof(bleName) - 1] = '\0';
         }
+
     }
 
     /* Main loop: read incoming BLE data (transparent mode) */

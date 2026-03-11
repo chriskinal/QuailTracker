@@ -63,19 +63,28 @@ Full syntax: `AT+SLEEP=<mode>[,<wakeup source>,<param1>,<param2>]`
 | 2 | 50 µA | No | Yes | No |
 | 3 | Normal | Yes | Yes | N/A (default) |
 
-*UART wake in mode 0 may work in real circuit — USB adapter TX backfeeds power into
-module RX pin, preventing proper sleep/wake testing. Disconnect adapter TX to test.
+*Mode 0 cannot be woken by GPIO/UART — only power cycle wakes it. `AT+SLEEP=0,2,7,0`
+(documented GPIO wake on RX pin) does NOT work on this firmware. Mode 0 is only useful
+if you never need to wake the module programmatically.
 
 Wakeup source (modes 0/1/2 only): 0=timer, 2=GPIO
 - Timer: param1 = interval in ms
-- GPIO: param1 = pin number, param2 = trigger (0=low, 1=high, 2=falling, 3=rising, 4=both)
+- GPIO: param1 = pin number (counterclockwise from upper-left, starting at 1). **Pin 7 = RX.**
+- GPIO: param2 = trigger (0=low, 1=high, 2=falling, 3=rising, 4=both)
 
-**Mode 0 is the recommended sleep mode for QuailTracker:**
-- 275µA with BLE advertising active
-- Phone can discover and connect
-- On connect, module sends `+EVENT:BLE_CONNECTED` over UART TX
-- That start bit wakes STM32 from Stop 2 via USART2 RX
-- Total system sleep: ~280µA (BLE 275µA + MCU Stop 2 ~5µA)
+**Mode 2 is the recommended sleep mode for QuailTracker:**
+- 50µA, no BLE advertising, GPIO wake on RX pin works
+- `AT+SLEEP=2,2,7,0` — deep sleep, wake on RX low level (UART start bit)
+- After MCU wakes from Stop 2, send throwaway `AT\r\n` to wake module (start bit pulls RX low)
+- First UART byte is consumed as wake trigger — follow with `ATE0\r\n` to suppress echo
+- Total system sleep: ~55µA (BLE 50µA + MCU Stop 2 ~5µA)
+- Tradeoff: phone cannot discover device while sleeping (no advertising)
+
+**Mode 0 — light sleep with advertising (NOT recommended):**
+- 275µA with BLE advertising active, phone can discover and connect
+- Module sends `+EVENT:BLE_CONNECTED` over UART TX on connect
+- Problem: no way to wake module after MCU RTC wake (GPIO wake broken, no RST GPIO)
+- Would require RST pin connected to STM32 GPIO on production PCB for power-cycle wake
 
 ## URC Events (Unsolicited Result Codes)
 

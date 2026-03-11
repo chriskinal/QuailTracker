@@ -1538,9 +1538,17 @@ void enterStop2(uint32_t seconds)
         audioStarted = 0;
     }
 
-    /* Disable UART RXNE interrupts */
+    /* Disable UART RXNE interrupts and clear error flags.
+     * Switching pins to analog disconnects USART RX, which can set ORE/FE.
+     * On STM32U5, RXNEIE also enables ORE interrupt — a set ORE would
+     * re-assert the USART NVIC line immediately after any pending clear,
+     * causing WFI to return instantly.  Clear errors + drain RDR first. */
     __HAL_UART_DISABLE_IT(&husart1, UART_IT_RXNE);
     __HAL_UART_DISABLE_IT(&husart2, UART_IT_RXNE);
+    USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
+    USART2->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
+    (void)USART1->RDR;  /* drain stale RXNE */
+    (void)USART2->RDR;
 
     /* Set all peripheral-facing GPIOs to analog (hi-Z) to prevent
      * back-powering unpowered modules through ESD protection diodes.
@@ -1582,6 +1590,17 @@ void enterStop2(uint32_t seconds)
     EXTI->IMR1  |= EXTI_IMR1_IM19;
     EXTI->RPR1   = EXTI_RPR1_RPIF19;
 
+    /* Clear ALL pending interrupts so only EXTI19 (RTC) can wake the CPU.
+     * Key: USART ORE errors (cleared above) were re-asserting the USART
+     * NVIC line after every pending clear, causing WFI to return instantly
+     * on every sleep after the first. */
+    SCB->ICSR  = SCB_ICSR_PENDSTCLR_Msk                   /* SysTick        */
+               | SCB_ICSR_PENDSVCLR_Msk;                   /* PendSV         */
+    for (uint32_t i = 0; i < 8u; i++)
+        NVIC->ICPR[i] = 0xFFFFFFFFu;                      /* all NVIC IRQs  */
+    __DSB();
+    __ISB();
+
     /* Enter Stop 2 */
     HAL_PWREx_EnterSTOP2Mode(PWR_STOPENTRY_WFI);
 
@@ -1602,6 +1621,13 @@ void enterStop2(uint32_t seconds)
     GPIOD->ODR = odr_d;
     GPIOA->MODER = moder_a;
     GPIOB->MODER = moder_b;
+
+    /* Clear UART error flags accumulated during sleep (ORE from PA3/PA10
+     * disconnected from AF) and drain stale RDR before re-enabling RXNE. */
+    USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
+    USART2->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
+    (void)USART1->RDR;
+    (void)USART2->RDR;
 
     /* Re-enable UART RXNE interrupts */
     __HAL_UART_ENABLE_IT(&husart1, UART_IT_RXNE);
