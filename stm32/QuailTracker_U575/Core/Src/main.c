@@ -1573,8 +1573,9 @@ void enterStop2(uint32_t seconds)
                  | (1u << (14+16))   /* PD14 GPS_ON/OFF → LOW */
                  | (1u << (15+16));  /* PD15 GPS_nRESET → LOW */
 
-    /* Disable SysTick */
+    /* Disable SysTick + HAL timebase (TIM17) to stop periodic ticks */
     SysTick->CTRL &= ~(SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk);
+    HAL_SuspendTick();
 
     /* Deactivate previous wake-up timer, then reconfigure for requested seconds.
      * Use WP disable/enable around HAL calls to work around STM32U5 HAL v1.8.0
@@ -1588,16 +1589,25 @@ void enterStop2(uint32_t seconds)
     /* EXTI line 19 = RTC wake-up timer (configurable event on U5) */
     EXTI->RTSR1 |= EXTI_RTSR1_RT19;
     EXTI->IMR1  |= EXTI_IMR1_IM19;
-    EXTI->RPR1   = EXTI_RPR1_RPIF19;
 
-    /* Clear ALL pending interrupts so only EXTI19 (RTC) can wake the CPU.
-     * Key: USART ORE errors (cleared above) were re-asserting the USART
-     * NVIC line after every pending clear, causing WFI to return instantly
-     * on every sleep after the first. */
-    SCB->ICSR  = SCB_ICSR_PENDSTCLR_Msk                   /* SysTick        */
-               | SCB_ICSR_PENDSVCLR_Msk;                   /* PendSV         */
+    /* Save all NVIC interrupt enables, then disable everything except
+     * the RTC IRQ (EXTI line 19).  This prevents ANY peripheral from
+     * causing a spurious WFI return — TIM17 HAL tick, USART ORE errors,
+     * DMA TC flags, EXTI8 (PPS), etc.  WFI only wakes on enabled+pending
+     * interrupts, so with only RTC_IRQn enabled, only EXTI19 can wake. */
+    uint32_t nvic_iser_save[8];
+    for (uint32_t i = 0; i < 8u; i++) {
+        nvic_iser_save[i] = NVIC->ISER[i];
+        NVIC->ICER[i] = 0xFFFFFFFFu;       /* disable all IRQs */
+    }
+    NVIC_EnableIRQ(RTC_IRQn);               /* enable only RTC wake */
+
+    /* Clear ALL pending: SysTick, PendSV, NVIC, and EXTI (both edges) */
+    SCB->ICSR  = SCB_ICSR_PENDSTCLR_Msk | SCB_ICSR_PENDSVCLR_Msk;
     for (uint32_t i = 0; i < 8u; i++)
-        NVIC->ICPR[i] = 0xFFFFFFFFu;                      /* all NVIC IRQs  */
+        NVIC->ICPR[i] = 0xFFFFFFFFu;
+    EXTI->RPR1 = 0xFFFFFFFFu;              /* clear all rising pending  */
+    EXTI->FPR1 = 0xFFFFFFFFu;              /* clear all falling pending */
     __DSB();
     __ISB();
 
@@ -1609,25 +1619,37 @@ void enterStop2(uint32_t seconds)
     /* Restore PLL / 160MHz system clock */
     SystemClock_Config();
 
-    /* Re-enable SysTick */
+    /* Re-enable SysTick + HAL timebase (TIM17) */
     SysTick->CTRL |= SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk;
+    HAL_ResumeTick();
 
     /* Deactivate RTC wake-up timer */
     __HAL_RTC_WRITEPROTECTION_DISABLE(&hrtc);
     HAL_RTCEx_DeactivateWakeUpTimer(&hrtc);
     __HAL_RTC_WRITEPROTECTION_ENABLE(&hrtc);
 
+    /* Clear UART error flags accumulated during sleep (ORE from PA3/PA10
+     * disconnected from AF) and drain stale RDR before restoring GPIOs. */
+    USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
+    USART2->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
+    (void)USART1->RDR;
+    (void)USART2->RDR;
+
     /* Restore peripheral GPIO states (saved before sleep) */
     GPIOD->ODR = odr_d;
     GPIOA->MODER = moder_a;
     GPIOB->MODER = moder_b;
 
-    /* Clear UART error flags accumulated during sleep (ORE from PA3/PA10
-     * disconnected from AF) and drain stale RDR before re-enabling RXNE. */
+    /* GPIOs restored — USART RX pins reconnected, may generate new ORE.
+     * Clear errors again + drain RDR before restoring NVIC enables. */
     USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
     USART2->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
     (void)USART1->RDR;
     (void)USART2->RDR;
+
+    /* Restore all NVIC interrupt enables (saved before sleep) */
+    for (uint32_t i = 0; i < 8u; i++)
+        NVIC->ISER[i] = nvic_iser_save[i];
 
     /* Re-enable UART RXNE interrupts */
     __HAL_UART_ENABLE_IT(&husart1, UART_IT_RXNE);

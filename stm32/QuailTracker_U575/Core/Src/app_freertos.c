@@ -227,6 +227,7 @@ static char bleAddr[20];
 static uint8_t bleReady;
 static volatile uint8_t bleConnected;
 static char bleLastResponse[64];
+static volatile uint8_t bleNameUpdatePending;  /* apply BLE name change on disconnect */
 
 /* Recording filename from main.c (for BLE $STATUS) */
 extern char recFilename[];
@@ -907,6 +908,8 @@ void StartCliTask(void *argument)
           printf("Stop recording first!\r\n");
         } else {
           recFormat = (recFormat == REC_FMT_WAV) ? REC_FMT_FLAC : REC_FMT_WAV;
+          cfg.recFormat = recFormat;
+          configSave();
           printf("Recording format: %s\r\n", recFormat == REC_FMT_WAV ? "WAV" : "FLAC");
         }
         printMenu();
@@ -1960,6 +1963,20 @@ static void StartBleTask(void *argument)
                         streamRecInterval = 0;
                         bleLogEnabled = 0;
                         printf("BLE: Disconnected\r\n");
+                        /* Apply deferred BLE name update now that queue is free */
+                        if (bleNameUpdatePending) {
+                            bleNameUpdatePending = 0;
+                            char nameCmd[48];
+                            char nameResp[32];
+                            bleSendCmd("AT+BLEADVEN=0", nameResp, sizeof(nameResp), 1000);
+                            osDelay(100);
+                            snprintf(nameCmd, sizeof(nameCmd), "AT+BLENAME=%s", cfg.stationId);
+                            bleSendCmd(nameCmd, nameResp, sizeof(nameResp), 1000);
+                            bleSendCmd("AT+BLEADVEN=1", nameResp, sizeof(nameResp), 1000);
+                            strncpy(bleName, cfg.stationId, sizeof(bleName) - 1);
+                            bleName[sizeof(bleName) - 1] = '\0';
+                            printf("BLE: Name updated to %s\r\n", bleName);
+                        }
                     }
                     /* else: ignore unknown lines */
                     strncpy(bleLastResponse, buf, sizeof(bleLastResponse) - 1);
@@ -2619,18 +2636,14 @@ static void bleHandleSet(const char *args)
         if (strlen(val) > 15) { bleSendLine("$ERR,BADARG"); return; }
         strncpy(cfg.stationId, val, sizeof(cfg.stationId));
         strncpy(deviceStationId, cfg.stationId, sizeof(deviceStationId));
-        /* Update BLE name: stop adv → set name → restart adv */
-        {
-            char cmd[48];
-            char cmdResp[32];
-            bleSendCmd("AT+BLEADVEN=0", cmdResp, sizeof(cmdResp), 1000);
-            osDelay(100);
-            snprintf(cmd, sizeof(cmd), "AT+BLENAME=%s", cfg.stationId);
-            bleSendCmd(cmd, cmdResp, sizeof(cmdResp), 1000);
-            bleSendCmd("AT+BLEADVEN=1", cmdResp, sizeof(cmdResp), 1000);
-            strncpy(bleName, cfg.stationId, sizeof(bleName) - 1);
-            bleName[sizeof(bleName) - 1] = '\0';
-        }
+        /* Defer BLE name update — AT commands sent inline here would use
+         * bleSendCmd() which reads from bleRxQueue.  If the PB-03F echoes
+         * AT responses to the connected BLE device, the app sees "OK"
+         * before our "$OK", sends the next $SET command early, and
+         * bleSendCmd swallows it from the queue.  Setting the flag lets
+         * the main loop apply the name change after $OK has been sent
+         * and the app has moved on. */
+        bleNameUpdatePending = 1;  /* apply on disconnect — AT cmds can't share queue while connected */
     } else if (strcmp(key, "GAIN") == 0) {
         int v = atoi(val);
         if (v < 0 || v > 24 || (v % 3) != 0) { bleSendLine("$ERR,BADARG"); return; }
