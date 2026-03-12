@@ -86,25 +86,31 @@ static const uint16_t crc16_table[256] = {
 typedef struct {
     uint8_t  *buf;
     uint32_t  pos;     /* byte position in output */
+    uint32_t  limit;   /* max bytes (overflow protection) */
     uint32_t  bits;    /* pending bit accumulator */
     uint8_t   nbits;   /* pending bit count (0-7) */
+    uint8_t   overflow;/* set if pos exceeded limit */
 } bitwriter_t;
 
-static void bw_init(bitwriter_t *bw, uint8_t *buf)
+static void bw_init(bitwriter_t *bw, uint8_t *buf, uint32_t limit)
 {
     bw->buf = buf;
     bw->pos = 0;
+    bw->limit = limit;
     bw->bits = 0;
     bw->nbits = 0;
+    bw->overflow = 0;
 }
 
 /* Write 1-25 bits (MSB-first). nbits must be < 8 on entry. */
 static void bw_write_bits(bitwriter_t *bw, uint32_t n, uint32_t val)
 {
+    if (bw->overflow) return;
     bw->bits = (bw->bits << n) | (val & ((1u << n) - 1));
     bw->nbits += (uint8_t)n;
     while (bw->nbits >= 8) {
         bw->nbits -= 8;
+        if (bw->pos >= bw->limit) { bw->overflow = 1; return; }
         bw->buf[bw->pos++] = (uint8_t)(bw->bits >> bw->nbits);
     }
 }
@@ -204,10 +210,48 @@ static uint32_t estimate_rice_param(uint64_t cost, uint32_t count)
  * Frame Encoding
  * ================================================================ */
 
+static void encode_frame_header(bitwriter_t *bw, uint32_t frameNumber,
+                                uint32_t blockSize, uint32_t *crc8PosOut)
+{
+    /* Sync code (14b) + reserved (1b) + blocking strategy fixed (1b) = 0xFFF8 */
+    bw_write_bits(bw, 16, 0xFFF8);
+
+    /* Block size code (4 bits) */
+    uint8_t bsCode;
+    if (blockSize == 4096)
+        bsCode = 12;   /* 256 * 2^(12-8) = 4096 */
+    else
+        bsCode = 7;    /* 16-bit blocksize-1 follows */
+    bw_write_bits(bw, 4, bsCode);
+
+    /* Sample rate code (4 bits): 0x0A = 48000 Hz */
+    bw_write_bits(bw, 4, 0x0A);
+
+    /* Channel assignment (4 bits): 0 = mono */
+    bw_write_bits(bw, 4, 0);
+
+    /* Sample size (3 bits): 6 = 24-bit */
+    bw_write_bits(bw, 3, 6);
+
+    /* Reserved (1 bit) */
+    bw_write_bits(bw, 1, 0);
+
+    /* Frame number (UTF-8 coded) */
+    bw_write_utf8_uint32(bw, frameNumber);
+
+    /* Extra block size bytes for non-standard sizes */
+    if (bsCode == 7)
+        bw_write_bits(bw, 16, blockSize - 1);
+
+    /* CRC-8 placeholder — remember position, patch later */
+    *crc8PosOut = bw->pos;
+    bw_write_bits(bw, 8, 0);
+}
+
 static uint32_t encode_frame(flac_enc_t *e, uint32_t blockSize)
 {
     bitwriter_t bw;
-    bw_init(&bw, e->outBuf);
+    bw_init(&bw, e->outBuf, FLAC_OUT_BUF_SIZE);
 
     /* --- Select best predictor --- */
     uint32_t bestOrder = 0;
@@ -231,40 +275,8 @@ static uint32_t encode_frame(flac_enc_t *e, uint32_t blockSize)
     int useVerbatim = (estRiceBits >= verbBits);
 
     /* --- Frame header --- */
-
-    /* Sync code (14b) + reserved (1b) + blocking strategy fixed (1b) = 0xFFF8 */
-    bw_write_bits(&bw, 16, 0xFFF8);
-
-    /* Block size code (4 bits) */
-    uint8_t bsCode;
-    if (blockSize == 4096)
-        bsCode = 12;   /* 256 * 2^(12-8) = 4096 */
-    else
-        bsCode = 7;    /* 16-bit blocksize-1 follows */
-    bw_write_bits(&bw, 4, bsCode);
-
-    /* Sample rate code (4 bits): 0x0A = 48000 Hz */
-    bw_write_bits(&bw, 4, 0x0A);
-
-    /* Channel assignment (4 bits): 0 = mono */
-    bw_write_bits(&bw, 4, 0);
-
-    /* Sample size (3 bits): 6 = 24-bit */
-    bw_write_bits(&bw, 3, 6);
-
-    /* Reserved (1 bit) */
-    bw_write_bits(&bw, 1, 0);
-
-    /* Frame number (UTF-8 coded) */
-    bw_write_utf8_uint32(&bw, e->frameNumber);
-
-    /* Extra block size bytes for non-standard sizes */
-    if (bsCode == 7)
-        bw_write_bits(&bw, 16, blockSize - 1);
-
-    /* CRC-8 placeholder — remember position, patch later */
-    uint32_t crc8Pos = bw.pos;
-    bw_write_bits(&bw, 8, 0);
+    uint32_t crc8Pos;
+    encode_frame_header(&bw, e->frameNumber, blockSize, &crc8Pos);
 
     /* --- Subframe --- */
 
@@ -295,6 +307,20 @@ static uint32_t encode_frame(flac_enc_t *e, uint32_t blockSize)
         for (uint32_t i = bestOrder; i < blockSize; i++) {
             int32_t r = compute_residual(e->blockBuf, i, bestOrder);
             bw_write_rice_signed(&bw, k, r);
+        }
+
+        /* If Rice coding overflowed the output buffer, re-encode as verbatim.
+         * Verbatim is bounded: blockSize*3 + ~20 bytes overhead < 16KB. */
+        if (bw.overflow) {
+            bw_init(&bw, e->outBuf, FLAC_OUT_BUF_SIZE);
+            encode_frame_header(&bw, e->frameNumber, blockSize, &crc8Pos);
+
+            bw_write_bits(&bw, 1, 0);
+            bw_write_bits(&bw, 6, 1);     /* VERBATIM */
+            bw_write_bits(&bw, 1, 0);
+
+            for (uint32_t i = 0; i < blockSize; i++)
+                bw_write_bits(&bw, 24, (uint32_t)(e->blockBuf[i] & 0xFFFFFF));
         }
     }
 

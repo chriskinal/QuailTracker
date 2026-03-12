@@ -19,34 +19,53 @@ _job_lock = threading.Lock()
 _job_thread = None
 _job_status = {"state": "idle", "stage": "", "error": ""}
 _progress_queue = queue.Queue()
+_cancel_event = threading.Event()
 
 # Default directories (overridable via Docker volumes)
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/output")
 
 
-def _push_progress(message):
-    """Thread-safe progress push."""
+def _push_progress(message, check_cancel=True):
+    """Thread-safe progress push. Also checks for cancellation."""
     _progress_queue.put(message)
+    if check_cancel:
+        _check_cancel()
 
 
 def _set_status(state, stage="", error=""):
     global _job_status
     _job_status = {"state": state, "stage": stage, "error": error}
-    _push_progress(json.dumps({"_status": state, "stage": stage, "error": error}))
+    _push_progress(json.dumps({"_status": state, "stage": stage, "error": error}),
+                   check_cancel=False)
+
+
+class CancelledError(Exception):
+    """Raised when a job is cancelled."""
+    pass
+
+
+def _check_cancel():
+    """Check if cancellation was requested. Call from job functions."""
+    if _cancel_event.is_set():
+        raise CancelledError("Job cancelled by user")
 
 
 def _run_job(job_fn, *args, **kwargs):
     """Run a job function in the background thread."""
     try:
+        _cancel_event.clear()
         _set_status("running")
         job_fn(*args, **kwargs)
         _set_status("done")
+    except CancelledError:
+        _set_status("cancelled")
+        _push_progress("Job cancelled.", check_cancel=False)
     except Exception as e:
         _set_status("error", error=str(e))
-        _push_progress(f"ERROR: {e}")
+        _push_progress(f"ERROR: {e}", check_cancel=False)
     finally:
-        _push_progress("[DONE]")
+        _push_progress("[DONE]", check_cancel=False)
 
 
 def _start_job(job_fn, *args, **kwargs):
@@ -78,7 +97,21 @@ def index():
 
 @app.route("/api/status")
 def api_status():
-    return jsonify(_job_status)
+    status = dict(_job_status)
+    with _job_lock:
+        status["running"] = _job_thread is not None and _job_thread.is_alive()
+    return jsonify(status)
+
+
+@app.route("/api/cancel", methods=["POST"])
+def api_cancel():
+    """Request cancellation of the running job."""
+    with _job_lock:
+        if _job_thread is None or not _job_thread.is_alive():
+            return jsonify({"error": "No job running"}), 409
+    _cancel_event.set()
+    _push_progress("Cancelling...", check_cancel=False)
+    return jsonify({"message": "Cancel requested"})
 
 
 @app.route("/api/progress")

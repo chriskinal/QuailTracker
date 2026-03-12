@@ -213,6 +213,26 @@ header h1 {
     cursor: not-allowed;
 }
 
+.btn-cancel {
+    padding: 0.375rem 1rem;
+    background: var(--error);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    cursor: pointer;
+}
+
+.btn-cancel:hover {
+    opacity: 0.9;
+}
+
+.btn-cancel:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 .btn-secondary {
     padding: 0.5rem 0.75rem;
     background: var(--surface);

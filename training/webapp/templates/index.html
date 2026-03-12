@@ -145,7 +145,10 @@
 
         <!-- Progress Panel -->
         <section id="progress-panel" class="panel hidden">
-            <h2>Progress</h2>
+            <div style="display:flex; align-items:center; gap:1rem;">
+                <h2 style="margin:0;">Progress</h2>
+                <button type="button" id="btn-cancel" class="btn-cancel hidden">Cancel</button>
+            </div>
             <div id="stage-indicators" class="stages">
                 <span class="stage" data-stage="download">Download</span>
                 <span class="stage" data-stage="sort">Sort</span>
@@ -252,7 +255,14 @@
         const logOutput = document.getElementById('log-output');
         const progressPanel = document.getElementById('progress-panel');
         const resultsPanel = document.getElementById('results-panel');
+        const cancelBtn = document.getElementById('btn-cancel');
         let eventSource = null;
+
+        cancelBtn.addEventListener('click', () => {
+            cancelBtn.disabled = true;
+            cancelBtn.textContent = 'Cancelling...';
+            fetch('/api/cancel', { method: 'POST' });
+        });
 
         function resetUI() {
             logOutput.textContent = '';
@@ -263,6 +273,9 @@
             });
             document.getElementById('epoch-progress').classList.add('hidden');
             document.querySelectorAll('.btn-primary').forEach(b => b.disabled = true);
+            cancelBtn.classList.remove('hidden');
+            cancelBtn.disabled = false;
+            cancelBtn.textContent = 'Cancel';
         }
 
         function appendLog(text) {
@@ -294,6 +307,7 @@
                     if (parsed.done) {
                         eventSource.close();
                         document.querySelectorAll('.btn-primary').forEach(b => b.disabled = false);
+                        cancelBtn.classList.add('hidden');
                         document.querySelectorAll('.stage.active').forEach(s => {
                             s.classList.remove('active');
                             s.classList.add('done');
@@ -439,6 +453,20 @@
                 appendLog('Error: ' + err.message);
                 document.querySelectorAll('.btn-primary').forEach(b => b.disabled = false);
             });
+        });
+
+        // --- Check for running job on page load ---
+        fetch('/api/status').then(r => r.json()).then(status => {
+            if (status.running) {
+                progressPanel.classList.remove('hidden');
+                cancelBtn.classList.remove('hidden');
+                cancelBtn.disabled = false;
+                cancelBtn.textContent = 'Cancel';
+                document.querySelectorAll('.btn-primary').forEach(b => b.disabled = true);
+                if (status.stage) setStage(status.stage);
+                appendLog('(Reconnected to running job...)');
+                startSSE();
+            }
         });
     })();
     </script>

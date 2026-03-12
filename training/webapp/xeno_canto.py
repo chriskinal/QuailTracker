@@ -11,28 +11,13 @@ import soundfile as sf
 API_BASE = "https://xeno-canto.org/api/3/recordings"
 
 
-def search_species(species_name, api_key, quality_min="B", max_recordings=50):
-    """Search xeno-canto for recordings of a species.
-
-    Args:
-        species_name: English common name (e.g., "Northern Bobwhite").
-        api_key: xeno-canto API v3 key.
-        quality_min: Minimum quality rating (A, B, or C).
-        max_recordings: Maximum number of recordings to return.
-
-    Returns:
-        List of recording metadata dicts.
-    """
-    # q:">C" means better than C, i.e. A and B
-    quality_map = {"A": 'q:A', "B": 'q:">C"', "C": 'q:">D"'}
-    q_filter = quality_map.get(quality_min, 'q:">C"')
-
+def _fetch_quality(species_name, api_key, quality_filter, max_per_page=500):
+    """Fetch recordings for a single quality grade from xeno-canto."""
     params = {
-        "query": f'en:"{species_name}" {q_filter}',
+        "query": f'en:"{species_name}" {quality_filter}',
         "key": api_key,
-        "per_page": min(max_recordings, 500),
+        "per_page": min(max_per_page, 500),
     }
-
     resp = requests.get(API_BASE, params=params, timeout=30)
     resp.raise_for_status()
     data = resp.json()
@@ -51,7 +36,82 @@ def search_species(species_name, api_key, quality_min="B", max_recordings=50):
         except (ValueError, IndexError):
             continue
 
-    return filtered[:max_recordings]
+    return filtered
+
+
+def search_species(species_name, api_key, quality_min="B", max_recordings=50):
+    """Search xeno-canto for recordings of a species with balanced quality.
+
+    Queries each quality grade separately and builds a balanced result set.
+    Target distribution: 40% A, 35% B, 25% C (when quality_min includes
+    those grades). If a grade has fewer results than its quota, the
+    shortfall is redistributed to other grades.
+
+    Args:
+        species_name: English common name (e.g., "Northern Bobwhite").
+        api_key: xeno-canto API v3 key.
+        quality_min: Minimum quality rating (A, B, or C).
+        max_recordings: Maximum number of recordings to return.
+
+    Returns:
+        List of recording metadata dicts.
+    """
+    # Build list of grades to query based on quality_min
+    grade_filters = {"A": 'q:A', "B": 'q:B', "C": 'q:C'}
+    if quality_min == "A":
+        grades = ["A"]
+        quotas = {"A": 1.0}
+    elif quality_min == "B":
+        grades = ["A", "B"]
+        quotas = {"A": 0.55, "B": 0.45}
+    else:  # C
+        grades = ["A", "B", "C"]
+        quotas = {"A": 0.40, "B": 0.35, "C": 0.25}
+
+    # Fetch each grade separately
+    pools = {}
+    for grade in grades:
+        pools[grade] = _fetch_quality(species_name, api_key,
+                                      grade_filters[grade])
+
+    # Allocate quotas, redistributing shortfalls
+    targets = {g: int(max_recordings * quotas[g]) for g in grades}
+    # Give rounding remainder to first grade
+    targets[grades[0]] += max_recordings - sum(targets.values())
+
+    selected = []
+    seen_ids = set()
+    remaining = 0
+
+    for grade in grades:
+        pool = pools[grade]
+        target = targets[grade] + remaining
+        remaining = 0
+        count = 0
+        for rec in pool:
+            if count >= target:
+                break
+            rec_id = rec.get("id")
+            if rec_id not in seen_ids:
+                seen_ids.add(rec_id)
+                selected.append(rec)
+                count += 1
+        # Carry shortfall to next grade
+        remaining = target - count
+
+    # If still short after all grades, try backfilling from any grade
+    if remaining > 0:
+        for grade in grades:
+            for rec in pools[grade]:
+                if remaining <= 0:
+                    break
+                rec_id = rec.get("id")
+                if rec_id not in seen_ids:
+                    seen_ids.add(rec_id)
+                    selected.append(rec)
+                    remaining -= 1
+
+    return selected[:max_recordings]
 
 
 def download_recording(recording, output_dir, progress_callback=None):
@@ -176,7 +236,11 @@ def download_species_dataset(species_name, api_key, output_dir,
         return 0
 
     if progress_callback:
-        progress_callback(f"  Found {len(recordings)} recordings")
+        # Show quality distribution
+        from collections import Counter
+        qdist = Counter(rec.get("q", "?") for rec in recordings)
+        dist_str = ", ".join(f"{g}={n}" for g, n in sorted(qdist.items()))
+        progress_callback(f"  Found {len(recordings)} recordings ({dist_str})")
 
     total_clips = 0
 
