@@ -5,6 +5,24 @@ COMM1,PB-03F (Ai-Thinker),Module,C2980027,1,BLE 5.2 module UART AT commands
 U2,ATGM336H-5N31 GPS Module,LCC-18 (10.1x9.7mm),C90770,1,GPS+BDS GNSS module SMD (JLCPCB assembleable)
 # Power Supply
 Q1,XC6220B331MR-G,SOT-23-5,C86534,1,LDO 3.3V 20mV dropout 8uA Iq 1A (Torex)
+# Solar Charge Controller — CN3791 MPPT switching charger (SSOP-10)
+# Uses external P-channel MOSFET as high-side switch. Input range 4.5-28V.
+U7,CN3791,SSOP-10,C154992,1,Solar MPPT Li-ion charger 4.5-28V input PWM switching (Consonance)
+M1,SI2301CDS P-FET,SOT-23,C10487,1,External high-side switch for CN3791 (same as Q6)
+D1,SS14,SMA (DO-214AC),C2480,1,1A 40V Schottky freewheeling diode (M1.Drain to GND)
+D2,SS14,SMA (DO-214AC),C2480,1,1A 40V Schottky input reverse blocking (solar to VCC)
+L2,22uH shielded power inductor,5020 (5x5x2mm),C329665,1,Saturation 700mA DCR 235mΩ shielded (Chilisin SCDS4D28T-220M-S-N)
+RCS,0.2R 1% 1W 1206 (Milliohm HoLRT1206-1W-200mR-1%),1206,C5127778,1,Current sense 500mA charge between CSP(8) and BAT(7)
+R14,360k 1%,0603,C25194,1,MPPT divider high side VCC(9) to MPPT(6) (sets MPPT=5.5V)
+R15,100k 1%,0603,C25803,1,MPPT divider low side MPPT(6) to GND
+R16,10k 1%,0603,C25804,1,CHRG(3) status pull-up to 3V3
+R17,10k 1%,0603,C25804,1,DONE(4) status pull-up to 3V3
+R18,120R 1%,0603,C22787,1,COM(5) loop compensation resistor (series with C22)
+C20,10uF X5R 25V,0805,C15850,1,Solar input decoupling (near U7 VCC pin 9)
+C21,10uF X5R 25V,0805,C15850,1,Battery output decoupling (near U7 BAT pin 7)
+C22,220nF X7R 25V,0603,C441745,1,COM(5) loop compensation cap (series with R18 to GND)
+C23,100nF X7R 16V,0402,C1525,1,VG(1) to VCC(9) bypass (same part as C1-C10)
+CN3,JST PH 2-pin B2B-PH-K-S,TH 2.0mm pitch,C131337,1,Solar panel connector (vertical)
 # Decoupling - 100nF (x10)
 # C1-C5: VDD pins (11 28 50 75 100)
 # C6: VDDA(22), C7: VREF+(21), C8: VDDUSB(73), C9: VBAT(6), C10: NRST(14)
@@ -45,7 +63,7 @@ LED1,Green 0805,0805,C2297,1,Status LED (BASIC)
 # Connectors - JLCPCB assembled (SMD)
 CARD1,MicroSD TF-015,SMD push-push,C113206,1,SD card slot SPI mode
 # Connectors - Through-hole
-CN1,JST PH 2-pin B2B-PH-K-S,TH 2.0mm pitch,C131337,1,Battery connector (vertical)
+CN1,JST PH 2-pin B2B-PH-K-S,TH 2.0mm pitch,C131337,1,Battery connector 1S2P 18650 6800mAh (vertical)
 CN2,JST PH 4-pin B4B-PH-K-S,TH 2.0mm pitch,C131334,1,Mic breakout connector CLK DATA VDD GND (vertical)
 H1,1x4 Male Header 2.54mm,TH,,1,SHT30 module connector (hand-solder from stock)
 # Tactile Buttons
@@ -54,15 +72,23 @@ SW2,Tactile switch 3x6mm SMD,SMD,C318884,1,BOOT0 button (PH3 to 3V3 for DFU entr
 # -------------------------------------------------------
 # PASSIVE SUMMARY
 # -------------------------------------------------------
-# 100nF 0402 (C1525): 10 total (C1-C10)
-# 10uF 0805 (C15850): 2 total (C11, C17)
+# 100nF 0402 (C1525): 11 total (C1-C10, C23 VG bypass)
+# 220nF 0402 (C1603): 1 total (C22 COM compensation)
+# 10uF 0805 (C15850): 4 total (C11, C17, C20, C21)
 # 4.7uF 0402 (C23733): 1 total (C12 VCAP)
 # 1uF 0402 (C52923): 6 total (C13-C16, C18, C19)
 # 47nH 0402 (C97998): 1 total (L1 bias tee)
-# 10k 0603 (C25804): 1 total (R6)
+# 22uH 5020 (C329665): 1 total (L2 solar charger)
+# 10k 0603 (C25804): 3 total (R6, R16, R17)
 # 4.7k 0603 (C23162): 2 total (R3-R4)
 # 1M 0603 (C22935): 2 total (R7-R8)
 # 1k 0603 (C21190): 1 total (R9)
+# 120R 0603 (C22787): 1 total (R18 COM compensation)
+# 360k 0603 (C25194): 1 total (R14 MPPT divider)
+# 100k 0603 (C25803): 2 total (R12, R15)
+# 0.2R 1206 (C5127778): 1 total (RCS current sense, Milliohm HoLRT1206-1W-200mR-1%)
+# SS14 SMA (C2480): 2 total (D1 freewheeling, D2 input blocking)
+# SI2301CDS SOT-23 (C10487): 2 total (Q6 reverse protection, M1 charger FET)
 # -------------------------------------------------------
 # COST ESTIMATE (per board, qty 10)
 # -------------------------------------------------------
@@ -71,12 +97,15 @@ SW2,Tactile switch 3x6mm SMD,SMD,C318884,1,BOOT0 button (PH3 to 3V3 for DFU entr
 # PB-03F BLE: $1.26
 # SHT30 module (pre-made, off-board): $1.50
 # XC6220 LDO: $0.47
-# All passives+discretes+inductor: ~$0.50
-# Connectors (SMD) + U.FL: ~$0.55
+# CN3791 solar charger IC: ~$0.30
+# Solar charger passives (L2, D1, D2, Rs): ~$0.80
+# All other passives+discretes+inductor: ~$0.50
+# Connectors (SMD) + U.FL: ~$0.65
 # Crystal: $0.38
 # Active GPS antenna (off-board): ~$3.50
+# Solar panel 5V/2W (off-board): ~$3-5
 # PCB + assembly: ~$8-10
-# Total: ~$25-27 per unit
+# Total: ~$27-30 per unit (excluding solar panel)
 # -------------------------------------------------------
 # JLCPCB BASIC PARTS (no $3 extended fee)
 # -------------------------------------------------------
@@ -89,16 +118,18 @@ SW2,Tactile switch 3x6mm SMD,SMD,C318884,1,BOOT0 button (PH3 to 3V3 for DFU entr
 # C21190 - 1k 0603
 # C2297 - Green LED 0805
 # -------------------------------------------------------
-# EXTENDED PARTS (9 unique x $3 = $27 per order)
+# EXTENDED PARTS (11 unique x $3 = $33 per order)
 # -------------------------------------------------------
 # C5270988 - STM32U575VGT6
 # C90770 - ATGM336H-5N31 GPS module
 # C2980027 - PB-03F BLE module
 # C86534 - XC6220B331MR-G LDO
+# C154992 - CN3791 solar MPPT charger
+# C329665 - 22uH 5020 power inductor
 # C23733 - 4.7uF 0402 VCAP (verify BASIC/extended status)
 # C97998 - 47nH 0402 inductor (bias tee)
 # C88374 - U.FL connector (GPS antenna)
 # C156244 - 32.768kHz crystal
 # C113206 - MicroSD TF-015
-# C131337 - JST PH 2-pin (battery)
+# C131337 - JST PH 2-pin (battery + solar)
 # C131334 - JST PH 4-pin (mic breakout)

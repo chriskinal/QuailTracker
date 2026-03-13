@@ -37,6 +37,8 @@ C5270988 is the non-SMPS variant — uses internal LDO, no external inductor.
 | BLE_VCC EN | PD10 | 57 | GPIO | Output | HIGH=BLE on, LOW=off |
 | PERIPH_VCC EN | PD11 | 58 | GPIO | Output | HIGH=SD+SHT30 on, LOW=off |
 | Status LED | PD13 | 60 | GPIO | Output | Via 1k R9 to LED1 |
+| Solar CHRG | PB0 | 35 | GPIO | Input, active low | CN3791 charging indicator (open drain + 10k pull-up) |
+| Solar DONE | PB1 | 36 | GPIO | Input, active low | CN3791 charge complete indicator (open drain + 10k pull-up) |
 | SWO Trace | PB3 | 89 | AF0 | TRACESWO | Serial Wire Output for debug trace |
 | SWDIO | PA13 | 72 | AF0 | SWD debug | Default after reset |
 | SWCLK | PA14 | 76 | AF0 | SWD debug | Default after reset |
@@ -166,14 +168,15 @@ Divider current: ~2uA continuous (acceptable for battery life).
 Available GPIOs not assigned (configure as analog input for lowest leakage):
 
 PE0-PE6, PE7, PE8, PE11-PE15, PA0, PA1, PA11, PA12, PA15,
-PB0-PB2, PB4, PB5, PB8-PB10, PB12-PB15, PC1, PC2, PC3, PC5-PC9, PC10-PC12,
+PB2, PB4, PB5, PB8-PB10, PB12-PB15, PC1, PC2, PC3, PC5-PC9, PC10-PC12,
 PD0-PD7, PH0, PH1
 
 Note: PB11 is NOT bonded out on LQFP100 (neither SMPS nor non-SMPS variant).
 
 ## EasyEDA Schematic Designators
 
-1. **Power** — Q1 (LDO), C1-C16 (decoupling), CN1 (battery)
+1. **Power** — Q1 (LDO), Q6 (reverse protection), C1-C16 (decoupling), CN1 (battery)
+1a. **Solar Charger** — U7 (CN3791), D1/D2 (Schottky), L2 (22µH), C20/C21, R13-R17, CN3 (solar panel)
 2. **MCU** — U1 (STM32U575VGT6), X1 (LSE crystal), R6 (BOOT0 pull-down)
 3. **Audio** — CN2 (JST PH 4-pin to mic breakout: CLK, DATA, VDD, GND)
 4. **GPS** — U2 (ATGM336H-5N31), U4 (TPS22916 load switch for GPS_VCC), L1 (47nH bias tee), J1 (U.FL antenna), C17 (10uF GPS_VCC decoupling)

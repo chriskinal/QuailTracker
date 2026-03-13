@@ -21,7 +21,9 @@ Cross-reference: `stm32u575_pinout.md` (pin assignments), `stm32u575_bom_lcsc.cs
 
 | Net Port | Description | Connected Pins |
 |----------|-------------|----------------|
-| **VBAT+** | Battery positive rail | CN1.1, Q1.VIN(1), Q1.CE(3), C16.+, R7.1 |
+| **VBAT+** | Battery positive rail | CN1.1, Q1.VIN(1), Q1.CE(3), C16.+, R7.1, U7.BAT(7), C21.+, RCS.2 |
+| **SOLAR+** | Solar panel positive | CN3.1, D2.anode |
+| **SOLAR_IN** | Solar input (after blocking diode) | D2.cathode, U7.VCC(9), C20.+, C23.2, R14.1, M1.Source |
 | **3V3** | 3.3V regulated rail (always-on) | Q1.VOUT(5), C15.+, C11.+, U1 VDD pins (11, 28, 50, 75, 100), U1.VDDA(22), U1.VREF+(21), U1.VDDUSB(73), U1.VBAT(6), C1.+, C2.+, C3.+, C4.+, C5.+, C6.+, C7.+, C8.+, C9.+, C13.+, C14.+, R3.1, R4.1, U4.VIN, U5.VIN, U6.VIN, CN2.3, H2.1, SW2.1 |
 | **GND** | Ground | *(see dedicated GND table below)* |
 | **GPS_VCC** | Switched 3.3V to GPS | U4.VOUT, U2.pin8 (VCC), C17.+ |
@@ -31,6 +33,14 @@ Cross-reference: `stm32u575_pinout.md` (pin assignments), `stm32u575_bom_lcsc.cs
 | **BLE_EN** | BLE load switch enable | U5.ON, U1.pin57 (PD10) |
 | **PERIPH_EN** | Peripheral load switch enable | U6.ON, U1.pin58 (PD11) |
 | **VBAT_SENSE** | Battery ADC midpoint | R7.2, R8.1, U1.pin15 (PC0/ADC1_IN1) |
+| **SOLAR_SW** | Buck switching node (M1 drain) | M1.Drain, D1.cathode, L2.1 |
+| **SOLAR_DRV** | P-FET gate drive | U7.DRV(10), M1.Gate |
+| **SOLAR_VG** | Internal gate drive regulator | U7.VG(1), C23.1 |
+| **SOLAR_MPPT** | MPPT voltage set point | U7.MPPT(6), R14.2, R15.1 |
+| **SOLAR_CSP** | Current sense positive (inductor side) | U7.CSP(8), RCS.1, L2.2 |
+| **SOLAR_COM** | Loop compensation | U7.COM(5), R18.1, C22.1 |
+| **CHRG_STATUS** | Charging indicator (active low) | U7.CHRG(3), R16.2, U1.pin35 (PB0) |
+| **DONE_STATUS** | Charge complete (active low) | U7.DONE(4), R17.2, U1.pin36 (PB1) |
 | **GPS_VBAT** | GPS RTC/SRAM backup (always-on) | U2.pin6 (VBAT), 3V3 rail |
 
 ### GND Net — All Ground Connections
@@ -42,11 +52,12 @@ Place the **GND** net port label on every pin listed below.
 | MCU VSS | U1.pin10, U1.pin19 (VSSA), U1.pin20 (VREF-), U1.pin27, U1.pin49, U1.pin74, U1.pin99 |
 | LDO | Q1.VSS(2) |
 | Decoupling caps (−) | C1.−, C2.−, C3.−, C4.−, C5.−, C6.−, C7.−, C8.−, C9.−, C10.−, C11.−, C12.−, C13.−, C14.−, C15.−, C16.− |
-| Connectors | CN1.2, CN2.4, CARD1.VSS, COMM1.GND, H1.2, H2.2, SW1.2 |
+| Connectors | CN1.2, CN2.4, CN3.2, CARD1.VSS, COMM1.GND, H1.2, H2.2, SW1.2 |
 | GPS module | U2.pin1 (GND), U2.pin10 (GND), U2.pin12 (GND) |
 | GPS RF | J1.GND, C17.− |
 | Load switches | U4.GND, U5.GND, U6.GND |
 | Output caps | C18.−, C19.− |
+| Solar charger | U7.GND(2), C20.−, C21.−, C22.2, D1.anode, R15.2, R18.2 |
 | Divider low side | R8.2 |
 | BOOT0 pull-down | R6.2 |
 | LED cathode | LED1.Cathode |
@@ -179,6 +190,63 @@ the system bootloader regardless of flash contents.
 
 ---
 
+## Signal Nets — Solar Charge Controller Block
+
+| Net Port | Description | Connected Pins |
+|----------|-------------|----------------|
+| **SOLAR+** | Solar panel input | CN3.1, D2.anode |
+| **SOLAR_IN** | Post-diode solar input | D2.cathode, U7.VCC(9), C20.+, C23.2, R14.1, M1.Source |
+| **SOLAR_SW** | Buck switching node | M1.Drain, D1.cathode, L2.1 |
+| **SOLAR_DRV** | P-FET gate drive | U7.DRV(10), M1.Gate |
+| **SOLAR_VG** | Gate drive regulator | U7.VG(1), C23.1 |
+| **SOLAR_MPPT** | MPPT voltage divider tap | U7.MPPT(6), R14.2, R15.1 |
+| **SOLAR_CSP** | Current sense positive | U7.CSP(8), RCS.1, L2.2 |
+| **SOLAR_COM** | Loop compensation | U7.COM(5), R18.1, C22.1 |
+| **CHRG_STATUS** | Charging indicator | U7.CHRG(3), R16.2, U1.pin35 (PB0, GPIO input) |
+| **DONE_STATUS** | Charge complete indicator | U7.DONE(4), R17.2, U1.pin36 (PB1, GPIO input) |
+
+U7 (CN3791) is a 10-pin SSOP. Uses **external P-FET M1** as high-side switch.
+BAT pin (7) → VBAT+ net (battery positive rail, shared with CN1.1 and LDO input).
+RCS (0.2Ω sense resistor) between CSP (pin 8) and BAT (pin 7).
+C23 (100nF) bypasses VG (pin 1) to VCC (pin 9) — internal gate drive regulator.
+R18 (120Ω) + C22 (220nF) in series from COM (pin 5) to GND — loop compensation.
+
+**CN3791 application circuit (from datasheet Figure 1):**
+```
+                         D2 (SS14)
+SOLAR+ (CN3) ──────────|>|──── SOLAR_IN ── U7.VCC(9)
+                                               │
+                                    C23 (100nF) ├── VG(1)
+                                               │
+                                          R14 (360k)
+                                               │
+                                          MPPT(6) ── R15 (100k) ── GND
+
+                    DRV(10) ── M1.Gate
+                               M1.Source ── SOLAR_IN
+                               M1.Drain ──┬── D1.cathode (SS14, anode=GND)
+                                           │
+                                       L2 (22µH)
+                                           │
+                                       SOLAR_CSP ── CSP(8)
+                                           │
+                                       RCS (0.2Ω)
+                                           │
+                                       VBAT+ ── BAT(7)
+
+COM(5) ── R18 (120Ω) ── C22 (220nF) ── GND
+
+CHRG(3) ──── R16 (10k) ──── 3V3    (open drain, low = charging)
+DONE(4) ──── R17 (10k) ──── 3V3    (open drain, low = complete)
+```
+
+**Solar panel:** 6V/2W nominal (Vmp ~5.5V). CN3791 input range 4.5–28V (abs max 30V).
+D2 (SS14) provides reverse current blocking at night when panel voltage drops below battery.
+MPPT set point: 1.205V × (360k+100k)/100k = 5.54V — matches typical 6V panel Vmp.
+Charge current: 0.1V / 0.2Ω = 500mA max (safe for 1S2P 6800mAh = 0.07C).
+
+---
+
 ## Signal Nets — Status LED & Crystal
 
 | Net Port | Description | Connected Pins |
@@ -197,6 +265,10 @@ These connections are short enough to wire directly — no net port label needed
 |------|----|-------|
 | R9.2 | LED1.Anode | LED current limit, short wire |
 | LED1.Cathode | GND | Via GND net port on cathode |
+| RCS.2 | U7.BAT(7) | Current sense battery side (VBAT+ net) |
+| RCS.1 | L2.2 | Current sense inductor side (SOLAR_CSP net) |
+| R16.1 | 3V3 net | CHRG pull-up |
+| R17.1 | 3V3 net | DONE pull-up |
 | U4.VIN | 3V3 net | GPS load switch input |
 | U5.VIN | 3V3 net | BLE load switch input |
 | U6.VIN | 3V3 net | Peripheral load switch input |
@@ -247,6 +319,8 @@ Only pins with net port connections are listed — all others are unused (config
 | Pin | GPIO | Net Port | Peripheral |
 |-----|------|----------|------------|
 | 15 | PC0 | VBAT_SENSE | ADC1_IN1 |
+| 35 | PB0 | CHRG_STATUS | GPIO input (solar charging) |
+| 36 | PB1 | DONE_STATUS | GPIO input (charge complete) |
 | 67 | PA8 | GPS_PPS | EXTI |
 | 25 | PA2 | BLE_RX | USART2_TX (AF7) |
 | 26 | PA3 | BLE_TX | USART2_RX (AF7) |
@@ -303,7 +377,10 @@ L1 is the GPS antenna bias tee inductor (not SMPS-related).
 | C18 | 1uF | PERIPH_VCC load switch output | PERIPH_VCC | GND |
 | C19 | 1uF | BLE_VCC load switch output | BLE_VCC | GND |
 
-**Totals:** 10x 100nF, 2x 10uF, 1x 4.7uF, 6x 1uF = 19 caps.
+| C20 | 10uF | Solar charger input (U7 VCC) | SOLAR_IN | GND |
+| C21 | 10uF | Solar charger output (U7 BAT) | VBAT+ | GND |
+
+**Totals:** 11x 100nF (C1-C10 + C23), 1x 220nF (C22), 4x 10uF (C11, C17, C20, C21), 1x 4.7uF (C12), 6x 1uF (C13-C16, C18, C19) = 23 caps.
 
 ---
 
@@ -333,4 +410,15 @@ L1 is the GPS antenna bias tee inductor (not SMPS-related).
 - [ ] Debug UART: PD8 (USART3_TX) → H2.6, PD9 (USART3_RX) → H2.7
 - [ ] LSE crystal: X1 between OSC32_IN and OSC32_OUT (no external load caps — using internal)
 - [ ] Pin numbers match DS13737 Figure 15 (LQFP100 non-SMPS), NOT Figure 14
+- [ ] Solar charger: U7.VCC(9) on SOLAR_IN, U7.BAT(7) on VBAT+, U7.DRV(10) to M1.Gate
+- [ ] Solar charger: M1.Source on SOLAR_IN, M1.Drain to D1.cathode + L2.1 (SOLAR_SW)
+- [ ] Solar charger: D2 cathode→SOLAR_IN, D2 anode→SOLAR+ (CN3.1). D1 cathode→SOLAR_SW, D1 anode→GND
+- [ ] Solar charger: L2 from SOLAR_SW to SOLAR_CSP, RCS from SOLAR_CSP to VBAT+
+- [ ] Solar charger: U7.CSP(8) on SOLAR_CSP, U7.BAT(7) on VBAT+
+- [ ] Solar charger: C23 (100nF) between VG(1) and VCC(9)
+- [ ] Solar charger: R18 (120Ω) + C22 (220nF) in series from COM(5) to GND
+- [ ] Solar charger: MPPT divider R14 (360k) from VCC(9)/SOLAR_IN, R15 (100k) to GND, tap to MPPT(6)
+- [ ] Solar charger: CHRG(3)→R16→3V3→PB0, DONE(4)→R17→3V3→PB1
+- [ ] Solar charger: C20 on SOLAR_IN, C21 on VBAT+ (near U7)
+- [ ] CN3 (solar connector): pin 1 = SOLAR+, pin 2 = GND
 - [ ] EasyEDA DRC: 0 errors, 0 unconnected pins
