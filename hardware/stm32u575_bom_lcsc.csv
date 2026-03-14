@@ -125,7 +125,7 @@ SW2,Tactile switch 3x6mm SMD,SMD,C318884,1,BOOT0 button (PH3 to 3V3 for DFU entr
 # C2980027 - PB-03F BLE module
 # C86534 - XC6220B331MR-G LDO
 # C154992 - CN3791 solar MPPT charger
-# C329665 - 22uH 5020 power inductor
+# C408412 - 22uH 5020 power inductor
 # C23733 - 4.7uF 0402 VCAP (verify BASIC/extended status)
 # C97998 - 47nH 0402 inductor (bias tee)
 # C88374 - U.FL connector (GPS antenna)
