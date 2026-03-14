@@ -39,6 +39,7 @@ stm32/**/*/com.st.stm32cube.ide.mcu.sfrview.prefs
 
 # Python
 __pycache__/
+training/venv/
 
 # Training data and model outputs
 training/data/

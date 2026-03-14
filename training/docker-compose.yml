@@ -6,3 +6,5 @@ services:
     volumes:
       - ./data:/data
       - ./output:/output
+    cpus: 10
+    mem_limit: 8g
