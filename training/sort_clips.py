@@ -75,7 +75,7 @@ def find_otsu_threshold(values):
 
 def sort_species_clips(clips_dir, species, freq_low=CALL_FREQ_LOW,
                        freq_high=CALL_FREQ_HIGH, dry_run=False,
-                       progress_callback=None):
+                       drop_borderline=True, progress_callback=None):
     """Sort clips for a species into call vs. noise using energy analysis.
 
     Args:
@@ -91,11 +91,46 @@ def sort_species_clips(clips_dir, species, freq_low=CALL_FREQ_LOW,
     """
     cb = progress_callback or print
     species_dir = os.path.join(clips_dir, species)
-    noise_dir = os.path.join(clips_dir, "noise")
 
     if not os.path.isdir(species_dir):
         cb(f"Species directory not found: {species_dir}")
         return {"total_call": 0, "total_noise": 0, "total_discarded": 0}
+
+    # Restore clips from previous sorts back to species dir for clean re-sort
+    noise_dir = os.path.join(clips_dir, "noise")
+    discard_dir = os.path.join(clips_dir, "discarded")
+    manifest_path = os.path.join(species_dir, ".sort_xc_ids")
+
+    # Build set of XC IDs belonging to this species
+    species_xc_ids = set()
+    # From current species dir
+    for f in os.listdir(species_dir):
+        if f.endswith(".wav"):
+            species_xc_ids.add(f.split("_")[0])
+    # From manifest (covers IDs where ALL clips were moved out)
+    if os.path.exists(manifest_path):
+        with open(manifest_path, "r") as f:
+            for line in f:
+                xc_id = line.strip()
+                if xc_id:
+                    species_xc_ids.add(xc_id)
+
+    restored = 0
+    for src_dir in [noise_dir, discard_dir]:
+        if not os.path.isdir(src_dir):
+            continue
+        for fname in list(os.listdir(src_dir)):
+            if not fname.endswith(".wav"):
+                continue
+            xc_id = fname.split("_")[0]
+            if xc_id in species_xc_ids:
+                shutil.move(
+                    os.path.join(src_dir, fname),
+                    os.path.join(species_dir, fname),
+                )
+                restored += 1
+    if restored > 0:
+        cb(f"  Restored {restored} clips from previous sort")
 
     # Parse clips into per-recording groups
     recordings = defaultdict(list)
@@ -135,6 +170,7 @@ def sort_species_clips(clips_dir, species, freq_low=CALL_FREQ_LOW,
     total_noise = 0
     total_discarded = 0
     noise_files = []
+    discard_files = []
 
     for xc_id in sorted(recordings.keys()):
         clips = sorted(recordings[xc_id], key=lambda c: c["offset_ms"])
@@ -165,6 +201,8 @@ def sort_species_clips(clips_dir, species, freq_low=CALL_FREQ_LOW,
         total_discarded += n_disc
 
         noise_files.extend(c["filename"] for c in clips if c["label"] == "noise")
+        if drop_borderline:
+            discard_files.extend(c["filename"] for c in clips if c["label"] == "discard")
 
         cb(f"  {xc_id}: {n_call:3d} call, {n_noise:3d} noise, "
            f"{n_disc:3d} discarded ({len(clips)} total)")
@@ -172,6 +210,10 @@ def sort_species_clips(clips_dir, species, freq_low=CALL_FREQ_LOW,
     cb(f"Sort summary: {total_call} call, {total_noise} noise, {total_discarded} discarded")
 
     if not dry_run:
+        # Save manifest of XC IDs for this species (enables clean re-sorts)
+        with open(manifest_path, "w") as f:
+            for xc_id in sorted(recordings.keys()):
+                f.write(xc_id + "\n")
         os.makedirs(noise_dir, exist_ok=True)
         for fname in noise_files:
             shutil.move(
@@ -179,9 +221,21 @@ def sort_species_clips(clips_dir, species, freq_low=CALL_FREQ_LOW,
                 os.path.join(noise_dir, fname),
             )
 
+        if discard_files:
+            discard_dir = os.path.join(clips_dir, "discarded")
+            os.makedirs(discard_dir, exist_ok=True)
+            for fname in discard_files:
+                shutil.move(
+                    os.path.join(species_dir, fname),
+                    os.path.join(discard_dir, fname),
+                )
+
         remaining = len([f for f in os.listdir(species_dir) if f.endswith(".wav")])
         noise_count = len([f for f in os.listdir(noise_dir) if f.endswith(".wav")])
-        cb(f"  {species_dir}: {remaining} call clips (includes {total_discarded} borderline)")
+        if drop_borderline:
+            cb(f"  {species_dir}: {remaining} call clips ({total_discarded} borderline dropped)")
+        else:
+            cb(f"  {species_dir}: {remaining} call clips (includes {total_discarded} borderline)")
         cb(f"  {noise_dir}: {noise_count} noise clips")
 
     return {
