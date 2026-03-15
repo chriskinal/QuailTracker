@@ -14,18 +14,21 @@ import numpy as np
 import tensorflow as tf
 
 
-def convert_to_tflite_int8(model_path, calibration_data_path, output_path):
+def convert_to_tflite_int8(model_or_path, calibration_data_path, output_path):
     """Full int8 quantization (weights AND activations).
 
     Args:
-        model_path: Path to best_model.keras.
+        model_or_path: Keras model object or path to weights file.
         calibration_data_path: Path to calibration_data.npy.
         output_path: Path for output .tflite file.
 
     Returns:
         Size of the TFLite model in bytes.
     """
-    model = tf.keras.models.load_model(model_path, compile=False)
+    if isinstance(model_or_path, str):
+        model = tf.keras.models.load_model(model_or_path, compile=False)
+    else:
+        model = model_or_path
     cal_data = np.load(calibration_data_path)
 
     def representative_dataset():
@@ -280,7 +283,7 @@ def main():
     parser = argparse.ArgumentParser(description="Export model to TFLite + C headers")
     parser.add_argument(
         "--model-dir", required=True,
-        help="Directory containing best_model.keras and calibration_data.npy",
+        help="Directory containing best_model.h5 and calibration_data.npy",
     )
     parser.add_argument(
         "--data-dir", required=True,
@@ -288,12 +291,12 @@ def main():
     )
     args = parser.parse_args()
 
-    model_path = os.path.join(args.model_dir, "best_model.keras")
+    weights_path = os.path.join(args.model_dir, "best_model.weights.h5")
     cal_path = os.path.join(args.model_dir, "calibration_data.npy")
     metadata_path = os.path.join(args.model_dir, "model_metadata.json")
 
     for path, name in [
-        (model_path, "best_model.keras"),
+        (weights_path, "best_model.weights.h5"),
         (cal_path, "calibration_data.npy"),
         (metadata_path, "model_metadata.json"),
     ]:
@@ -302,9 +305,18 @@ def main():
             print("Run train.py first.")
             return
 
+    # Rebuild model and load weights (avoids loss serialization bug)
+    from config import Config
+    from model import build_model
+    with open(metadata_path, "r") as f:
+        metadata = json.load(f)
+    config = Config()
+    model = build_model(config, metadata["num_classes"])
+    model.load_weights(weights_path)
+
     # Convert to int8 TFLite
     tflite_path = os.path.join(args.model_dir, "quail_model.tflite")
-    model_size = convert_to_tflite_int8(model_path, cal_path, tflite_path)
+    model_size = convert_to_tflite_int8(model, cal_path, tflite_path)
 
     if model_size > 200 * 1024:
         print(f"WARNING: Model size ({model_size / 1024:.1f} KB) exceeds 200 KB flash budget!")

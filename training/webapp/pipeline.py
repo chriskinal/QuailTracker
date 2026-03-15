@@ -25,7 +25,6 @@ from evaluate import (
     plot_confusion_matrix,
 )
 
-from sort_clips import sort_species_clips
 from webapp.xeno_canto import download_species_dataset
 
 
@@ -129,18 +128,12 @@ def run_training(data_dir, output_dir, epochs=100, batch_size=32,
     )
     val_X = X_val[..., np.newaxis]
 
-    # Callbacks
+    # Callbacks — no ModelCheckpoint, rely on EarlyStopping restore_best_weights
     callbacks = [
         tf.keras.callbacks.EarlyStopping(
             monitor=config.training.early_stop_metric,
             patience=config.training.early_stop_patience,
             restore_best_weights=True,
-            verbose=0,
-        ),
-        tf.keras.callbacks.ModelCheckpoint(
-            os.path.join(output_dir, "best_model.keras"),
-            monitor=config.training.early_stop_metric,
-            save_best_only=True,
             verbose=0,
         ),
     ]
@@ -158,6 +151,20 @@ def run_training(data_dir, output_dir, epochs=100, batch_size=32,
         callbacks=callbacks,
         verbose=0,
     )
+
+    # Save weights using numpy (bypasses TF serialization entirely)
+    weights = model.get_weights()
+    weights_path = os.path.join(output_dir, "model_weights.npz")
+    np.savez(weights_path, *weights)
+
+    # Verify save/load immediately
+    val_pred_orig = model.predict(val_X[:5], verbose=0)
+    model2 = build_model(config, num_classes)
+    data = np.load(weights_path)
+    model2.set_weights([data[f'arr_{i}'] for i in range(len(data.files))])
+    val_pred_check = model2.predict(val_X[:5], verbose=0)
+    cb(f"  Weight verification — orig: {val_pred_orig.flatten()[:3]}, "
+       f"reloaded: {val_pred_check.flatten()[:3]}")
 
     # Save history
     history_dict = {k: [float(v) for v in vals]
@@ -217,8 +224,8 @@ def run_export(model_dir, progress_callback=None):
     """Export trained model to TFLite + configs.
 
     Args:
-        model_dir: Directory containing best_model.keras, calibration_data.npy,
-                   and model_metadata.json.
+        model_dir: Directory containing best_model.weights.h5,
+                   calibration_data.npy, and model_metadata.json.
         progress_callback: Optional callable(message_str).
 
     Returns:
@@ -226,20 +233,31 @@ def run_export(model_dir, progress_callback=None):
     """
     cb = progress_callback or (lambda msg: None)
 
-    model_path = os.path.join(model_dir, "best_model.keras")
+    weights_path = os.path.join(model_dir, "model_weights.npz")
     cal_path = os.path.join(model_dir, "calibration_data.npy")
     metadata_path = os.path.join(model_dir, "model_metadata.json")
 
-    for path, name in [(model_path, "best_model.keras"),
+    for path, name in [(weights_path, "model_weights.npz"),
                        (cal_path, "calibration_data.npy"),
                        (metadata_path, "model_metadata.json")]:
         if not os.path.exists(path):
             raise FileNotFoundError(f"{name} not found at {path}")
 
+    # Reset TF state and rebuild model with numpy weights
+    import tensorflow as tf
+    tf.keras.backend.clear_session()
+
+    with open(metadata_path, "r") as f:
+        metadata = json.load(f)
+    config = Config()
+    model = build_model(config, metadata["num_classes"])
+    data = np.load(weights_path)
+    model.set_weights([data[f'arr_{i}'] for i in range(len(data.files))])
+
     # Convert to int8 TFLite
     cb("Converting to int8 TFLite...")
     tflite_path = os.path.join(model_dir, "quail_model.tflite")
-    model_size = convert_to_tflite_int8(model_path, cal_path, tflite_path)
+    model_size = convert_to_tflite_int8(model, cal_path, tflite_path)
     cb(f"  TFLite model: {model_size / 1024:.1f} KB")
 
     if model_size > 200 * 1024:
@@ -285,8 +303,6 @@ def run_evaluate(model_dir, data_dir, progress_callback=None):
     Returns:
         Dict with evaluation metrics.
     """
-    import tensorflow as tf
-
     cb = progress_callback or (lambda msg: None)
 
     metadata_path = os.path.join(model_dir, "model_metadata.json")
@@ -308,11 +324,35 @@ def run_evaluate(model_dir, data_dir, progress_callback=None):
     _, X_val, _, y_val = split_dataset(X, y, config)
     cb(f"Validation set: {len(X_val)} clips")
 
-    # Keras evaluation
+    # Keras evaluation — rebuild model and load numpy weights
+    import tensorflow as tf
+    tf.keras.backend.clear_session()
+
     cb("Evaluating Keras model...")
-    model = tf.keras.models.load_model(
-        os.path.join(model_dir, "best_model.keras"))
-    y_true, y_pred_keras = evaluate_keras(model, X_val, y_val, labels)
+    model = build_model(config, len(labels))
+    weights_path = os.path.join(model_dir, "model_weights.npz")
+    data = np.load(weights_path)
+    model.set_weights([data[f'arr_{i}'] for i in range(len(data.files))])
+
+    # Quick sanity check: compute predictions and AUC before full evaluation
+    val_X_check = X_val[..., np.newaxis]
+    raw_preds = model.predict(val_X_check, verbose=0)
+    if len(labels) == 1:
+        probs_check = raw_preds[:, 0]
+        y_true_check = (y_val[:, 0] > 0.5).astype(int)
+        pos_p = probs_check[y_true_check == 1]
+        neg_p = probs_check[y_true_check == 0]
+        from sklearn.metrics import roc_auc_score
+        eval_auc = roc_auc_score(y_true_check, probs_check)
+        cb(f"  Eval AUC: {eval_auc:.4f} (training reported: {metadata.get('best_val_auc', '?')})")
+        cb(f"  Positive preds: min={pos_p.min():.6f}, max={pos_p.max():.6f}, "
+           f"mean={pos_p.mean():.6f}")
+        cb(f"  Negative preds: min={neg_p.min():.6f}, max={neg_p.max():.6f}, "
+           f"mean={neg_p.mean():.6f}")
+
+    y_true, y_pred_keras, opt_threshold = evaluate_keras(
+        model, X_val, y_val, labels)
+    cb(f"  Optimal threshold: {opt_threshold:.6f}")
 
     plot_confusion_matrix(
         y_true, y_pred_keras, labels,
@@ -327,7 +367,7 @@ def run_evaluate(model_dir, data_dir, progress_callback=None):
     tflite_acc = None
     if os.path.exists(tflite_path):
         cb("Evaluating TFLite model...")
-        y_true_tfl, y_pred_tfl = evaluate_tflite(
+        y_true_tfl, y_pred_tfl, tfl_threshold = evaluate_tflite(
             tflite_path, X_val, y_val, labels, mel_min, mel_max)
         plot_confusion_matrix(
             y_true_tfl, y_pred_tfl, labels,
@@ -335,11 +375,14 @@ def run_evaluate(model_dir, data_dir, progress_callback=None):
             title="TFLite Int8",
         )
         tflite_acc = float(np.mean(y_pred_tfl == y_true_tfl))
+        cb(f"  TFLite optimal threshold: {tfl_threshold:.6f}")
 
     results = {
         "keras_accuracy": keras_acc,
         "tflite_accuracy": tflite_acc,
         "val_samples": len(X_val),
+        "optimal_threshold": opt_threshold,
+        "tflite_threshold": tfl_threshold if tflite_acc is not None else None,
     }
 
     cb(json.dumps({"stage": "evaluate", "status": "complete", **results}))
@@ -348,10 +391,9 @@ def run_evaluate(model_dir, data_dir, progress_callback=None):
 
 def run_full_pipeline(species_list, api_key, output_dir, noise_dir=None,
                       skip_download=False, max_recordings=30, quality_min="B",
-                      epochs=100, batch_size=32, augment=True,
-                      call_band_low=1300.0, call_band_high=2800.0,
+                      min_conf=0.5, epochs=100, batch_size=32, augment=True,
                       progress_callback=None):
-    """Full pipeline: download → sort → train → export → evaluate.
+    """Full pipeline: download (with BirdNET sorting) → train → export → evaluate.
 
     Args:
         species_list: List of species English names.
@@ -361,11 +403,10 @@ def run_full_pipeline(species_list, api_key, output_dir, noise_dir=None,
         skip_download: If True, skip download and use existing clips.
         max_recordings: Max recordings per species to download.
         quality_min: Minimum xeno-canto quality rating.
+        min_conf: BirdNET minimum confidence for verified call detection.
         epochs: Training epochs.
         batch_size: Training batch size.
         augment: Enable augmentation.
-        call_band_low: Lower call-band frequency in Hz for negative extraction.
-        call_band_high: Upper call-band frequency in Hz for negative extraction.
         progress_callback: Optional callable(message_str).
 
     Returns:
@@ -376,7 +417,7 @@ def run_full_pipeline(species_list, api_key, output_dir, noise_dir=None,
     model_dir = output_dir
     os.makedirs(data_dir, exist_ok=True)
 
-    # Stage 1: Download xeno-canto clips
+    # Stage 1: Download xeno-canto clips + BirdNET-verified sorting
     total_clips = 0
     if skip_download:
         cb("Skipping download — using existing clips")
@@ -385,10 +426,15 @@ def run_full_pipeline(species_list, api_key, output_dir, noise_dir=None,
             if os.path.isdir(species_dir):
                 count = len([f for f in os.listdir(species_dir)
                              if f.endswith(".wav")])
-                cb(f"  {species}: {count} existing clips")
+                cb(f"  {species}: {count} existing call clips")
                 total_clips += count
             else:
                 cb(f"  WARNING: No clips found for '{species}' at {species_dir}")
+        noise_dest = os.path.join(data_dir, "noise")
+        if os.path.isdir(noise_dest):
+            noise_count = len([f for f in os.listdir(noise_dest)
+                               if f.endswith(".wav")])
+            cb(f"  noise: {noise_count} existing noise clips")
     else:
         cb(json.dumps({"stage": "download", "status": "started"}))
         for i, species in enumerate(species_list):
@@ -397,23 +443,14 @@ def run_full_pipeline(species_list, api_key, output_dir, noise_dir=None,
                 species, api_key, data_dir,
                 max_recordings=max_recordings,
                 quality_min=quality_min,
+                min_conf=min_conf,
                 progress_callback=cb,
             )
             total_clips += clips
 
-        cb(f"Download complete: {total_clips} total clips")
+        cb(f"Download complete: {total_clips} verified call clips")
 
-    # Stage 2: Sort clips — extract negatives using call-band energy
-    cb(json.dumps({"stage": "sort", "status": "started"}))
-    for species in species_list:
-        cb(f"Sorting clips for '{species}'...")
-        sort_species_clips(
-            data_dir, species,
-            freq_low=call_band_low, freq_high=call_band_high,
-            progress_callback=cb,
-        )
-
-    # Stage 2b: Copy additional noise directory if provided
+    # Copy additional noise directory if provided
     if noise_dir and os.path.isdir(noise_dir):
         import shutil
         noise_dest = os.path.join(data_dir, "noise")

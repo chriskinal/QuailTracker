@@ -18,6 +18,7 @@ import tensorflow as tf
 
 from config import Config
 from dataset import load_dataset, split_dataset, compute_mel_spectrogram
+from model import build_model
 from train import normalize_spectrograms
 
 
@@ -292,9 +293,9 @@ def main():
     _, X_val, _, y_val = split_dataset(X_norm, y, config)
     print(f"Validation set: {len(X_val)} samples")
 
-    # Load Keras model
-    model_path = os.path.join(args.model_dir, "best_model.keras")
-    model = tf.keras.models.load_model(model_path, compile=False)
+    # Rebuild model and load weights
+    model = build_model(config, len(labels))
+    model.load_weights(os.path.join(args.model_dir, "best_model.weights.h5"))
 
     # Verify Keras confidence
     pos_probs, neg_probs = verify_keras_confidence(model, X_val, y_val, labels)

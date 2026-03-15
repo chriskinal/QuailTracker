@@ -1,6 +1,7 @@
-"""Xeno-canto API v3 client: search, download, and segment recordings."""
+"""Xeno-canto API v3 client: search, download, and BirdNET-verified clip extraction."""
 
 import os
+import subprocess
 import tempfile
 
 import librosa
@@ -9,6 +10,39 @@ import requests
 import soundfile as sf
 
 API_BASE = "https://xeno-canto.org/api/3/recordings"
+
+# Cached BirdNET analyzer (loads ~100MB model once)
+_analyzer = None
+
+
+def _convert_to_wav(input_path):
+    """Convert audio file to 48kHz mono WAV using ffmpeg.
+
+    BirdNET expects 48kHz. Converting up front avoids librosa/audioread
+    MP3 decoding issues in the container.
+
+    Returns path to WAV file (same location, .wav extension).
+    """
+    if input_path.lower().endswith(".wav"):
+        return input_path
+
+    wav_path = os.path.splitext(input_path)[0] + ".wav"
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", input_path,
+         "-ar", "48000", "-ac", "1", wav_path],
+        capture_output=True, check=True,
+    )
+    os.remove(input_path)
+    return wav_path
+
+
+def _get_analyzer():
+    """Get or create the cached BirdNET analyzer singleton."""
+    global _analyzer
+    if _analyzer is None:
+        from birdnetlib.analyzer import Analyzer
+        _analyzer = Analyzer()
+    return _analyzer
 
 
 def _fetch_quality(species_name, api_key, quality_filter, max_per_page=500):
@@ -164,104 +198,188 @@ def download_recording(recording, output_dir, progress_callback=None):
         return None
 
 
-def segment_recording(audio_path, output_dir, species_name, duration=3.0,
-                      stride=1.5, sr=24000):
-    """Segment a recording into fixed-length clips with overlap.
+def _deduplicate_detections(detections, min_gap=3.0):
+    """Remove overlapping detections, keeping highest confidence.
+
+    Greedy: pick highest confidence first, skip any within min_gap seconds.
+    This ensures no extracted clips share audio.
+    """
+    if not detections:
+        return []
+
+    sorted_dets = sorted(detections, key=lambda d: -d["confidence"])
+    kept = []
+    for det in sorted_dets:
+        if not any(abs(det["start_time"] - k["start_time"]) < min_gap
+                   for k in kept):
+            kept.append(det)
+
+    return sorted(kept, key=lambda d: d["start_time"])
+
+
+def segment_with_birdnet(audio_path, output_dir, species_name,
+                         min_conf=0.5, sr=24000, progress_callback=None):
+    """Use BirdNET to find verified calls and extract clips.
+
+    Runs BirdNET on the full recording, extracts 3s clips centered on
+    verified detections of the target species, and extracts noise clips
+    from segments with no detections (with 3s gap protection).
 
     Args:
-        audio_path: Path to audio file.
-        output_dir: Directory to save clips.
-        species_name: Species name (used for subdirectory).
-        duration: Clip duration in seconds.
-        stride: Stride between clips in seconds.
-        sr: Target sample rate.
+        audio_path: Path to downloaded audio file.
+        output_dir: Root clips directory.
+        species_name: Target species English common name.
+        min_conf: Minimum BirdNET confidence threshold.
+        sr: Target sample rate for extracted clips.
+        progress_callback: Optional callable(message_str).
 
     Returns:
-        Number of clips generated.
+        Tuple of (call_clips, noise_clips) counts.
     """
+    from birdnetlib import Recording
+    cb = progress_callback or (lambda msg: None)
+
+    analyzer = _get_analyzer()
+
+    # Run BirdNET analysis with overlap for better detection coverage
+    recording = Recording(
+        analyzer, audio_path,
+        min_conf=min_conf,
+        overlap=1.5,
+    )
+    recording.analyze()
+
+    # Filter for target species
+    detections = [d for d in recording.detections
+                  if d["common_name"] == species_name]
+
+    # Deduplicate overlapping detections (3s gap = no shared audio)
+    detections = _deduplicate_detections(detections, min_gap=3.0)
+
+    # Load audio at target sample rate for clip extraction
     try:
         audio, _ = librosa.load(audio_path, sr=sr, mono=True)
     except Exception:
-        return 0
+        return 0, 0
 
-    clip_samples = int(duration * sr)
-    stride_samples = int(stride * sr)
+    clip_samples = int(3.0 * sr)
+    duration = len(audio) / sr
 
     if len(audio) < clip_samples:
-        return 0
+        return 0, 0
 
+    rec_id = os.path.splitext(os.path.basename(audio_path))[0]
+
+    # Extract call clips
     species_dir = os.path.join(output_dir, species_name)
     os.makedirs(species_dir, exist_ok=True)
 
-    rec_id = os.path.splitext(os.path.basename(audio_path))[0]
-    count = 0
+    call_clips = 0
+    detection_starts = []
 
-    offset = 0
-    while offset + clip_samples <= len(audio):
-        clip = audio[offset:offset + clip_samples]
-        offset_ms = int(offset / sr * 1000)
-        clip_path = os.path.join(species_dir, f"{rec_id}_{offset_ms:06d}.wav")
+    for det in detections:
+        start_sample = int(det["start_time"] * sr)
+        end_sample = start_sample + clip_samples
+        if end_sample > len(audio):
+            continue
+
+        clip = audio[start_sample:end_sample]
+        offset_ms = int(det["start_time"] * 1000)
+        clip_path = os.path.join(
+            species_dir, f"{rec_id}_{offset_ms:06d}.wav")
         sf.write(clip_path, clip, sr)
-        count += 1
-        offset += stride_samples
+        call_clips += 1
+        detection_starts.append(det["start_time"])
 
-    return count
+    # Extract noise clips (segments far from any detection)
+    noise_dir = os.path.join(output_dir, "noise")
+    os.makedirs(noise_dir, exist_ok=True)
+
+    noise_clips = 0
+    t = 0.0
+    while t + 3.0 <= duration:
+        # Require at least 3s gap from any detection
+        too_close = any(abs(t - ds) < 3.0 for ds in detection_starts)
+        if not too_close:
+            start_sample = int(t * sr)
+            clip = audio[start_sample:start_sample + clip_samples]
+            offset_ms = int(t * 1000)
+            clip_path = os.path.join(
+                noise_dir, f"{rec_id}_{offset_ms:06d}.wav")
+            sf.write(clip_path, clip, sr)
+            noise_clips += 1
+            t += 3.0  # non-overlapping noise clips
+        else:
+            t += 1.5  # stride past detection region
+
+    return call_clips, noise_clips
 
 
 def download_species_dataset(species_name, api_key, output_dir,
                              max_recordings=30, quality_min="B",
-                             progress_callback=None):
-    """Download and segment a full dataset for one species.
+                             min_conf=0.5, progress_callback=None):
+    """Download recordings and extract BirdNET-verified clips.
 
     Args:
         species_name: English common name.
         api_key: xeno-canto API key.
-        output_dir: Root output directory (clips go into {output_dir}/{species_name}/).
+        output_dir: Root output directory (clips go into subdirs).
         max_recordings: Max recordings to download.
         quality_min: Minimum quality rating.
+        min_conf: BirdNET minimum confidence for call detection.
         progress_callback: Optional callable(message_str).
 
     Returns:
-        Total number of clips generated.
+        Total number of call clips generated.
     """
-    if progress_callback:
-        progress_callback(f"Searching xeno-canto for '{species_name}'...")
+    cb = progress_callback or (lambda msg: None)
 
+    cb(f"Searching xeno-canto for '{species_name}'...")
     recordings = search_species(species_name, api_key, quality_min,
                                 max_recordings)
 
     if not recordings:
-        if progress_callback:
-            progress_callback(f"  No recordings found for '{species_name}'")
+        cb(f"  No recordings found for '{species_name}'")
         return 0
 
-    if progress_callback:
-        # Show quality distribution
-        from collections import Counter
-        qdist = Counter(rec.get("q", "?") for rec in recordings)
-        dist_str = ", ".join(f"{g}={n}" for g, n in sorted(qdist.items()))
-        progress_callback(f"  Found {len(recordings)} recordings ({dist_str})")
+    # Show quality distribution
+    from collections import Counter
+    qdist = Counter(rec.get("q", "?") for rec in recordings)
+    dist_str = ", ".join(f"{g}={n}" for g, n in sorted(qdist.items()))
+    cb(f"  Found {len(recordings)} recordings ({dist_str})")
 
-    total_clips = 0
+    # Pre-load BirdNET analyzer before download loop
+    cb("Loading BirdNET analyzer...")
+    _get_analyzer()
+
+    total_calls = 0
+    total_noise = 0
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         for i, rec in enumerate(recordings):
-            if progress_callback:
-                progress_callback(
-                    f"  [{i + 1}/{len(recordings)}] "
-                    f"XC{rec.get('id', '?')} "
-                    f"({rec.get('length', '?')}, quality {rec.get('q', '?')})"
-                )
+            cb(f"  [{i + 1}/{len(recordings)}] "
+               f"XC{rec.get('id', '?')} "
+               f"({rec.get('length', '?')}, quality {rec.get('q', '?')})")
 
             filepath = download_recording(rec, tmp_dir, progress_callback)
             if filepath is None:
                 continue
 
-            clips = segment_recording(filepath, output_dir, species_name)
-            total_clips += clips
+            # Convert MP3/OGG to WAV for reliable audio loading
+            try:
+                filepath = _convert_to_wav(filepath)
+            except subprocess.CalledProcessError:
+                cb(f"    Failed to convert {os.path.basename(filepath)}")
+                continue
 
-            if progress_callback:
-                progress_callback(f"    → {clips} clips")
+            calls, noise = segment_with_birdnet(
+                filepath, output_dir, species_name,
+                min_conf=min_conf,
+                progress_callback=progress_callback,
+            )
+            total_calls += calls
+            total_noise += noise
+            cb(f"    → {calls} call clips, {noise} noise clips")
 
     # Write labels.txt if it doesn't exist
     labels_path = os.path.join(output_dir, "labels.txt")
@@ -275,9 +393,7 @@ def download_species_dataset(species_name, api_key, output_dir,
         for label in sorted(existing_labels):
             f.write(label + "\n")
 
-    if progress_callback:
-        progress_callback(
-            f"  Done: {total_clips} clips for '{species_name}'"
-        )
+    cb(f"  Done: {total_calls} call clips, {total_noise} noise clips "
+       f"for '{species_name}'")
 
-    return total_clips
+    return total_calls

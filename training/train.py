@@ -176,7 +176,7 @@ def main():
     # Validation: no augmentation, add channel dim
     val_X = X_val[..., np.newaxis]
 
-    # Callbacks
+    # Callbacks — save weights only to avoid focal_loss serialization bug
     callbacks = [
         keras.callbacks.EarlyStopping(
             monitor=config.training.early_stop_metric,
@@ -185,9 +185,10 @@ def main():
             verbose=1,
         ),
         keras.callbacks.ModelCheckpoint(
-            os.path.join(args.output_dir, "best_model.keras"),
+            os.path.join(args.output_dir, "best_model.weights.h5"),
             monitor=config.training.early_stop_metric,
             save_best_only=True,
+            save_weights_only=True,
             verbose=1,
         ),
     ]

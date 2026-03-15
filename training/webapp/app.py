@@ -174,6 +174,7 @@ def api_download_species():
     output_dir = data.get("output_dir", os.path.join(DATA_DIR, "clips"))
     max_recordings = int(data.get("max_recordings", 30))
     quality_min = data.get("quality_min", "B")
+    min_conf = float(data.get("min_conf", 0.5))
 
     if not species:
         return jsonify({"error": "species is required"}), 400
@@ -186,6 +187,7 @@ def api_download_species():
             species, api_key, output_dir,
             max_recordings=max_recordings,
             quality_min=quality_min,
+            min_conf=min_conf,
             progress_callback=_push_progress,
         )
 
@@ -208,11 +210,10 @@ def api_full_pipeline():
     noise_dir = data.get("noise_dir", "")
     max_recordings = int(data.get("max_recordings", 30))
     quality_min = data.get("quality_min", "B")
+    min_conf = float(data.get("min_conf", 0.5))
     epochs = int(data.get("epochs", 100))
     batch_size = int(data.get("batch_size", 32))
     augment = data.get("augment", True)
-    call_band_low = float(data.get("call_band_low", 1300))
-    call_band_high = float(data.get("call_band_high", 2800))
 
     if not species_list:
         return jsonify({"error": "species_list is required"}), 400
@@ -228,11 +229,10 @@ def api_full_pipeline():
             noise_dir=noise_dir if noise_dir else None,
             max_recordings=max_recordings,
             quality_min=quality_min,
+            min_conf=min_conf,
             epochs=epochs,
             batch_size=batch_size,
             augment=augment,
-            call_band_low=call_band_low,
-            call_band_high=call_band_high,
             progress_callback=_push_progress,
         )
 

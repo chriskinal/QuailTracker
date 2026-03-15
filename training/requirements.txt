@@ -6,3 +6,4 @@ matplotlib
 soundfile
 flask
 requests
+birdnetlib

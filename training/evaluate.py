@@ -14,14 +14,36 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
 
 from config import Config
 from dataset import load_dataset, split_dataset
+from model import build_model
 from train import normalize_spectrograms
 
 
-def evaluate_keras(model, X_val, y_val, labels, threshold=0.5):
+def find_optimal_threshold(y_true, y_probs):
+    """Find threshold that maximizes accuracy using actual prediction values."""
+    # Use unique predicted values as candidate thresholds for exact sweep
+    candidates = np.unique(y_probs)
+    # Add midpoints between consecutive values for finer resolution
+    if len(candidates) > 1:
+        midpoints = (candidates[:-1] + candidates[1:]) / 2
+        candidates = np.concatenate([candidates, midpoints])
+    candidates = np.sort(candidates)
+
+    best_thresh = 0.5
+    best_acc = 0
+    for thresh in candidates:
+        preds = (y_probs >= thresh).astype(int)
+        acc = np.mean(preds == y_true)
+        if acc > best_acc:
+            best_acc = acc
+            best_thresh = float(thresh)
+    return best_thresh, best_acc
+
+
+def evaluate_keras(model, X_val, y_val, labels, threshold=None):
     """Evaluate Keras float32 model.
 
     Args:
@@ -29,29 +51,51 @@ def evaluate_keras(model, X_val, y_val, labels, threshold=0.5):
         X_val: Validation spectrograms (N, frames, mels).
         y_val: One-hot labels (N, num_classes).
         labels: List of class label strings.
-        threshold: Sigmoid threshold for positive prediction.
+        threshold: Sigmoid threshold. If None, finds optimal automatically.
+
+    Returns:
+        (y_true_classes, y_pred_classes, optimal_threshold)
     """
     # Add channel dimension
     val_X = X_val[..., np.newaxis]
     y_pred_probs = model.predict(val_X, verbose=0)
 
     if len(labels) == 1:
-        # Single-class sigmoid: use threshold for binary classification
         eval_labels = [labels[0], "noise"]
-        y_pred_classes = (y_pred_probs[:, 0] >= threshold).astype(int)
         y_true_classes = (y_val[:, 0] > 0.5).astype(int)
+        probs = y_pred_probs[:, 0]
+
+        pos_probs = probs[y_true_classes == 1]
+        neg_probs = probs[y_true_classes == 0]
+
+        # Compute actual AUC to compare with training AUC
+        eval_auc = roc_auc_score(y_true_classes, probs)
+
+        print(f"  Eval AUC: {eval_auc:.4f}")
+        print(f"  Positive predictions: min={pos_probs.min():.6f}, max={pos_probs.max():.6f}, "
+              f"mean={pos_probs.mean():.6f}, median={np.median(pos_probs):.6f}")
+        print(f"  Negative predictions: min={neg_probs.min():.6f}, max={neg_probs.max():.6f}, "
+              f"mean={neg_probs.mean():.6f}, median={np.median(neg_probs):.6f}")
+
+        if threshold is None:
+            threshold, opt_acc = find_optimal_threshold(y_true_classes, probs)
+            print(f"  Optimal threshold: {threshold:.6f} (accuracy={opt_acc:.4f})")
+
+        y_pred_classes = (probs >= threshold).astype(int)
     else:
         eval_labels = labels
         y_pred_classes = np.argmax(y_pred_probs, axis=1)
         y_true_classes = np.argmax(y_val, axis=1)
+        threshold = 0.5
 
     print("\n=== Keras Float32 Model ===")
     print(classification_report(y_true_classes, y_pred_classes, target_names=eval_labels))
 
-    return y_true_classes, y_pred_classes
+    return y_true_classes, y_pred_classes, threshold
 
 
-def evaluate_tflite(tflite_path, X_val, y_val, labels, mel_min, mel_max):
+def evaluate_tflite(tflite_path, X_val, y_val, labels, mel_min, mel_max,
+                    threshold=None):
     """Evaluate int8 TFLite model.
 
     Args:
@@ -61,6 +105,10 @@ def evaluate_tflite(tflite_path, X_val, y_val, labels, mel_min, mel_max):
         labels: List of class label strings.
         mel_min: Normalization minimum from training.
         mel_max: Normalization maximum from training.
+        threshold: Sigmoid threshold. If None, finds optimal automatically.
+
+    Returns:
+        (y_true_classes, y_pred_classes, optimal_threshold)
     """
     interpreter = tf.lite.Interpreter(model_path=tflite_path)
     interpreter.allocate_tensors()
@@ -95,21 +143,32 @@ def evaluate_tflite(tflite_path, X_val, y_val, labels, mel_min, mel_max):
         # Dequantize output
         output_float = (output_int8.astype(np.float32) - output_zp) * output_scale
 
-        y_pred_probs_all.append(output_float)
-
-        if len(labels) == 1:
-            y_pred_classes.append(int(output_float[0] >= 0.5))
-        else:
-            y_pred_classes.append(np.argmax(output_float))
-
-    y_pred_classes = np.array(y_pred_classes)
+        y_pred_probs_all.append(output_float[0] if len(labels) == 1
+                               else output_float)
 
     if len(labels) == 1:
         eval_labels = [labels[0], "noise"]
         y_true_classes = (y_val[:, 0] > 0.5).astype(int)
+        probs = np.array(y_pred_probs_all)
+
+        pos_probs = probs[y_true_classes == 1]
+        neg_probs = probs[y_true_classes == 0]
+        print(f"\n  TFLite prediction stats:")
+        print(f"    Positive: min={pos_probs.min():.6f}, max={pos_probs.max():.6f}, "
+              f"mean={pos_probs.mean():.6f}, median={np.median(pos_probs):.6f}")
+        print(f"    Negative: min={neg_probs.min():.6f}, max={neg_probs.max():.6f}, "
+              f"mean={neg_probs.mean():.6f}, median={np.median(neg_probs):.6f}")
+
+        if threshold is None:
+            threshold, opt_acc = find_optimal_threshold(y_true_classes, probs)
+            print(f"  TFLite optimal threshold: {threshold:.6f} (accuracy={opt_acc:.4f})")
+
+        y_pred_classes = (probs >= threshold).astype(int)
     else:
         eval_labels = labels
         y_true_classes = np.argmax(y_val, axis=1)
+        y_pred_classes = np.array([np.argmax(p) for p in y_pred_probs_all])
+        threshold = 0.5
 
     print("\n=== TFLite Int8 Model ===")
     print(classification_report(y_true_classes, y_pred_classes, target_names=eval_labels))
@@ -118,7 +177,7 @@ def evaluate_tflite(tflite_path, X_val, y_val, labels, mel_min, mel_max):
     tflite_acc = np.mean(y_pred_classes == y_true_classes)
     print(f"TFLite accuracy: {tflite_acc:.4f}")
 
-    return y_true_classes, y_pred_classes
+    return y_true_classes, y_pred_classes, threshold
 
 
 def plot_confusion_matrix(y_true, y_pred, labels, output_path, title="Confusion Matrix"):
@@ -158,7 +217,7 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate BirdNET-STM32 model")
     parser.add_argument(
         "--model-dir", required=True,
-        help="Directory containing best_model.keras and model_metadata.json",
+        help="Directory containing best_model.h5 and model_metadata.json",
     )
     parser.add_argument(
         "--data-dir", required=True,
@@ -199,11 +258,12 @@ def main():
     _, X_val, _, y_val = split_dataset(X, y, config)
     print(f"Validation set: {len(X_val)} clips")
 
-    # Evaluate Keras model
-    model_path = os.path.join(args.model_dir, "best_model.keras")
-    model = tf.keras.models.load_model(model_path)
+    # Evaluate Keras model — rebuild and load weights
+    model = build_model(config, len(labels))
+    model.load_weights(os.path.join(args.model_dir, "best_model.weights.h5"))
 
-    y_true, y_pred_keras = evaluate_keras(model, X_val, y_val, labels)
+    y_true, y_pred_keras, opt_threshold = evaluate_keras(
+        model, X_val, y_val, labels)
 
     plot_confusion_matrix(
         y_true, y_pred_keras, labels,
@@ -218,7 +278,7 @@ def main():
             print(f"\nError: {tflite_path} not found. Run export.py first.")
             return
 
-        y_true_tflite, y_pred_tflite = evaluate_tflite(
+        y_true_tflite, y_pred_tflite, tfl_threshold = evaluate_tflite(
             tflite_path, X_val, y_val, labels, mel_min, mel_max,
         )
 
