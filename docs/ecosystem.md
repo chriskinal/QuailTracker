@@ -13,15 +13,17 @@ An open-source, low-cost ARU (~$50/unit including enclosure, batteries, and ante
 **Core hardware:**
 - STM32U575 MCU (160 MHz Cortex-M33, 784 KB RAM, 1 MB flash)
 - Infineon IM72D128 PDM MEMS microphone on a separate breakout board
-- Quectel L76K GPS with PPS output for sub-millisecond time synchronization
+- ATGM336H-5N31 GPS with PPS output for sub-millisecond time synchronization
 - 32 GB MicroSD card for audio storage
 - Ai-Thinker PB-03F BLE 5.2 module for wireless configuration
 - SHT30 temperature/humidity sensor
-- 1S4P 18650 Li-ion pack (13.6 Ah) with NCP170 LDO (500 nA quiescent)
+- 1S2P 18650 Li-ion pack (7 Ah) with NCP170 LDO (500 nA quiescent)
+- CN3791 solar MPPT charger with 6V/2W panel for indefinite field runtime
 
 **Recording:**
 - 48 kHz 24-bit PDM capture, stored as 16-bit WAV or FLAC
 - GPS-timestamped filenames (`YYYYMMDD_HHMMSS_<station_id>.flac`)
+- FLAC Vorbis comment metadata: GPS coordinates, PPS sync status, station ID, temperature, humidity
 - Configurable gain (0–24 dB in 3 dB steps), bandpass filter (HPF/LPF), and sample rate
 - Amplitude trigger with pre-roll and post-roll for activity-gated recording
 - Scheduling: sunrise/sunset with configurable offsets, up to 8 freeform time windows, or continuous
@@ -30,12 +32,15 @@ An open-source, low-cost ARU (~$50/unit including enclosure, batteries, and ante
 - TensorFlow Lite Micro inference on 3-second clips (24 kHz, 40-mel spectrogram)
 - DS-CNN model (int8 quantized, ~80–150 KB) runs in real time between audio frames
 - Mission modes: record only, detect only, or both
-- Configurable confidence threshold; detection events logged and streamed over BLE
+- Configurable confidence threshold; detection events logged to CSV (with temperature and humidity) and streamed over BLE
 
 **Power management:**
-- Deep sleep between recording windows (~10 µA)
+- Three switched power rails (TPS22916 load switches, ~1 nA off): GPS_VCC, BLE_VCC, PERIPH_VCC (SD + SHT30)
+- Stop 2 sleep with BLE advertising: ~350 µA total (BLE deep sleep + MCU ~5 µA)
+- BLE wake-on-connect from Stop 2 via UART EXTI; RTC wake for scheduled recordings
 - GPS backup mode (~7 µA) preserves ephemeris for fast reacquisition
-- Target: 90+ days on dawn/dusk recording schedule
+- Target: 90+ days on battery alone, indefinite with solar panel; Samsung 35E 18650 cells (3,500 mAh each)
+- Solar charge status (charging/done) reported via BLE
 
 **Multi-station networks:**
 - PPS-synchronized timestamps across stations enable TDOA localization
@@ -80,7 +85,7 @@ A cross-platform desktop application (Windows, macOS, Linux) for audio analysis,
 
 **Batch Processing** — Multi-threaded BirdNET analysis across hundreds of files (scales to available CPU cores). Configurable confidence threshold, segment overlap, sensitivity, and merge window for combining nearby detections. Species filter to focus on target species. Progress tracking per file and segment.
 
-**Training Data** — Curate BirdNET detections into labeled training sets. Energy-based clip sorting separates call segments from noise within a configurable frequency band. Export positive and negative WAV clips ready for model retraining in the training container.
+**Training Data** — Curate BirdNET detections into labeled training sets. Export positive and negative WAV clips ready for model retraining in the training container.
 
 **Localization** — TDOA source localization from multi-station synchronized recordings. Requires a minimum of 3 stations with overlapping detection of the same vocalization. Configurable speed-of-sound and maximum time-difference threshold. Outputs localization points with accuracy estimates.
 
@@ -96,25 +101,23 @@ A cross-platform desktop application (Windows, macOS, Linux) for audio analysis,
 
 A Dockerized Python/TensorFlow pipeline with a web UI for training custom on-device detection models.
 
-**Setup:** `python:3.11-slim` base image with TensorFlow 2.15+, librosa, scikit-learn, and Flask. Exposed on port 5000. Two modes in the web UI: **Quick Train** (upload your own clips) and **Full Pipeline** (download → sort → train → export).
+**Setup:** `python:3.11-slim` base image with TensorFlow 2.15+, birdnetlib, librosa, scikit-learn, and Flask. Exposed on port 5000. Two modes in the web UI: **Quick Train** (upload your own clips) and **Full Pipeline** (download → train → export).
 
 **Pipeline stages:**
 
-1. **Download** — Fetch recordings from xeno-canto by common name. Quality filtering (A/B/C grades), configurable max recordings per species.
+1. **Download & BirdNET verification** — Fetch recordings from xeno-canto by common name. Quality filtering (A/B/C grades), configurable max recordings per species. Each recording is analyzed by BirdNET to verify the target species is present — only 3-second clips where BirdNET confirms the species above a configurable confidence threshold (default 0.5) are extracted as training data. Segments with no detection become noise clips. Greedy deduplication ensures no overlapping clips share audio.
 
-2. **Clip sorting** — Resample to 24 kHz, compute energy in a configurable call-band frequency range (default 1300–2800 Hz for bobwhite), classify segments as call or noise using Otsu's method, enforce minimum temporal gaps between classes.
+2. **Dataset generation** — Mel spectrograms (512-point FFT, 256 hop, 40 mels, 500–10,000 Hz). Data augmentation: time shift, gain variation, additive noise (white/pink/brown), SpecAugment (frequency and time masking), pitch shift. 80/20 train/validation split.
 
-3. **Dataset generation** — Mel spectrograms (512-point FFT, 256 hop, 40 mels, 500–10,000 Hz). Data augmentation: time shift, gain variation, additive noise (white/pink/brown), SpecAugment (frequency and time masking), pitch shift. Label smoothing for noisy energy-sorted data. 80/20 train/validation split.
+3. **Model training** — DS-CNN architecture: Conv2D(32) → depthwise-separable blocks (64, 128, 128) → global average pooling → dropout → sigmoid output. Focal loss, 200 epochs, early stopping on AUC. Weights saved via numpy serialization to avoid TF 2.15 serialization bugs.
 
-4. **Model training** — DS-CNN architecture: Conv2D(32) → depthwise-separable blocks (64, 128, 128) → global average pooling → dropout → sigmoid output. Focal loss, 200 epochs, early stopping on AUC.
+4. **Export** — Int8 quantized TFLite model (~80–150 KB), C header file (`quail_model.h`) with model bytes as a const array for direct firmware embedding, and a JSON config for BLE-based model deployment without rebuilding firmware.
 
-5. **Export** — Int8 quantized TFLite model (~80–150 KB), C header file (`quail_model.h`) with model bytes as a const array for direct firmware embedding, and a JSON config for BLE-based model deployment without rebuilding firmware.
+5. **Evaluation** — Per-class precision/recall/F1, confusion matrix, ROC curves, and TFLite verification against the test set.
 
-6. **Evaluation** — Per-class precision/recall/F1, confusion matrix, ROC curves, and TFLite verification against the test set.
+**Outputs:** `model.tflite`, `quail_model.h`, `labels.txt`, `training_history.json`, `model_weights.npz`.
 
-**Outputs:** `model.tflite`, `quail_model.h`, `labels.txt`, `training_history.json`, `best_model.keras`.
-
-**Adapting to other species:** Enter any species name to download training data from xeno-canto. Adjust the call-band frequency sliders to match the target vocalization range (e.g., 4,000–8,000 Hz for a warbler, 200–1,500 Hz for a bittern). The DS-CNN architecture and training pipeline are species-agnostic — only the data and frequency parameters change.
+**Adapting to other species:** Enter any species name to download training data from xeno-canto. Adjust the BirdNET confidence threshold to control training data quality (higher = fewer but cleaner clips, lower = more clips with potential noise). The DS-CNN architecture and training pipeline are species-agnostic — only the data and confidence threshold change.
 
 ---
 
@@ -131,7 +134,7 @@ A Dockerized Python/TensorFlow pipeline with a web UI for training custom on-dev
 │   Analyzer   │───────▶│  Training Container  │
 │  (Desktop)   │ export │  (Docker/Flask)      │
 │              │training│                      │
-│              │  clips │  sort → train →      │
+│              │  clips │  verify → train →    │
 │              │        │  quantize → export   │
 └──────┬───────┘        └────────┬─────────────┘
        │ load                    │ TFLite model +
@@ -172,7 +175,7 @@ A Dockerized Python/TensorFlow pipeline with a web UI for training custom on-dev
 - **App ↔ Hardware** — BLE connection for real-time configuration (gain, schedule, filters, station ID), health monitoring, recording control, detection streaming, and model deployment.
 - **Analyzer → Training Container** — Curated training clips (positive calls and negative noise segments) exported from the analyzer's training data tab feed into the container's Quick Train mode.
 - **Training Container → Hardware** — Exported TFLite model is embedded in firmware via the C header, or transferred over BLE using the JSON config path. No firmware rebuild needed for BLE deployment.
-- **xeno-canto → Training Container** — The full pipeline downloads species-specific recordings directly from xeno-canto for automated clip sorting and model training.
+- **xeno-canto → Training Container** — The full pipeline downloads species-specific recordings directly from xeno-canto, verifies clips with BirdNET, and trains custom models.
 - **BirdNET ONNX → Analyzer** — The analyzer runs BirdNET's 6,000+ species model for identification. Custom TFLite models trained in the container can also be used for species not well covered by BirdNET.
 
 ---
@@ -183,8 +186,8 @@ To retarget the entire ecosystem for a different species:
 
 | Component | What to change |
 |-----------|---------------|
-| **Training Container** | Enter the target species name. Adjust call-band frequency sliders to bracket the vocalization range (e.g., 4–8 kHz for a warbler). Run the full pipeline to produce a new TFLite model. |
-| **Recording Hardware** | Set gain and bandpass filter to match the target frequency range. Deploy the new TFLite model via firmware build or BLE. Adjust recording schedule if the species is nocturnal or has different activity peaks. |
+| **Training Container** | Enter the target species name. Adjust BirdNET confidence threshold to control training data quality. Run the full pipeline to produce a new TFLite model. |
+| **Recording Hardware** | Set gain and bandpass filter to match the target frequency range. Deploy the new TFLite model via firmware build or BLE. Adjust recording schedule if the species is nocturnal or has different activity peaks. Detection CSV includes temperature and humidity for environmental correlation. |
 | **Analyzer** | BirdNET already covers 6,000+ species — set the species filter to your target. For rare or regional species, load a custom model trained in the container. Adjust population model parameters (covey/group size, survey occasions). |
 | **Companion App** | Update gain, filter, and schedule settings on each station to match the new species profile. No app changes needed — all parameters are already configurable. |
 

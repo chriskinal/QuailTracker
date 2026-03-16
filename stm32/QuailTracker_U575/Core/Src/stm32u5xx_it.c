@@ -240,6 +240,11 @@ void RTC_IRQHandler(void)
     HAL_RTCEx_WakeUpTimerIRQHandler(&hrtc);
 }
 
+void EXTI4_IRQHandler(void)
+{
+    HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_4);
+}
+
 void EXTI8_IRQHandler(void)
 {
     HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_8);

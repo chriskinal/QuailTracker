@@ -747,6 +747,45 @@ void StartCliTask(void *argument)
         lastHeartbeat = HAL_GetTick();
     }
 
+    /* SD card detect — auto-mount on insert, auto-unmount on remove */
+    {
+      uint32_t flags = osThreadFlagsClear(0x30);
+      if (flags & 0x10) {
+        /* Card inserted — debounce then mount */
+        osDelay(50);
+        if (HAL_GPIO_ReadPin(SD_CD_GPIO_Port, SD_CD_Pin) == GPIO_PIN_RESET && !sdMounted) {
+          extern FATFS USERFatFS;
+          extern char USERPath[];
+          osMutexAcquire(fileMtxHandle, osWaitForever);
+          if (f_mount(&USERFatFS, USERPath, 1) == FR_OK) {
+            sdMounted = 1;
+            printf("SD card inserted — mounted\r\n");
+          } else {
+            printf("SD card inserted — mount failed\r\n");
+          }
+          osMutexRelease(fileMtxHandle);
+        }
+      }
+      if (flags & 0x20) {
+        /* Card removed — stop recording if active, unmount */
+        osDelay(50);
+        if (HAL_GPIO_ReadPin(SD_CD_GPIO_Port, SD_CD_Pin) != GPIO_PIN_RESET && sdMounted) {
+          if (isRecording) {
+            uint8_t cmd = CMD_STOP_REC;
+            osMessageQueuePut(audioCmdQueueHandle, &cmd, 0, 0);
+            osDelay(100);
+          }
+          extern char USERPath[];
+          osMutexAcquire(fileMtxHandle, osWaitForever);
+          f_mount(NULL, USERPath, 0);
+          USER_disk_deinit();
+          sdMounted = 0;
+          osMutexRelease(fileMtxHandle);
+          printf("SD card removed — unmounted\r\n");
+        }
+      }
+    }
+
     int c = getChar(10);  /* block up to 10ms -replaces poll + osDelay(10) */
     if (c >= 0) {
       switch (c) {
@@ -1263,13 +1302,17 @@ static void detLogCsv(const char *species, float confidence,
 
     /* Open or create CSV file */
     FRESULT fres = f_open(&f, detCsvFilename, FA_WRITE | FA_OPEN_APPEND);
-    if (fres != FR_OK) {
-        /* Try creating directory first */
+    if (fres == FR_OK && f_size(&f) == 0) {
+        /* New/empty file — write CSV header */
+        f_printf(&f, "UTC_Timestamp,Species,Confidence,Latitude,Longitude,"
+                     "Altitude,Temperature_C,Humidity_RH,"
+                     "StationId,PPS_Sync,Window_Start_Sample\n");
+    } else if (fres != FR_OK) {
         fres = f_open(&f, detCsvFilename, FA_WRITE | FA_CREATE_ALWAYS);
         if (fres == FR_OK) {
-            /* Write CSV header */
             f_printf(&f, "UTC_Timestamp,Species,Confidence,Latitude,Longitude,"
-                         "Altitude,StationId,PPS_Sync,Window_Start_Sample\n");
+                         "Altitude,Temperature_C,Humidity_RH,"
+                         "StationId,PPS_Sync,Window_Start_Sample\n");
         }
     }
 
@@ -1300,12 +1343,21 @@ static void detLogCsv(const char *species, float confidence,
             alt = cfg.surveyAlt;
         }
 
+        /* Temperature and humidity from SHT30 */
+        int32_t tempWhole = sht30TempC100 / 100;
+        int32_t tempFrac  = sht30TempC100 % 100;
+        if (tempFrac < 0) tempFrac = -tempFrac;
+        uint32_t humWhole = sht30HumRH100 / 100;
+        uint32_t humFrac  = sht30HumRH100 % 100;
+
         /* FatFS f_printf doesn't support %f or %llu — use snprintf + f_puts */
-        char line[192];
+        char line[224];
         snprintf(line, sizeof(line),
-                 "%s,%s,%.2f,%.6f,%.6f,%.1f,%s,%d,%llu\n",
+                 "%s,%s,%.2f,%.6f,%.6f,%.1f,%ld.%02ld,%lu.%02lu,%s,%d,%llu\n",
                  ts, species, (double)confidence,
                  (double)lat, (double)lon, (double)alt,
+                 (long)tempWhole, (long)tempFrac,
+                 (unsigned long)humWhole, (unsigned long)humFrac,
                  cfg.stationId, ppsSynced ? 1 : 0,
                  (unsigned long long)windowStartSample);
         f_puts(line, &f);

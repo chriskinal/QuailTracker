@@ -399,7 +399,7 @@ void writeFlacVorbisComment(FIL *fp)
     pos += vlen;
 
     /* Build comment strings */
-    char tags[10][80];
+    char tags[12][80];
     int ntags = 0;
 
     if (recHasGps) {
@@ -433,6 +433,18 @@ void writeFlacVorbisComment(FIL *fp)
     snprintf(tags[ntags++], 80, "ARTIST=QuailTracker STM32U575-ARU");
     snprintf(tags[ntags++], 80, "ENCODER=QuailTracker " FW_VERSION);
     snprintf(tags[ntags++], 80, "SAMPLERATE=%lu", (unsigned long)SAMPLE_RATE);
+
+    /* Temperature and humidity from SHT30 */
+    {
+        int32_t tW = sht30TempC100 / 100;
+        int32_t tF = sht30TempC100 % 100;
+        if (tF < 0) tF = -tF;
+        uint32_t hW = sht30HumRH100 / 100;
+        uint32_t hF = sht30HumRH100 % 100;
+        snprintf(tags[ntags++], 80, "TEMPERATURE=%ld.%02ld", (long)tW, (long)tF);
+        snprintf(tags[ntags++], 80, "HUMIDITY=%lu.%02lu",
+                 (unsigned long)hW, (unsigned long)hF);
+    }
 
     /* PPS-sample correlation for TDOA */
     if (recPpsEdgesInRec > 0) {
@@ -918,7 +930,9 @@ int main(void)
   extern FATFS USERFatFS;
   extern char USERPath[];
   printf("SD Card: ");
-  if (f_mount(&USERFatFS, USERPath, 1) == FR_OK) {
+  if (HAL_GPIO_ReadPin(SD_CD_GPIO_Port, SD_CD_Pin) != GPIO_PIN_RESET) {
+      printf("No card detected\r\n");
+  } else if (f_mount(&USERFatFS, USERPath, 1) == FR_OK) {
       sdMounted = 1;
       printf("Mounted\r\n");
   } else {
@@ -926,7 +940,7 @@ int main(void)
       if (formatSD()) {
           printf("SD Card: Ready\r\n");
       } else {
-          printf("SD Card: No card detected\r\n");
+          printf("SD Card: Mount failed\r\n");
       }
   }
   /* Create UART RX queues (must exist before RXNE interrupts are enabled) */
@@ -1345,6 +1359,14 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
   HAL_NVIC_SetPriority(EXTI8_IRQn, 5, 0);
   HAL_NVIC_EnableIRQ(EXTI8_IRQn);
+
+  /* PC4 — SD card detect (active low: low = inserted, pull-up for no card) */
+  GPIO_InitStruct.Pin = SD_CD_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(SD_CD_GPIO_Port, &GPIO_InitStruct);
+  HAL_NVIC_SetPriority(EXTI4_IRQn, 6, 0);
+  HAL_NVIC_EnableIRQ(EXTI4_IRQn);
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
@@ -1718,6 +1740,12 @@ void HAL_MDF_AcqCpltCallback(MDF_HandleTypeDef *hmdf)
 
 void HAL_GPIO_EXTI_Rising_Callback(uint16_t GPIO_Pin)
 {
+    /* SD card detect: rising edge = card removed */
+    if (GPIO_Pin == SD_CD_Pin) {
+        extern osThreadId_t cliTaskHandle;
+        osThreadFlagsSet(cliTaskHandle, 0x20);  /* unmount request */
+        return;
+    }
     if (GPIO_Pin == GPIO_PIN_8) {
         uint32_t tick = HAL_GetTick();
         ppsTick = tick;
@@ -1739,6 +1767,15 @@ void HAL_GPIO_EXTI_Rising_Callback(uint16_t GPIO_Pin)
             recPpsLastSample = recSample;
             recPpsEdgesInRec++;
         }
+    }
+}
+
+/* SD card detect: falling edge = card inserted (active low) */
+void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin)
+{
+    if (GPIO_Pin == SD_CD_Pin) {
+        extern osThreadId_t cliTaskHandle;
+        osThreadFlagsSet(cliTaskHandle, 0x10);  /* mount request */
     }
 }
 /* USER CODE END 4 */

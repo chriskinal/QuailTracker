@@ -61,9 +61,11 @@ void sht30Read(void);
 /* Private defines -----------------------------------------------------------*/
 #define SD_CS_Pin GPIO_PIN_4
 #define SD_CS_GPIO_Port GPIOA
+#define SD_CD_Pin GPIO_PIN_4
+#define SD_CD_GPIO_Port GPIOC
 
 /* USER CODE BEGIN Private defines */
-#define FW_VERSION "0.8.45"
+#define FW_VERSION "0.8.47"
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus
