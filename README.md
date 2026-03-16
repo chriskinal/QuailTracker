@@ -108,4 +108,4 @@ See [docs/ecosystem.md](docs/ecosystem.md) for the full ecosystem specification.
 
 ## License
 
-[MIT License](LICENSE)
+[GNU General Public License v3.0](LICENSE.md)
