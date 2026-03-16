@@ -1,0 +1,26 @@
+{
+  "model_file": "quail_model.tflite",
+  "model_size_bytes": 51120,
+  "audio_config": {
+    "sample_rate": 24000,
+    "n_fft": 512,
+    "hop_length": 256,
+    "n_mels": 40,
+    "n_frames": 256,
+    "fmin": 500.0,
+    "fmax": 10000.0
+  },
+  "normalization": {
+    "mel_min": -20.7232666015625,
+    "mel_max": 5.3417768478393555
+  },
+  "labels": [
+    "Northern Bobwhite"
+  ],
+  "num_classes": 1,
+  "training_info": {
+    "total_clips": 1556,
+    "epochs_trained": 73,
+    "best_val_auc": 0.9398340582847595
+  }
+}

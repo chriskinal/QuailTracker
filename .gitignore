@@ -1,8 +1,9 @@
 # macOS
 .DS_Store
 
-# PDFs
+# PDFs (except datasheets/)
 *.pdf
+!datasheets/**/*.pdf
 
 # PlatformIO
 .pio/
