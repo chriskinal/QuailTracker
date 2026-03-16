@@ -14,6 +14,8 @@ QuailTracker is a complete bioacoustic monitoring system: low-cost recording har
 
 **Use cases:** population surveys, presence/absence monitoring, vocalization mapping, behavioral studies, TDOA source localization.
 
+## NOT LICENSED FOR ANY COMMERCIAL PURPOSES.
+
 ## Components
 
 ### Recording Hardware — Autonomous Recording Unit (~$50/unit)
