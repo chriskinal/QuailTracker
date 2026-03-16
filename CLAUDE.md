@@ -1,112 +1,45 @@
 # QuailTracker
 
-Low-cost GPS-synchronized Autonomous Recording Units (ARUs) for quail population monitoring using TDOA localization.
+Open-source wildlife acoustic monitoring ecosystem — recording hardware, companion app, desktop analyzer, and ML training pipeline. See [docs/ecosystem.md](docs/ecosystem.md) for the full specification.
 
-## Project Overview
+## Hardware
 
-This project builds a network of solar/battery-powered acoustic recording stations that capture quail vocalizations with GPS-synchronized timestamps. Multiple stations hearing the same call enable Time Difference of Arrival (TDOA) localization to pinpoint covey locations.
-
-## Hardware Architecture
-
-### Core Components
-- **MCU:** ESP32 (dual-core) - chosen for dual I2S ports and proper MCLK output
-- **Microphone:** PUI AOM-5024L-HD-R electret condenser (80 dB SNR)
-- **ADC:** ES7243E 24-bit I2S ADC (I2C configurable, 3.0V operation)
-- **GPS:** Quectel L76K with PPS output for time synchronization
-- **Storage:** MicroSD card (32GB Class 10)
-- **Power:** 1S4P 18650 Li-ion pack (13,600 mAh) → NCP170 LDO (500nA Iq) → 3.0V rail
-- **Environment:** SHT30 temperature/humidity sensor (±0.2°C, ±2% RH)
-
-### Audio Signal Chain
-```
-Sound → PUI Mic (80dB SNR) → Bias Circuit (3.0V/2.0kΩ) → 1µF cap → ES7243E → I2S → ESP32 → SD Card
-```
-
-### Key Pin Assignments
-| ESP32 Pin | Function | Connection |
-|-----------|----------|------------|
-| GPIO0 | I2S Master Clock | ES7243E MCLK |
-| GPIO14 | I2S Bit Clock | ES7243E SCLK |
-| GPIO15 | I2S Word Select | ES7243E LRCK |
-| GPIO32 | I2S Data In | ES7243E SDOUT |
-| GPIO21 | I2C SDA | ES7243E, SHT30 |
-| GPIO22 | I2C SCL | ES7243E, SHT30 |
-| GPIO16 | UART RX | GPS TX |
-| GPIO17 | UART TX | GPS RX |
-| GPIO4 | PPS Input | GPS PPS |
-| GPIO5 | SPI CS | SD Card CS |
-| GPIO18 | SPI CLK | SD Card CLK |
-| GPIO19 | SPI MISO | SD Card MISO |
-| GPIO23 | SPI MOSI | SD Card MOSI |
-| GPIO35 | ADC Input | Battery voltage divider |
-
-### I2S Configuration
-- Sample rate: 48 kHz
-- Bit depth: 16-bit (record) / 24-bit (ADC native)
-- MCLK: 12.288 MHz (256 × Fs)
-- BCK: 3.072 MHz (64 × Fs)
-- Format: I2S standard, MSB first
-
-## Firmware Requirements
-
-### Recording Schedule
-- GPS-derived sunrise/sunset calculation (NOAA algorithm)
-- Configurable pre-sunrise and post-sunset offsets
-- Dawn chorus typically most active period for bobwhite calls
-
-### File Format
-- WAV files with embedded GPS timestamp in filename
-- Format: `YYYYMMDD_HHMMSS_<station_id>.wav`
-- PPS interrupt captures precise timestamp at recording start
-
-### Power Management
-- Deep sleep between recording windows (~10µA)
-- NCP170 LDO with 500nA quiescent current
-- GPS hardware power control: Backup mode (~7µA) or Standby mode (~1mA) via GPIO
-- Battery voltage monitoring via 1M/1M divider (~2µA continuous)
-- Target: 90+ days on 2× 18650 cells (dawn/dusk recording only)
-
-### BLE Configuration Interface
-- Station ID assignment
-- Recording schedule adjustment
-- Status monitoring (battery, storage, GPS lock)
-- Firmware updates
-
-## Detection Performance
-
-The high-SNR microphone (80 dB) enables ~1000m detection range for bobwhite whistle calls, compared to ~300m with typical MEMS mics (61 dB). This allows TDOA coverage of 11/17 target coveys with just 10 stations.
-
-## Target Specifications
-
-| Parameter | Value |
-|-----------|-------|
-| Unit cost | ~$33-43 |
-| Battery life | 90+ days |
-| Detection range | 800-1200m |
-| Time sync accuracy | ±1 ms |
-| Sample rate | 48 kHz |
-| Storage | 32 GB |
+- **MCU:** STM32U575VGT6 (160 MHz Cortex-M33, 784 KB RAM, 1 MB flash, LQFP-100, non-SMPS LDO variant)
+- **Microphone:** Infineon IM72D128 PDM MEMS on separate breakout board
+- **GPS:** ATGM336H-5N31 (GPS+BDS, PPS output for sub-ms time sync)
+- **BLE:** Ai-Thinker PB-03F (BLE 5.2, UART AT commands)
+- **Storage:** MicroSD via SPI1 (PA4 CS, PA5/PA6/PA7 SCK/MISO/MOSI), PC4 card detect
+- **Sensors:** SHT30 temperature/humidity on I2C1 (PB6/PB7)
+- **Audio:** ADF1 PDM capture at 48 kHz, 16-bit FLAC or WAV output
+- **Power:** 1S2P 18650 + CN3791 solar MPPT, three TPS22916 switched rails (GPS/BLE/PERIPH)
+- **Detection:** TFLite Micro DS-CNN inference on 3s clips (24 kHz, 40-mel spectrogram)
 
 ## Directory Structure
 
 ```
 QuailTracker/
-├── docs/                    # Documentation
-│   └── design_document.md   # Full design specification
-├── firmware/                # ESP32 firmware (PlatformIO)
-│   ├── src/
-│   ├── include/
-│   └── platformio.ini
-├── hardware/                # KiCad schematics/PCB (future)
-├── analysis/                # Python scripts for audio analysis
-└── CLAUDE.md               # This file
+├── stm32/QuailTracker_U575/   # STM32U575 firmware (CubeMX + PlatformIO)
+├── app/                       # Companion mobile app (Avalonia 11.2 / .NET 10)
+├── analyzer/                  # Desktop analyzer (Avalonia 11.2 / .NET 10)
+├── training/                  # Model training pipeline (Docker/Flask/TF 2.15)
+├── hardware/                  # Schematics, BOM, pinout docs
+├── docs/                      # Documentation and ecosystem spec
+├── tools/                     # Utility scripts
+└── platformio.ini             # PlatformIO config (default env: stm32u575)
+```
+
+## Building Firmware
+
+```bash
+pio run                    # build
+pio run --target upload    # flash via J-Link
 ```
 
 ## Development Notes
 
-- Use PlatformIO with Arduino framework for ESP32
-- ESP-IDF I2S driver preferred over Arduino I2S library for MCLK control
-- ES7243E configured via I2C (address 0x10)
-- SHT30 on same I2C bus (address 0x44)
-- GPS NMEA parsing: only need GGA and RMC sentences
-- Consider SPIFFS for config storage, SD for audio only
+- CubeMX reference project at `/Users/chris/Code/Qt_U575VGT6` — generate there, copy init code into real project
+- CubeMX wipes `Middlewares/` on code gen — restore FatFS from git after each generation
+- `pio run -t clean` when changes don't appear (PlatformIO caches .o files)
+- UART init MUST come before ADF1 init or Error_Handler silently hangs
+- SPI1 recovery: RCC reset + GPIO toggle required after CSUSP corruption (see `SPI_Recover()` in `user_diskio.c`)
+- Version tracked in `Core/Inc/main.h` FW_VERSION — increment on each change

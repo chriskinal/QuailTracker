@@ -68,8 +68,8 @@ QuailTracker/
 
 ```bash
 # Build STM32U575 firmware
-pio run -e nucleo_u575zi_q
-pio run -e nucleo_u575zi_q --target upload
+pio run
+pio run --target upload
 ```
 
 ### Training Container
