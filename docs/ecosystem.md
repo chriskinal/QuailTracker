@@ -1,5 +1,9 @@
 # QuailTracker Ecosystem
 
+<p align="center">
+  <img src="logo.svg" alt="QuailTracker Logo" width="200" />
+</p>
+
 A general-purpose wildlife acoustic monitoring ecosystem built around four components: recording hardware, a companion mobile app, a desktop analyzer, and a training container. Species identification is powered by BirdNET (6,000+ species out of the box) with support for custom-trained models. Defaults are tuned for Northern Bobwhite quail, but every component is configurable for any vocalizing species — birds, frogs, bats, marine mammals, and more.
 
 **Use cases:** population surveys, presence/absence monitoring, vocalization mapping, behavioral studies, TDOA source localization.
