@@ -31,6 +31,7 @@
 #include <sys/times.h>
 #include "cmsis_os2.h"
 #include "SEGGER_RTT.h"
+#include "stm32u5xx_hal.h"
 
 
 /* Variables */
@@ -40,6 +41,9 @@ extern int __io_getchar(void) __attribute__((weak));
 /* Printf mutex — serializes _write across FreeRTOS tasks.
  * NULL before RTOS init (single-threaded, no lock needed). */
 extern osMutexId_t printMutex;
+
+/* USART3 handle for debug console output */
+extern UART_HandleTypeDef husart3;
 
 /* BLE log forwarding ring buffer (defined in app_freertos.c) */
 #define BLE_LOG_RING_SIZE 512
@@ -96,6 +100,7 @@ __attribute__((weak)) int _write(int file, char *ptr, int len)
 
   if (printMutex) osMutexAcquire(printMutex, osWaitForever);
   SEGGER_RTT_Write(0, ptr, len);
+  HAL_UART_Transmit(&husart3, (const uint8_t *)ptr, len, 50);
 
   /* Mirror output to BLE log ring buffer (non-blocking, drops on overflow) */
   if (bleLogEnabled) {

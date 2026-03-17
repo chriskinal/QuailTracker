@@ -269,4 +269,14 @@ void USART2_IRQHandler(void)
     }
     USART2->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
 }
+
+void USART3_IRQHandler(void)
+{
+    if (USART3->ISR & USART_ISR_RXNE_RXFNE) {
+        uint8_t ch = (uint8_t)(USART3->RDR & 0xFF);
+        extern osMessageQueueId_t consoleRxQueue;
+        osMessageQueuePut(consoleRxQueue, &ch, 0, 0);
+    }
+    USART3->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
+}
 /* USER CODE END 1 */

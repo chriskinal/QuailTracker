@@ -1702,11 +1702,11 @@ static void gpsSetPower(uint8_t on)
     if (on) {
         HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_SET);   /* GPS_EN high */
         osDelay(10);
-        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_SET);   /* ON/OFF high */
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_SET);   /* WAKE high */
         gpsPowered = 1;
         printf("GPS: Power ON\r\n");
     } else {
-        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_RESET); /* ON/OFF low */
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_RESET); /* WAKE low */
         osDelay(10);
         HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_RESET); /* GPS_EN low */
         gpsPowered = 0;

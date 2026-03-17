@@ -56,6 +56,7 @@ DMA_HandleTypeDef handle_GPDMA1_Channel0;
 
 UART_HandleTypeDef husart1;
 UART_HandleTypeDef husart2;
+UART_HandleTypeDef husart3;
 
 SPI_HandleTypeDef hspi1;
 
@@ -95,6 +96,7 @@ uint8_t recFormat = REC_FMT_FLAC;
 /* UART RX queues — fed by RXNE interrupts, consumed by tasks */
 osMessageQueueId_t gpsRxQueue;    /* USART1 — GPS */
 osMessageQueueId_t bleRxQueue;    /* USART2 — BLE */
+osMessageQueueId_t consoleRxQueue; /* USART3 — Debug console */
 
 /* Printf mutex — serializes _write() across FreeRTOS tasks */
 osMutexId_t printMutex;
@@ -173,6 +175,7 @@ static void MX_ICACHE_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
+static void MX_USART3_UART_Init(void);
 static void MX_ADF1_Init(void);
 /* USER CODE BEGIN PFP */
 static void MX_ADC1_Init(void);
@@ -193,11 +196,16 @@ extern float configGetSurveyAlt(void);
 #define CMD_STOP_REC  2
 
 /* Blocking char read with timeout (ms). Returns byte or -1 on timeout.
- * Production board has no VCP UART — CLI input comes from RTT Viewer. */
+ * Checks both USART3 (UART console) and RTT (J-Link debugger). */
 int getChar(uint32_t timeoutMs)
 {
     uint32_t start = HAL_GetTick();
     for (;;) {
+        /* Check UART console first */
+        uint8_t ch;
+        if (osMessageQueueGet(consoleRxQueue, &ch, NULL, 0) == osOK)
+            return (int)ch;
+        /* Check RTT (returns -1 if no debugger or no key) */
         int c = SEGGER_RTT_GetKey();
         if (c >= 0) return c;
         if (timeoutMs != osWaitForever &&
@@ -867,6 +875,7 @@ int main(void)
   HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 7: usart1 ok */
   MX_USART2_UART_Init();
   HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 8: usart2 ok */
+  MX_USART3_UART_Init();
   MX_ADF1_Init();
   HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 9: adf ok */
   /* USER CODE BEGIN 2 */
@@ -946,6 +955,7 @@ int main(void)
   /* Create UART RX queues (must exist before RXNE interrupts are enabled) */
   gpsRxQueue = osMessageQueueNew(128, sizeof(uint8_t), NULL);
   bleRxQueue = osMessageQueueNew(128, sizeof(uint8_t), NULL);
+  consoleRxQueue = osMessageQueueNew(128, sizeof(uint8_t), NULL);
 
   /* Enable RXNE interrupts — ISRs push bytes into queues above.
    * Priority 6 >= configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY (5), safe for FreeRTOS API. */
@@ -956,6 +966,10 @@ int main(void)
   __HAL_UART_ENABLE_IT(&husart2, UART_IT_RXNE);
   HAL_NVIC_SetPriority(USART2_IRQn, 6, 0);
   HAL_NVIC_EnableIRQ(USART2_IRQn);
+
+  __HAL_UART_ENABLE_IT(&husart3, UART_IT_RXNE);
+  HAL_NVIC_SetPriority(USART3_IRQn, 6, 0);
+  HAL_NVIC_EnableIRQ(USART3_IRQn);
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -1187,7 +1201,7 @@ static void MX_ICACHE_Init(void)
 }
 
 /**
-  * @brief USART1 Initialization Function — GPS (L76K, 9600 baud, PA9/PA10)
+  * @brief USART1 Initialization Function — GPS (ATGM336H, 9600 baud, PA9/PA10)
   * @retval None
   */
 static void MX_USART1_UART_Init(void)
@@ -1227,6 +1241,29 @@ static void MX_USART2_UART_Init(void)
   husart2.Init.ClockPrescaler = UART_PRESCALER_DIV1;
   husart2.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
   if (HAL_UART_Init(&husart2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief USART3 Initialization Function — Debug console (115200 baud, PD8/PD9)
+  * @retval None
+  */
+static void MX_USART3_UART_Init(void)
+{
+  husart3.Instance = USART3;
+  husart3.Init.BaudRate = 115200;
+  husart3.Init.WordLength = UART_WORDLENGTH_8B;
+  husart3.Init.StopBits = UART_STOPBITS_1;
+  husart3.Init.Parity = UART_PARITY_NONE;
+  husart3.Init.Mode = UART_MODE_TX_RX;
+  husart3.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  husart3.Init.OverSampling = UART_OVERSAMPLING_16;
+  husart3.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  husart3.Init.ClockPrescaler = UART_PRESCALER_DIV1;
+  husart3.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&husart3) != HAL_OK)
   {
     Error_Handler();
   }
@@ -1336,7 +1373,7 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
-  /* PD14 — GPS ON/OFF (active high, keep awake) */
+  /* PD14 — GPS WAKE (high = running, pulse low to wake from backup) */
   HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_SET);
   GPIO_InitStruct.Pin = GPIO_PIN_14;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -1567,16 +1604,20 @@ void enterStop2(uint32_t seconds)
      * causing WFI to return instantly.  Clear errors + drain RDR first. */
     __HAL_UART_DISABLE_IT(&husart1, UART_IT_RXNE);
     __HAL_UART_DISABLE_IT(&husart2, UART_IT_RXNE);
+    __HAL_UART_DISABLE_IT(&husart3, UART_IT_RXNE);
     USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
     USART2->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
+    USART3->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
     (void)USART1->RDR;  /* drain stale RXNE */
     (void)USART2->RDR;
+    (void)USART3->RDR;
 
     /* Set all peripheral-facing GPIOs to analog (hi-Z) to prevent
      * back-powering unpowered modules through ESD protection diodes.
      * MODER = 0b11 per pin = analog mode (highest impedance). */
     uint32_t moder_a = GPIOA->MODER;
     uint32_t moder_b = GPIOB->MODER;
+    uint32_t moder_d = GPIOD->MODER;
     GPIOA->MODER |= (0x3u << (2*2))   /* PA2  USART2_TX (BLE RX)  */
                    | (0x3u << (3*2))   /* PA3  USART2_RX (BLE TX)  */
                    | (0x3u << (4*2))   /* PA4  SD_CS               */
@@ -1587,12 +1628,14 @@ void enterStop2(uint32_t seconds)
                    | (0x3u << (10*2)); /* PA10 USART1_RX (GPS TX)  */
     GPIOB->MODER |= (0x3u << (6*2))   /* PB6  I2C1_SCL  (SHT30)  */
                    | (0x3u << (7*2));  /* PB7  I2C1_SDA  (SHT30)  */
+    GPIOD->MODER |= (0x3u << (8*2))   /* PD8  USART3_TX (console) */
+                   | (0x3u << (9*2));  /* PD9  USART3_RX (console) */
     /* Drive GPS control pins LOW to prevent ESD back-powering SW_VCC.
      * Keep as outputs (don't change MODER) — floating PD12 turns on
-     * the power switch, floating PD14 glitches the GPS back on. */
+     * the power switch, floating PD14 could wake GPS from backup. */
     uint32_t odr_d = GPIOD->ODR;
     GPIOD->BSRR = (1u << (12+16))   /* PD12 GPS_EN    → LOW */
-                 | (1u << (14+16))   /* PD14 GPS_ON/OFF → LOW */
+                 | (1u << (14+16))   /* PD14 GPS_WAKE   → LOW */
                  | (1u << (15+16));  /* PD15 GPS_nRESET → LOW */
 
     /* Disable SysTick + HAL timebase (TIM17) to stop periodic ticks */
@@ -1650,24 +1693,29 @@ void enterStop2(uint32_t seconds)
     HAL_RTCEx_DeactivateWakeUpTimer(&hrtc);
     __HAL_RTC_WRITEPROTECTION_ENABLE(&hrtc);
 
-    /* Clear UART error flags accumulated during sleep (ORE from PA3/PA10
+    /* Clear UART error flags accumulated during sleep (ORE from RX pins
      * disconnected from AF) and drain stale RDR before restoring GPIOs. */
     USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
     USART2->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
+    USART3->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
     (void)USART1->RDR;
     (void)USART2->RDR;
+    (void)USART3->RDR;
 
     /* Restore peripheral GPIO states (saved before sleep) */
     GPIOD->ODR = odr_d;
     GPIOA->MODER = moder_a;
     GPIOB->MODER = moder_b;
+    GPIOD->MODER = moder_d;
 
     /* GPIOs restored — USART RX pins reconnected, may generate new ORE.
      * Clear errors again + drain RDR before restoring NVIC enables. */
     USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
     USART2->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
+    USART3->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
     (void)USART1->RDR;
     (void)USART2->RDR;
+    (void)USART3->RDR;
 
     /* Restore all NVIC interrupt enables (saved before sleep) */
     for (uint32_t i = 0; i < 8u; i++)
@@ -1676,6 +1724,7 @@ void enterStop2(uint32_t seconds)
     /* Re-enable UART RXNE interrupts */
     __HAL_UART_ENABLE_IT(&husart1, UART_IT_RXNE);
     __HAL_UART_ENABLE_IT(&husart2, UART_IT_RXNE);
+    __HAL_UART_ENABLE_IT(&husart3, UART_IT_RXNE);
 
     /* Restart ADF1 DMA if it was running */
     if (wasAudioStarted) {
