@@ -125,6 +125,10 @@
                             <TextBlock Text="{Binding BleDeviceName}" FontSize="16" Foreground="White" />
                         </StackPanel>
                     </Grid>
+                    <StackPanel>
+                        <TextBlock Text="Address" Classes="DataLabel" />
+                        <TextBlock Text="{Binding BleAddress}" FontSize="12" Foreground="White" Opacity="0.7" />
+                    </StackPanel>
                 </StackPanel>
             </Border>
 

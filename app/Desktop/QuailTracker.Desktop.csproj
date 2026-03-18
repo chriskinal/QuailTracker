@@ -13,5 +13,6 @@
 
   <ItemGroup>
     <PackageReference Include="Avalonia.Desktop" Version="11.2.*" />
+    <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.1.1" />
   </ItemGroup>
 </Project>

@@ -32,6 +32,9 @@
 #include "mel_spectrogram.h"
 #include "tflite_inference.h"
 #include "SEGGER_RTT.h"
+#include "ble_proto.h"
+#include "quailtracker.pb.h"
+#include <pb_encode.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -153,7 +156,7 @@ extern flac_enc_t flacEncoder;
 extern char deviceStationId[16];
 
 /* Live audio peak level (updated by audioTask, read by bleTask for $STATUS) */
-static volatile int32_t audioPeakLevel = 0;
+volatile int32_t audioPeakLevel = 0;
 
 /* Peak limiter: hard-clip samples above this threshold.
  * Prevents ADF Sinc4 saturation artifacts on loud close-range calls.
@@ -162,10 +165,6 @@ static volatile int32_t audioPeakLevel = 0;
 uint32_t limiterClipCount = 0;  /* total clipped samples this recording */
 
 /* BLE status streaming: independent audio-level and recording streams */
-static uint32_t streamAudioInterval = 0;
-static uint32_t streamRecInterval = 0;
-static uint32_t lastAudioTick = 0;
-static uint32_t lastRecTick = 0;
 static uint32_t lastSht30Tick = 0;
 #define SHT30_INTERVAL_MS 5000
 
@@ -211,23 +210,22 @@ extern uint16_t sht30HumRH100;
 extern void sht30Read(void);
 
 /* GPS state */
-static gps_data_t gpsData;
+gps_data_t gpsData;
 static volatile uint8_t gpsRawOutput;
 static uint8_t gpsPowered = 1;
 
 /* Survey-in state */
-static uint8_t surveyActive = 0;       /* 1 = survey in progress */
-static uint32_t surveyStartTick = 0;   /* HAL tick when survey started */
+uint8_t surveyActive = 0;       /* 1 = survey in progress */
+uint32_t surveyStartTick = 0;   /* HAL tick when survey started */
 #define SURVEY_DURATION_MS  300000      /* 5 minutes */
 #define SURVEY_MIN_SATS     4           /* minimum satellites for valid fix */
 
 /* BLE state */
-static char bleName[32];
-static char bleAddr[20];
-static uint8_t bleReady;
-static volatile uint8_t bleConnected;
-static char bleLastResponse[64];
-static volatile uint8_t bleNameUpdatePending;  /* apply BLE name change on disconnect */
+char bleName[32];
+char bleAddr[20];
+uint8_t bleReady;
+volatile uint8_t bleConnected;
+volatile uint8_t bleNameUpdatePending;  /* apply BLE name change on disconnect */
 
 /* Recording filename from main.c (for BLE $STATUS) */
 extern char recFilename[];
@@ -238,7 +236,7 @@ static volatile uint8_t bleLiveProbeReady;
 static char bleLiveProbeResp[64];
 
 /* Flash-persisted device config (loaded at BLE task start) */
-static device_config_t cfg __attribute__((aligned(16)));
+device_config_t cfg __attribute__((aligned(16)));
 
 /* ---- BPF filter state (reset on recording start) ---- */
 static int32_t  hpfPrevIn  = 0;
@@ -260,7 +258,7 @@ static uint32_t computeLpfAlpha(uint16_t fc) {
 }
 
 /* ---- Activity filter state ---- */
-static volatile uint8_t actRatio = 0;     /* last computed activity % (read by BLE) */
+volatile uint8_t actRatio = 0;     /* last computed activity % (read by BLE) */
 static int32_t  actMean  = 0;             /* running mean(|sample|), Q0 */
 static int32_t  actMad   = 0;             /* running MAD, Q0 */
 static uint32_t actAbove = 0;             /* above-threshold count in current window */
@@ -284,29 +282,27 @@ extern uint8_t tensorArena[112 * 1024];
 extern volatile uint64_t absSampleCount;
 
 /* Inference task handle + notification */
-static osThreadId_t inferenceTaskHandle;
+osThreadId_t inferenceTaskHandle;
 
 /* Decimation + mel accumulation: 2 audio blocks of 128 → 256 at 24kHz (one mel hop) */
 static int16_t melAccumBuf[256];  /* MEL_HOP samples */
 static int melAccumIdx = 0;
 
 /* Inference state */
-static volatile uint8_t modelLoaded = 0;
-static volatile uint32_t detWindowsProcessed = 0;
-static volatile uint32_t detHits = 0;
-static char detLastSpecies[32] = "";
-static volatile uint8_t detLastConf = 0;
-static char detLastTime[20] = "";
+volatile uint8_t modelLoaded = 0;
+volatile uint32_t detWindowsProcessed = 0;
+volatile uint32_t detHits = 0;
+char detLastSpecies[32] = "";
+volatile uint8_t detLastConf = 0;
+char detLastTime[20] = "";
 
 /* Model metadata (loaded from model_config.json) */
 static char modelLabels[TFLITE_MAX_CLASSES][32];
-static int modelNumLabels = 0;
+int modelNumLabels = 0;
 static float modelMelMin = -80.0f;
 static float modelMelMax = 0.0f;
 
 /* BLE detection streaming interval (0=off) */
-static uint32_t streamDetInterval = 0;
-static uint32_t lastDetTick = 0;
 
 /* Detection CSV filename for today */
 static char detCsvFilename[48] = "";
@@ -357,26 +353,15 @@ void printBleStatusBrief(void);
 static void configSetDefaults(device_config_t *c);
 static uint32_t configComputeCrc(const device_config_t *c);
 static void configLoad(void);
-static int configSave(void);
+int configSave(void);
 
 /* Survey-in */
 static void surveyAccumulate(float lat, float lon, float alt);
 
 /* BLE protocol */
 static int bleSendCmd(const char *cmd, char *resp, int respSize, int timeoutMs);
-static void bleSendLine(const char *fmt, ...);
-static void bleHandleCommand(const char *cmd);
-static void bleHandleStatusEx(const char *tag);
-static inline void bleHandleStatus(void) { bleHandleStatusEx("$STATUS"); }
-static void bleHandleStatusPage(int page);
-static void bleHandleStreamAudio(void);
-static void bleHandleStreamRec(void);
-static void bleHandleConfig(void);
-static void bleHandleSd(const char *arg);
-static void bleHandleSet(const char *args);
 
 /* OTA */
-static void bleHandleOta(const char *args);
 static uint32_t crc32_compute(const uint8_t *data, uint32_t len);
 /* USER CODE END FunctionPrototypes */
 
@@ -1475,13 +1460,9 @@ static void StartInferenceTask(void *argument)
 
                 printf("DET: %s %d%% @ %s\r\n", species, confPct, detLastTime);
 
-                /* Push detection over BLE if streaming enabled */
-                if (streamDetInterval > 0) {
-                    bleSendLine("$DETECTION");
-                    bleSendLine("species=%s", species);
-                    bleSendLine("conf=%d", confPct);
-                    bleSendLine("time=%s", detLastTime);
-                    bleSendLine("$END");
+                /* Push detection over BLE if subscribed */
+                if (ble_proto_has_subscriber(TOPIC_DETECTION)) {
+                    ble_proto_push_topic(TOPIC_DETECTION);
                 }
             }
         }
@@ -1767,6 +1748,8 @@ static void surveyAccumulate(float lat, float lon, float alt)
                 printf("Survey: Complete (%lu fixes)\r\n",
                        (unsigned long)cfg.surveyCount);
             }
+            /* Push config so app sees survey results */
+            ble_proto_push_topic(TOPIC_CONFIG_DUMP);
             return;
         }
 
@@ -1775,6 +1758,18 @@ static void surveyAccumulate(float lat, float lon, float alt)
         cfg.surveyLat += (lat - cfg.surveyLat) / (float)cfg.surveyCount;
         cfg.surveyLon += (lon - cfg.surveyLon) / (float)cfg.surveyCount;
         cfg.surveyAlt += (alt - cfg.surveyAlt) / (float)cfg.surveyCount;
+
+        /* CLI progress every 10 fixes */
+        if ((cfg.surveyCount % 10) == 0) {
+            uint32_t elapsed = (HAL_GetTick() - surveyStartTick) / 1000;
+            uint32_t remain = elapsed < 300 ? 300 - elapsed : 0;
+            printf("Survey: %lu fixes, %lus remaining\r\n",
+                   (unsigned long)cfg.surveyCount, (unsigned long)remain);
+        }
+        /* Push status to app every 5 fixes for live countdown */
+        if ((cfg.surveyCount % 5) == 0) {
+            ble_proto_push_topic(TOPIC_STATUS);
+        }
     } else if (cfg.surveyCount > 0) {
         /* Continuous refinement: keep averaging after initial survey */
         cfg.surveyCount++;
@@ -1976,18 +1971,23 @@ static void StartBleTask(void *argument)
 
     }
 
-    /* Main loop: read incoming BLE data (transparent mode) */
-    char buf[128];
-    int pos = 0;
-    for (;;) {
-        /* OTA inactivity timeout */
-        if (ota.state == OTA_RECEIVING &&
-            (HAL_GetTick() - ota.lastActivityTick) > OTA_TIMEOUT_MS) {
-            printf("OTA: Timeout -aborting\r\n");
-            ota.state = OTA_IDLE;
-            bleSendLine("$ERR,TIMEOUT");
-        }
+    /* Initialize protobuf protocol */
+    ble_proto_init();
 
+    /* Main loop: read incoming BLE data (transparent mode)
+     * Binary protocol: accumulate bytes until 0x00 COBS delimiter,
+     * then dispatch as a protobuf frame.
+     * Text lines from PB-03F module (URC events like +EVENT:BLE_CONNECTED)
+     * are detected by leading '+' or ASCII printable and handled as text. */
+    uint8_t frameBuf[256];
+    int framePos = 0;
+    int frameExpected = 0;   /* expected frame length after SOF + length bytes */
+    uint8_t frameState = 0;  /* 0=idle, 1=got SOF, 2=got len_hi, 3=receiving data */
+    uint8_t frameLenHi = 0;
+    char textBuf[128];
+    int textPos = 0;
+
+    for (;;) {
         /* Handle live AT probe requests from CLI task */
         if (bleLiveProbeReq) {
             bleLiveProbeReq = 0;
@@ -1997,25 +1997,51 @@ static void StartBleTask(void *argument)
             continue;
         }
 
-        int c = getCharBle(100);  /* short timeout to check probe requests */
+        int c = getCharBle(10);
         if (c >= 0) {
-            if (c == '\n') {
-                if (pos > 0 && buf[pos - 1] == '\r') pos--;
-                buf[pos] = '\0';
-                if (pos > 0) {
-                    if (buf[0] == '$') {
-                        /* Protocol command from app */
-                        bleHandleCommand(buf);
-                    } else if (strstr(buf, "BLE_CONNECTED") != NULL) {
+            uint8_t b = (uint8_t)c;
+
+            if (b == 0x01 && frameState == 0) {
+                /* Start-of-frame marker */
+                frameState = 1;
+                framePos = 0;
+                textPos = 0;
+            } else if (frameState == 1) {
+                /* Length high byte */
+                frameLenHi = b;
+                frameState = 2;
+            } else if (frameState == 2) {
+                /* Length low byte — now we know how many bytes to read */
+                frameExpected = (frameLenHi << 8) | b;
+                if (frameExpected > (int)sizeof(frameBuf) || frameExpected < FRAME_HEADER_SIZE) {
+                    frameState = 0;  /* invalid length — resync */
+                } else {
+                    frameState = 3;
+                    framePos = 0;
+                }
+            } else if (frameState == 3) {
+                /* Accumulate frame data */
+                frameBuf[framePos++] = b;
+                if (framePos >= frameExpected) {
+                    /* Complete frame received */
+                    ble_proto_receive(frameBuf, (size_t)framePos);
+                    frameState = 0;
+                    framePos = 0;
+                }
+            } else if (b == '\n') {
+                /* Text line — check for PB-03F URC events */
+                if (textPos > 0 && textBuf[textPos - 1] == '\r') textPos--;
+                textBuf[textPos] = '\0';
+                if (textPos > 0) {
+                    if (strstr(textBuf, "BLE_CONNECTED") != NULL) {
                         bleConnected = 1;
+                        ble_proto_reset();
                         printf("BLE: Connected\r\n");
-                    } else if (strstr(buf, "BLE_DISCONNECTED") != NULL) {
+                    } else if (strstr(textBuf, "BLE_DISCONNECT") != NULL) {
                         bleConnected = 0;
-                        streamAudioInterval = 0;  /* stop streaming on disconnect */
-                        streamRecInterval = 0;
+                        ble_proto_reset();
                         bleLogEnabled = 0;
                         printf("BLE: Disconnected\r\n");
-                        /* Apply deferred BLE name update now that queue is free */
                         if (bleNameUpdatePending) {
                             bleNameUpdatePending = 0;
                             char nameCmd[48];
@@ -2030,28 +2056,18 @@ static void StartBleTask(void *argument)
                             printf("BLE: Name updated to %s\r\n", bleName);
                         }
                     }
-                    /* else: ignore unknown lines */
-                    strncpy(bleLastResponse, buf, sizeof(bleLastResponse) - 1);
-                    bleLastResponse[sizeof(bleLastResponse) - 1] = '\0';
                 }
-                pos = 0;
-            } else if (pos < (int)sizeof(buf) - 1) {
-                buf[pos++] = (char)c;
+                textPos = 0;
+            } else {
+                /* Accumulate text (URC events, AT responses) */
+                if (textPos < (int)sizeof(textBuf) - 1)
+                    textBuf[textPos++] = (char)b;
             }
         }
 
-        /* Push audio level stream (Config tab -fast, ~5 Hz) */
-        if (streamAudioInterval > 0 && bleConnected &&
-            (HAL_GetTick() - lastAudioTick) >= streamAudioInterval) {
-            lastAudioTick = HAL_GetTick();
-            bleHandleStreamAudio();
-        }
-        /* Push recording stats stream (Ops tab -~1 Hz) */
-        if (streamRecInterval > 0 && bleConnected &&
-            (HAL_GetTick() - lastRecTick) >= streamRecInterval) {
-            lastRecTick = HAL_GetTick();
-            bleHandleStreamRec();
-        }
+        /* Poll subscription timers and push due messages */
+        if (bleConnected)
+            ble_proto_poll_subscriptions();
 
         /* Periodic SHT30 temperature/humidity read (~every 5s) */
         if ((HAL_GetTick() - lastSht30Tick) >= SHT30_INTERVAL_MS) {
@@ -2059,9 +2075,9 @@ static void StartBleTask(void *argument)
             sht30Read();
         }
 
-        /* Drain log ring buffer over BLE */
+        /* Drain log ring buffer over BLE as protobuf LogLine messages */
         if (bleLogEnabled && bleConnected) {
-            char logChunk[64];
+            char logChunk[120];
             int n = 0;
             while (n < (int)sizeof(logChunk) - 1) {
                 uint16_t t = bleLogTail;
@@ -2071,7 +2087,13 @@ static void StartBleTask(void *argument)
             }
             if (n > 0) {
                 logChunk[n] = '\0';
-                bleSend(logChunk);
+                /* Send as protobuf LogLine */
+                quailtracker_LogLine log = quailtracker_LogLine_init_zero;
+                strncpy(log.text, logChunk, sizeof(log.text) - 1);
+                uint8_t pb_buf[140];
+                pb_ostream_t stream = pb_ostream_from_buffer(pb_buf, sizeof(pb_buf));
+                if (pb_encode(&stream, quailtracker_LogLine_fields, &log))
+                    ble_proto_send(TOPIC_LOG, pb_buf, stream.bytes_written);
             }
         }
     }
@@ -2189,7 +2211,7 @@ static void configLoad(void)
     strncpy(deviceStationId, cfg.stationId, sizeof(deviceStationId));
 }
 
-static int configSave(void)
+int configSave(void)
 {
     cfg.crc32 = configComputeCrc(&cfg);
 
@@ -2248,1143 +2270,8 @@ static int configSave(void)
     return 1;
 }
 
-/* ========================= BLE Protocol ========================= */
+/* ========================= BLE Protocol (legacy text handlers removed — see ble_proto_handlers.c) ========================= */
 
-#include <stdarg.h>
-
-static void bleSendLine(const char *fmt, ...)
-{
-    char line[128];
-    va_list ap;
-    va_start(ap, fmt);
-    int len = vsnprintf(line, sizeof(line) - 1, fmt, ap);
-    va_end(ap);
-    if (len > 0) {
-        if (len > (int)sizeof(line) - 2) len = (int)sizeof(line) - 2;
-        line[len] = '\n';
-        line[len + 1] = '\0';
-        bleSend(line);
-    }
-}
-
-static void bleHandleStatusEx(const char *tag)
-{
-    extern MDF_FilterConfigTypeDef AdfFilterConfig0;
-
-    bleSendLine("%s", tag);
-    bleSendLine("id=%s", cfg.stationId);
-    bleSendLine("fw=" FW_VERSION);
-
-    /* Battery */
-    {
-        uint32_t mv = battReadMv();
-        int pct = (int)(mv - 3000) * 100 / 1200;
-        if (pct < 0) pct = 0;
-        if (pct > 100) pct = 100;
-        int lvl = (pct <= 5) ? 2 : (pct <= 20) ? 1 : 0;  /* 0=ok, 1=low, 2=critical */
-        bleSendLine("bat_v=%lu.%03lu", (unsigned long)(mv / 1000), (unsigned long)(mv % 1000));
-        bleSendLine("bat_pct=%d", pct);
-        bleSendLine("bat_lvl=%d", lvl);
-    }
-
-    /* GPS */
-    bleSendLine("gps_valid=%d", gpsData.valid);
-    bleSendLine("gps_sats=%d", gpsData.satellites);
-
-    int32_t lat7 = (int32_t)(gpsData.latitude * 10000000.0f);
-    int32_t lon7 = (int32_t)(gpsData.longitude * 10000000.0f);
-    bleSendLine("gps_lat=%ld", (long)lat7);
-    bleSendLine("gps_lon=%ld", (long)lon7);
-    {
-        int32_t alt_mm = (int32_t)(gpsData.altitude * 1000.0f);
-        bleSendLine("gps_alt=%ld", (long)alt_mm);
-    }
-
-    /* GPS time: reformat DDMMYY + HHMMSS → YYYYMMDDHHmmss */
-    if (ppsSynced && ppsUtcDate != 0) {
-        uint32_t dd = ppsUtcDate / 10000;
-        uint32_t mm = (ppsUtcDate / 100) % 100;
-        uint32_t yy = ppsUtcDate % 100;
-        uint32_t hh = ppsUtcTime / 10000;
-        uint32_t mn = (ppsUtcTime / 100) % 100;
-        uint32_t ss = ppsUtcTime % 100;
-        bleSendLine("gps_time=20%02lu%02lu%02lu%02lu%02lu%02lu",
-                    (unsigned long)yy, (unsigned long)mm, (unsigned long)dd,
-                    (unsigned long)hh, (unsigned long)mn, (unsigned long)ss);
-    } else {
-        bleSendLine("gps_time=");
-    }
-
-    /* GPS extended */
-    bleSendLine("gps_fix=%d", gpsData.fix);
-
-    /* GPS date: reformat DDMMYY → YYYY-MM-DD */
-    if (gpsData.utc_date != 0) {
-        uint32_t dd = gpsData.utc_date / 10000;
-        uint32_t mm = (gpsData.utc_date / 100) % 100;
-        uint32_t yy = gpsData.utc_date % 100;
-        bleSendLine("gps_date=20%02lu-%02lu-%02lu",
-                    (unsigned long)yy, (unsigned long)mm, (unsigned long)dd);
-    } else {
-        bleSendLine("gps_date=");
-    }
-
-    /* PPS */
-    bleSendLine("pps=%d", ppsSynced ? 1 : 0);
-    bleSendLine("pps_count=%lu", (unsigned long)ppsCount);
-    bleSendLine("pps_ms=%lu", (unsigned long)(HAL_GetTick() - ppsTick));
-
-    /* Temperature/humidity */
-    bleSendLine("temp=%d", (int)sht30TempC100);
-    bleSendLine("hum=%u", (unsigned)sht30HumRH100);
-
-    /* SD card */
-    bleSendLine("sd=%d", sdMounted ? 1 : 0);
-    if (sdMounted) {
-        FATFS *fs;
-        DWORD fre_clust;
-        if (osMutexAcquire(fileMtxHandle, 200) == osOK) {
-            if (f_getfree("", &fre_clust, &fs) == FR_OK) {
-                DWORD tot_sect = (fs->n_fatent - 2) * fs->csize;
-                DWORD fre_sect = fre_clust * fs->csize;
-                bleSendLine("sd_tot=%lu", (unsigned long)(tot_sect / 2));
-                bleSendLine("sd_free=%lu", (unsigned long)(fre_sect / 2));
-            } else {
-                bleSendLine("sd_tot=0");
-                bleSendLine("sd_free=0");
-            }
-            osMutexRelease(fileMtxHandle);
-        } else {
-            bleSendLine("sd_tot=0");
-            bleSendLine("sd_free=0");
-        }
-    } else {
-        bleSendLine("sd_tot=0");
-        bleSendLine("sd_free=0");
-    }
-
-    /* Recording */
-    bleSendLine("rec=%d", isRecording ? 1 : 0);
-    bleSendLine("rec_fmt=%s", recFormat == REC_FMT_WAV ? "WAV" : "FLAC");
-    bleSendLine("rec_file=%s", recFilename);
-    bleSendLine("rec_bytes=%lu", (unsigned long)totalDataBytes);
-    bleSendLine("rec_dur=%lu",
-                (unsigned long)(isRecording ? totalDataBytes / (SAMPLE_RATE * 3) : 0));
-    bleSendLine("rec_ovf=%lu", (unsigned long)ringOverruns);
-
-    /* Audio buffer stats -read and reset peak */
-    int32_t peak = audioPeakLevel;
-    audioPeakLevel = 0;
-    bleSendLine("aud_peak=%d", (int)peak);
-    bleSendLine("aud_buf=%lu", (unsigned long)(ringHead - ringTail));
-    bleSendLine("aud_cap=%d", PCM_RING_SIZE);
-
-    /* BLE module info */
-    bleSendLine("ble_ready=%d", bleReady ? 1 : 0);
-    bleSendLine("ble_name=%s", bleName);
-    bleSendLine("ble_addr=%s", bleAddr);
-    bleSendLine("ble_conn=%d", bleConnected ? 1 : 0);
-
-    /* Survey-in status */
-    {
-        int32_t slat7 = (int32_t)(cfg.surveyLat * 10000000.0f);
-        int32_t slon7 = (int32_t)(cfg.surveyLon * 10000000.0f);
-        int32_t salt_mm = (int32_t)(cfg.surveyAlt * 1000.0f);
-        bleSendLine("survey_lat=%ld", (long)slat7);
-        bleSendLine("survey_lon=%ld", (long)slon7);
-        bleSendLine("survey_alt=%ld", (long)salt_mm);
-        bleSendLine("survey_count=%lu", (unsigned long)cfg.surveyCount);
-        bleSendLine("survey_active=%d", surveyActive ? 1 : 0);
-    }
-
-    bleSendLine("$END");
-}
-
-static void bleHandleStatusPage(int page)
-{
-    extern MDF_FilterConfigTypeDef AdfFilterConfig0;
-
-    bleSendLine("$STATUS,%d", page);
-
-    switch (page) {
-    case 0: /* Device + battery */
-        bleSendLine("id=%s", cfg.stationId);
-        bleSendLine("fw=" FW_VERSION);
-        {
-            uint32_t mv = battReadMv();
-            int pct = (int)(mv - 3000) * 100 / 1200;
-            if (pct < 0) pct = 0;
-            if (pct > 100) pct = 100;
-            int lvl = (pct <= 5) ? 2 : (pct <= 20) ? 1 : 0;
-            bleSendLine("bat_v=%lu.%03lu", (unsigned long)(mv / 1000), (unsigned long)(mv % 1000));
-            bleSendLine("bat_pct=%d", pct);
-            bleSendLine("bat_lvl=%d", lvl);
-        }
-        bleSendLine("ble_ready=%d", bleReady ? 1 : 0);
-        bleSendLine("ble_name=%s", bleName);
-        bleSendLine("ble_addr=%s", bleAddr);
-        bleSendLine("ble_conn=%d", bleConnected ? 1 : 0);
-        break;
-
-    case 1: { /* GPS + PPS */
-        bleSendLine("gps_valid=%d", gpsData.valid);
-        bleSendLine("gps_sats=%d", gpsData.satellites);
-        int32_t lat7 = (int32_t)(gpsData.latitude * 10000000.0f);
-        int32_t lon7 = (int32_t)(gpsData.longitude * 10000000.0f);
-        bleSendLine("gps_lat=%ld", (long)lat7);
-        bleSendLine("gps_lon=%ld", (long)lon7);
-        {
-            int32_t alt_mm = (int32_t)(gpsData.altitude * 1000.0f);
-            bleSendLine("gps_alt=%ld", (long)alt_mm);
-        }
-        if (ppsSynced && ppsUtcDate != 0) {
-            uint32_t dd = ppsUtcDate / 10000;
-            uint32_t mm = (ppsUtcDate / 100) % 100;
-            uint32_t yy = ppsUtcDate % 100;
-            uint32_t hh = ppsUtcTime / 10000;
-            uint32_t mn = (ppsUtcTime / 100) % 100;
-            uint32_t ss = ppsUtcTime % 100;
-            bleSendLine("gps_time=20%02lu%02lu%02lu%02lu%02lu%02lu",
-                        (unsigned long)yy, (unsigned long)mm, (unsigned long)dd,
-                        (unsigned long)hh, (unsigned long)mn, (unsigned long)ss);
-        } else {
-            bleSendLine("gps_time=");
-        }
-        bleSendLine("gps_fix=%d", gpsData.fix);
-        if (gpsData.utc_date != 0) {
-            uint32_t dd = gpsData.utc_date / 10000;
-            uint32_t mm = (gpsData.utc_date / 100) % 100;
-            uint32_t yy = gpsData.utc_date % 100;
-            bleSendLine("gps_date=20%02lu-%02lu-%02lu",
-                        (unsigned long)yy, (unsigned long)mm, (unsigned long)dd);
-        } else {
-            bleSendLine("gps_date=");
-        }
-        bleSendLine("pps=%d", ppsSynced ? 1 : 0);
-        bleSendLine("pps_count=%lu", (unsigned long)ppsCount);
-        bleSendLine("pps_ms=%lu", (unsigned long)(HAL_GetTick() - ppsTick));
-        break;
-    }
-
-    case 2: /* SD + recording */
-        bleSendLine("sd=%d", sdMounted ? 1 : 0);
-        if (sdMounted) {
-            FATFS *fs;
-            DWORD fre_clust;
-            if (osMutexAcquire(fileMtxHandle, 200) == osOK) {
-                if (f_getfree("", &fre_clust, &fs) == FR_OK) {
-                    DWORD tot_sect = (fs->n_fatent - 2) * fs->csize;
-                    DWORD fre_sect = fre_clust * fs->csize;
-                    bleSendLine("sd_tot=%lu", (unsigned long)(tot_sect / 2));
-                    bleSendLine("sd_free=%lu", (unsigned long)(fre_sect / 2));
-                } else {
-                    bleSendLine("sd_tot=0");
-                    bleSendLine("sd_free=0");
-                }
-                osMutexRelease(fileMtxHandle);
-            } else {
-                bleSendLine("sd_tot=0");
-                bleSendLine("sd_free=0");
-            }
-        } else {
-            bleSendLine("sd_tot=0");
-            bleSendLine("sd_free=0");
-        }
-        bleSendLine("rec=%d", isRecording ? 1 : 0);
-        bleSendLine("rec_fmt=%s", recFormat == REC_FMT_WAV ? "WAV" : "FLAC");
-        bleSendLine("rec_file=%s", recFilename);
-        bleSendLine("rec_bytes=%lu", (unsigned long)totalDataBytes);
-        bleSendLine("rec_dur=%lu",
-                    (unsigned long)(isRecording ? totalDataBytes / (SAMPLE_RATE * 3) : 0));
-        bleSendLine("rec_ovf=%lu", (unsigned long)ringOverruns);
-        bleSendLine("det_active=%d", (cfg.missionMode != MISSION_RECORD && modelLoaded) ? 1 : 0);
-        bleSendLine("det_windows=%lu", (unsigned long)detWindowsProcessed);
-        bleSendLine("det_hits=%lu", (unsigned long)detHits);
-        bleSendLine("det_last=%s", detLastSpecies);
-        bleSendLine("model_loaded=%d", modelLoaded ? 1 : 0);
-        bleSendLine("model_size=%lu", (unsigned long)modelBufSize);
-        bleSendLine("model_labels=%d", modelNumLabels);
-        break;
-
-    case 3: { /* Audio + survey */
-        int32_t peak = audioPeakLevel;
-        audioPeakLevel = 0;
-        bleSendLine("aud_peak=%d", (int)peak);
-        bleSendLine("aud_buf=%lu", (unsigned long)(ringHead - ringTail));
-        bleSendLine("aud_cap=%d", PCM_RING_SIZE);
-        bleSendLine("aud_clip=%lu", (unsigned long)limiterClipCount);
-        bleSendLine("temp=%d", (int)sht30TempC100);
-        bleSendLine("hum=%u", (unsigned)sht30HumRH100);
-        int32_t slat7 = (int32_t)(cfg.surveyLat * 10000000.0f);
-        int32_t slon7 = (int32_t)(cfg.surveyLon * 10000000.0f);
-        int32_t salt_mm = (int32_t)(cfg.surveyAlt * 1000.0f);
-        bleSendLine("survey_lat=%ld", (long)slat7);
-        bleSendLine("survey_lon=%ld", (long)slon7);
-        bleSendLine("survey_alt=%ld", (long)salt_mm);
-        bleSendLine("survey_count=%lu", (unsigned long)cfg.surveyCount);
-        bleSendLine("survey_active=%d", surveyActive ? 1 : 0);
-        bleSendLine("act_ratio=%d", (int)actRatio);
-        break;
-    }
-
-    default:
-        bleSendLine("$ERR,BADARG");
-        return;
-    }
-
-    bleSendLine("$END");
-}
-
-static void bleHandleStreamAudio(void)
-{
-    int32_t peak = audioPeakLevel;
-    audioPeakLevel = 0;
-
-    bleSendLine("$STREAM");
-    bleSendLine("aud_peak=%d", (int)peak);
-    bleSendLine("act_ratio=%d", (int)actRatio);
-    bleSendLine("$END");
-}
-
-static void bleHandleStreamRec(void)
-{
-    bleSendLine("$STREAM");
-    bleSendLine("rec=%d", isRecording ? 1 : 0);
-    bleSendLine("rec_bytes=%lu", (unsigned long)totalDataBytes);
-    bleSendLine("rec_ovf=%lu", (unsigned long)ringOverruns);
-    bleSendLine("aud_buf=%lu", (unsigned long)(ringHead - ringTail));
-    bleSendLine("aud_cap=%d", PCM_RING_SIZE);
-    bleSendLine("aud_clip=%lu", (unsigned long)limiterClipCount);
-    if (sdMounted) {
-        FATFS *fs;
-        DWORD fre_clust;
-        if (osMutexAcquire(fileMtxHandle, 200) == osOK) {
-            if (f_getfree("", &fre_clust, &fs) == FR_OK) {
-                DWORD fre_sect = fre_clust * fs->csize;
-                bleSendLine("sd_free=%lu", (unsigned long)(fre_sect / 2));
-            }
-            osMutexRelease(fileMtxHandle);
-        }
-    }
-    bleSendLine("$END");
-}
-
-static void bleHandleConfig(void)
-{
-    bleSendLine("$CONFIG");
-    bleSendLine("id=%s", cfg.stationId);
-    bleSendLine("gain=%d", cfg.gain);
-    bleSendLine("bpf_low=%d", (int)cfg.bpfLow);
-    bleSendLine("bpf_high=%d", (int)cfg.bpfHigh);
-    bleSendLine("rate=%lu", (unsigned long)SAMPLE_RATE);
-    bleSendLine("fmt=%s", cfg.recFormat == REC_FMT_WAV ? "WAV" : "FLAC");
-    bleSendLine("sunrise=%d", cfg.sunriseEnabled);
-    bleSendLine("sunrise_before=%d", (int)cfg.sunriseBefore);
-    bleSendLine("sunrise_after=%d", (int)cfg.sunriseAfter);
-    bleSendLine("sunset=%d", cfg.sunsetEnabled);
-    bleSendLine("sunset_before=%d", (int)cfg.sunsetBefore);
-    bleSendLine("sunset_after=%d", (int)cfg.sunsetAfter);
-    bleSendLine("nwin=%d", cfg.numWindows);
-    if (cfg.numWindows > 0) {
-        char winBuf[128];
-        int pos = 0;
-        for (int i = 0; i < cfg.numWindows * 2 && i < 16; i++) {
-            if (i > 0) winBuf[pos++] = ',';
-            pos += snprintf(winBuf + pos, sizeof(winBuf) - pos, "%04u", cfg.windows[i]);
-        }
-        bleSendLine("win=%s", winBuf);
-    }
-    bleSendLine("trig=%d", cfg.trigEnabled);
-    bleSendLine("trig_db=%d", (int)cfg.trigDb);
-    bleSendLine("trig_pre=%d", cfg.trigPre);
-    bleSendLine("trig_post=%d", cfg.trigPost);
-    bleSendLine("lowbat=%d", cfg.lowBatPct);
-    bleSendLine("autostop=%d", cfg.autoStop);
-    bleSendLine("act_mode=%d", cfg.activityMode);
-    bleSendLine("act_min=%d", cfg.activityMinPct);
-    bleSendLine("act_max=%d", cfg.activityMaxPct);
-    bleSendLine("act_hold=%d", cfg.activityHoldSec);
-    bleSendLine("mission=%d", cfg.missionMode);
-    bleSendLine("det_thresh=%d", cfg.detConfThresh);
-    bleSendLine("det_step=%d", cfg.detWindowStep);
-
-    /* Survey-in config */
-    {
-        int32_t slat7 = (int32_t)(cfg.surveyLat * 10000000.0f);
-        int32_t slon7 = (int32_t)(cfg.surveyLon * 10000000.0f);
-        int32_t salt_mm = (int32_t)(cfg.surveyAlt * 1000.0f);
-        bleSendLine("survey_lat=%ld", (long)slat7);
-        bleSendLine("survey_lon=%ld", (long)slon7);
-        bleSendLine("survey_alt=%ld", (long)salt_mm);
-        bleSendLine("survey_count=%lu", (unsigned long)cfg.surveyCount);
-    }
-
-    bleSendLine("$END");
-}
-
-static void bleHandleSd(const char *arg)
-{
-    if (strcmp(arg, "EJECT") == 0) {
-        if (isRecording) { bleSendLine("$ERR,BUSY"); return; }
-        if (!sdMounted)  { bleSendLine("$ERR,ALREADY"); return; }
-        extern char USERPath[];
-        osMutexAcquire(fileMtxHandle, osWaitForever);
-        f_mount(NULL, USERPath, 0);
-        USER_disk_deinit();
-        sdMounted = 0;
-        osMutexRelease(fileMtxHandle);
-        printf("BLE: SD ejected\r\n");
-        bleSendLine("$OK");
-    } else if (strcmp(arg, "MOUNT") == 0) {
-        if (sdMounted) { bleSendLine("$ERR,ALREADY"); return; }
-        extern FATFS USERFatFS;
-        extern char USERPath[];
-        osMutexAcquire(fileMtxHandle, osWaitForever);
-        if (f_mount(&USERFatFS, USERPath, 1) == FR_OK) {
-            sdMounted = 1;
-            osMutexRelease(fileMtxHandle);
-            printf("BLE: SD mounted\r\n");
-            bleSendLine("$OK");
-        } else {
-            osMutexRelease(fileMtxHandle);
-            bleSendLine("$ERR,NOSD");
-        }
-    } else if (strcmp(arg, "FORMAT") == 0) {
-        if (isRecording) { bleSendLine("$ERR,BUSY"); return; }
-        osMutexAcquire(fileMtxHandle, osWaitForever);
-        int ok = formatSD();
-        osMutexRelease(fileMtxHandle);
-        if (ok) {
-            printf("BLE: SD formatted\r\n");
-            bleSendLine("$OK");
-        } else {
-            bleSendLine("$ERR,NOSD");
-        }
-    } else {
-        bleSendLine("$ERR,BADARG");
-    }
-}
-
-static void bleHandleSet(const char *args)
-{
-    /* args points past "$SET," -e.g. "STATION,QT001" */
-    char key[16], val[32];
-    const char *comma = strchr(args, ',');
-    if (!comma) { bleSendLine("$ERR,BADARG"); return; }
-
-    int keyLen = (int)(comma - args);
-    if (keyLen < 1 || keyLen > (int)sizeof(key) - 1) {
-        bleSendLine("$ERR,BADARG");
-        return;
-    }
-    memcpy(key, args, keyLen);
-    key[keyLen] = '\0';
-    strncpy(val, comma + 1, sizeof(val) - 1);
-    val[sizeof(val) - 1] = '\0';
-
-    int ok = 1;
-
-    if (strcmp(key, "STATION") == 0) {
-        if (strlen(val) > 15) { bleSendLine("$ERR,BADARG"); return; }
-        strncpy(cfg.stationId, val, sizeof(cfg.stationId));
-        strncpy(deviceStationId, cfg.stationId, sizeof(deviceStationId));
-        /* Defer BLE name update — AT commands sent inline here would use
-         * bleSendCmd() which reads from bleRxQueue.  If the PB-03F echoes
-         * AT responses to the connected BLE device, the app sees "OK"
-         * before our "$OK", sends the next $SET command early, and
-         * bleSendCmd swallows it from the queue.  Setting the flag lets
-         * the main loop apply the name change after $OK has been sent
-         * and the app has moved on. */
-        bleNameUpdatePending = 1;  /* apply on disconnect — AT cmds can't share queue while connected */
-    } else if (strcmp(key, "GAIN") == 0) {
-        int v = atoi(val);
-        if (v < 0 || v > 24 || (v % 3) != 0) { bleSendLine("$ERR,BADARG"); return; }
-        cfg.gain = (uint8_t)v;
-        /* Apply to ADF filter immediately via HAL (writes hardware register) */
-        extern MDF_HandleTypeDef AdfHandle0;
-        HAL_MDF_SetGain(&AdfHandle0, (int32_t)v);
-        /* Update mel gain compensation for new gain level */
-        float gc = 18.0f - (float)(v - 6) * 6.0f;
-        mel_set_gain_compensation(gc);
-        printf("BLE: ADF gain set to %d dB (mel comp=%.0f dB)\r\n", v, gc);
-    } else if (strcmp(key, "BPFLOW") == 0) {
-        int v = atoi(val);
-        if (v < 0 || v > 1500) { bleSendLine("$ERR,BADARG"); return; }
-        cfg.bpfLow = (uint16_t)v;
-    } else if (strcmp(key, "BPFHIGH") == 0) {
-        int v = atoi(val);
-        if (v < 0 || v > 24000) { bleSendLine("$ERR,BADARG"); return; }
-        cfg.bpfHigh = (uint16_t)v;
-    } else if (strcmp(key, "FORMAT") == 0) {
-        if (isRecording) { bleSendLine("$ERR,BUSY"); return; }
-        if (strcmp(val, "WAV") == 0) {
-            cfg.recFormat = REC_FMT_WAV;
-            recFormat = REC_FMT_WAV;
-        } else if (strcmp(val, "FLAC") == 0) {
-            cfg.recFormat = REC_FMT_FLAC;
-            recFormat = REC_FMT_FLAC;
-        } else {
-            bleSendLine("$ERR,BADARG"); return;
-        }
-    } else if (strcmp(key, "SUNRISE") == 0) {
-        /* Value format: enabled,before,after e.g. "1,30,60" */
-        const char *c2 = strchr(val, ',');
-        if (!c2) { bleSendLine("$ERR,BADARG"); return; }
-        const char *c3 = strchr(c2 + 1, ',');
-        if (!c3) { bleSendLine("$ERR,BADARG"); return; }
-        cfg.sunriseEnabled = (uint8_t)(val[0] - '0');
-        cfg.sunriseBefore = (uint16_t)atoi(c2 + 1);
-        cfg.sunriseAfter = (uint16_t)atoi(c3 + 1);
-    } else if (strcmp(key, "SUNSET") == 0) {
-        /* Value format: enabled,before,after e.g. "1,30,30" */
-        const char *c2 = strchr(val, ',');
-        if (!c2) { bleSendLine("$ERR,BADARG"); return; }
-        const char *c3 = strchr(c2 + 1, ',');
-        if (!c3) { bleSendLine("$ERR,BADARG"); return; }
-        cfg.sunsetEnabled = (uint8_t)(val[0] - '0');
-        cfg.sunsetBefore = (uint16_t)atoi(c2 + 1);
-        cfg.sunsetAfter = (uint16_t)atoi(c3 + 1);
-    } else if (strcmp(key, "WINDOWS") == 0) {
-        /* Value format: N,HHMM,HHMM,... e.g. "2,0600,0900,1700,2030" */
-        int n = val[0] - '0';
-        if (n < 0 || n > 8) { bleSendLine("$ERR,BADARG"); return; }
-        cfg.numWindows = (uint8_t)n;
-        const char *p = strchr(val, ',');
-        for (int i = 0; i < n * 2 && p; i++) {
-            p++; /* skip comma */
-            cfg.windows[i] = (uint16_t)atoi(p);
-            p = strchr(p, ',');
-        }
-    } else if (strcmp(key, "TRIG") == 0) {
-        int v = val[0] - '0';
-        if (v < 0 || v > 1) { bleSendLine("$ERR,BADARG"); return; }
-        cfg.trigEnabled = (uint8_t)v;
-    } else if (strcmp(key, "TRIGDB") == 0) {
-        int v = atoi(val);
-        if (v < -60 || v > 0) { bleSendLine("$ERR,BADARG"); return; }
-        cfg.trigDb = (int8_t)v;
-    } else if (strcmp(key, "TRIGPRE") == 0) {
-        int v = atoi(val);
-        if (v < 0 || v > 30) { bleSendLine("$ERR,BADARG"); return; }
-        cfg.trigPre = (uint8_t)v;
-    } else if (strcmp(key, "TRIGPOST") == 0) {
-        int v = atoi(val);
-        if (v < 0 || v > 60) { bleSendLine("$ERR,BADARG"); return; }
-        cfg.trigPost = (uint8_t)v;
-    } else if (strcmp(key, "LOWBAT") == 0) {
-        int v = atoi(val);
-        if (v < 0 || v > 100) { bleSendLine("$ERR,BADARG"); return; }
-        cfg.lowBatPct = (uint8_t)v;
-    } else if (strcmp(key, "AUTOSTOP") == 0) {
-        int v = val[0] - '0';
-        if (v < 0 || v > 1) { bleSendLine("$ERR,BADARG"); return; }
-        cfg.autoStop = (uint8_t)v;
-    } else if (strcmp(key, "ACTMODE") == 0) {
-        int v = val[0] - '0';
-        if (v < 0 || v > 3) { bleSendLine("$ERR,BADARG"); return; }
-        cfg.activityMode = (uint8_t)v;
-    } else if (strcmp(key, "ACTMIN") == 0) {
-        int v = atoi(val);
-        if (v < 1 || v > 50) { bleSendLine("$ERR,BADARG"); return; }
-        cfg.activityMinPct = (uint8_t)v;
-    } else if (strcmp(key, "ACTMAX") == 0) {
-        int v = atoi(val);
-        if (v < 50 || v > 99) { bleSendLine("$ERR,BADARG"); return; }
-        cfg.activityMaxPct = (uint8_t)v;
-    } else if (strcmp(key, "ACTHOLD") == 0) {
-        int v = atoi(val);
-        if (v < 1 || v > 30) { bleSendLine("$ERR,BADARG"); return; }
-        cfg.activityHoldSec = (uint8_t)v;
-    } else if (strcmp(key, "SURVEY") == 0) {
-        if (strcmp(val, "START") == 0) {
-            if (gpsData.satellites < SURVEY_MIN_SATS || gpsData.fix < 1) {
-                bleSendLine("$ERR,NOSATS");
-                return;
-            }
-            /* Reset and start 5-minute survey */
-            cfg.surveyLat = 0.0f;
-            cfg.surveyLon = 0.0f;
-            cfg.surveyAlt = 0.0f;
-            cfg.surveyCount = 0;
-            surveyActive = 1;
-            surveyStartTick = HAL_GetTick();
-            printf("Survey: Started (5 min)\r\n");
-            bleSendLine("$OK");
-        } else if (strcmp(val, "STOP") == 0) {
-            if (surveyActive) {
-                surveyActive = 0;
-                configSave();
-                printf("Survey: Stopped (%lu fixes)\r\n",
-                       (unsigned long)cfg.surveyCount);
-            }
-            bleSendLine("$OK");
-        } else if (strcmp(val, "CLEAR") == 0) {
-            surveyActive = 0;
-            cfg.surveyLat = 0.0f;
-            cfg.surveyLon = 0.0f;
-            cfg.surveyAlt = 0.0f;
-            cfg.surveyCount = 0;
-            configSave();
-            printf("Survey: Cleared\r\n");
-            bleSendLine("$OK");
-        } else {
-            bleSendLine("$ERR,BADARG");
-        }
-        return; /* no additional flash save needed */
-    } else if (strcmp(key, "MISSION") == 0) {
-        int v = val[0] - '0';
-        if (v < 0 || v > 2) { bleSendLine("$ERR,BADARG"); return; }
-        cfg.missionMode = (uint8_t)v;
-    } else if (strcmp(key, "DETTHRESH") == 0) {
-        int v = atoi(val);
-        if (v < 0 || v > 100) { bleSendLine("$ERR,BADARG"); return; }
-        cfg.detConfThresh = (uint8_t)v;
-    } else if (strcmp(key, "DETSTEP") == 0) {
-        int v = atoi(val);
-        if (v < 1 || v > 3) { bleSendLine("$ERR,BADARG"); return; }
-        cfg.detWindowStep = (uint8_t)v;
-    } else if (strcmp(key, "STREAM") == 0) {
-        /* $SET,STREAM,0          → stop all streams
-         * $SET,STREAM,AUDIO,<ms> → audio level stream
-         * $SET,STREAM,REC,<ms>   → recording stats stream */
-        if (strcmp(val, "0") == 0) {
-            streamAudioInterval = 0;
-            streamRecInterval = 0;
-            streamDetInterval = 0;
-            printf("BLE: All streams off\r\n");
-        } else if (strncmp(val, "AUDIO,", 6) == 0) {
-            int v = atoi(val + 6);
-            if (v != 0 && (v < 100 || v > 30000)) { bleSendLine("$ERR,BADARG"); return; }
-            streamAudioInterval = (uint32_t)v;
-            if (v > 0) lastAudioTick = HAL_GetTick();
-            printf("BLE: Audio stream = %d ms\r\n", v);
-        } else if (strncmp(val, "REC,", 4) == 0) {
-            int v = atoi(val + 4);
-            if (v != 0 && (v < 100 || v > 30000)) { bleSendLine("$ERR,BADARG"); return; }
-            streamRecInterval = (uint32_t)v;
-            if (v > 0) lastRecTick = HAL_GetTick();
-            printf("BLE: Rec stream = %d ms\r\n", v);
-        } else if (strncmp(val, "DET,", 4) == 0) {
-            int v = atoi(val + 4);
-            if (v != 0 && (v < 100 || v > 30000)) { bleSendLine("$ERR,BADARG"); return; }
-            streamDetInterval = (uint32_t)v;
-            if (v > 0) lastDetTick = HAL_GetTick();
-            printf("BLE: Det stream = %d ms\r\n", v);
-        } else {
-            bleSendLine("$ERR,BADARG");
-            return;
-        }
-        bleSendLine("$OK");
-        return; /* no flash save needed */
-    } else {
-        bleSendLine("$ERR,BADARG");
-        return;
-    }
-
-    if (ok) {
-        if (configSave()) {
-            printf("BLE: SET %s=%s OK\r\n", key, val);
-            bleSendLine("$OK");
-        } else {
-            bleSendLine("$ERR,FLASH");
-        }
-    }
-}
-
-/* ========================= OTA Firmware Update ========================= */
-
-static int hexDecode(const char *hex, int hexLen, uint8_t *out, int outSize)
-{
-    if (hexLen & 1) return -1;
-    int nBytes = hexLen / 2;
-    if (nBytes > outSize) return -1;
-    for (int i = 0; i < nBytes; i++) {
-        uint8_t hi, lo;
-        char c = hex[i * 2];
-        if (c >= '0' && c <= '9') hi = c - '0';
-        else if (c >= 'A' && c <= 'F') hi = c - 'A' + 10;
-        else if (c >= 'a' && c <= 'f') hi = c - 'a' + 10;
-        else return -1;
-        c = hex[i * 2 + 1];
-        if (c >= '0' && c <= '9') lo = c - '0';
-        else if (c >= 'A' && c <= 'F') lo = c - 'A' + 10;
-        else if (c >= 'a' && c <= 'f') lo = c - 'a' + 10;
-        else return -1;
-        out[i] = (hi << 4) | lo;
-    }
-    return nBytes;
-}
-
-static int otaErasePage(uint32_t pageNum)
-{
-    FLASH_EraseInitTypeDef erase = {0};
-    erase.TypeErase = FLASH_TYPEERASE_PAGES;
-    erase.Banks = FLASH_BANK_2;
-    erase.Page = pageNum;
-    erase.NbPages = 1;
-    uint32_t pageError = 0;
-
-    HAL_FLASH_Unlock();
-    HAL_StatusTypeDef rc = HAL_FLASHEx_Erase(&erase, &pageError);
-    HAL_FLASH_Lock();
-    return (rc == HAL_OK) ? 0 : -1;
-}
-
-static int otaProgramPage(uint32_t pageNum, const uint8_t *data, uint32_t len)
-{
-    uint32_t addr = OTA_BANK2_BASE + pageNum * OTA_PAGE_SIZE;
-
-    /* Pad to quadword boundary (16 bytes) */
-    uint32_t padLen = (len + 15) & ~15u;
-    uint8_t pad[16];
-
-    HAL_FLASH_Unlock();
-    for (uint32_t off = 0; off < padLen; off += 16) {
-        const uint8_t *src;
-        if (off + 16 <= len) {
-            src = data + off;
-        } else {
-            uint32_t valid = len - off;
-            memcpy(pad, data + off, valid);
-            memset(pad + valid, 0xFF, 16 - valid);
-            src = pad;
-        }
-        if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_QUADWORD, addr + off,
-                              (uint32_t)src) != HAL_OK) {
-            HAL_FLASH_Lock();
-            return -1;
-        }
-    }
-    HAL_FLASH_Lock();
-
-    /* Readback verify */
-    if (memcmp((const void *)addr, data, len) != 0)
-        return -1;
-
-    return 0;
-}
-
-static int otaWritePage(void)
-{
-    uint32_t pageNum = ota.pagesWritten;
-    if (pageNum >= OTA_CONFIG_PAGE) return -1;
-
-    if (otaErasePage(pageNum) != 0) return -1;
-    if (otaProgramPage(pageNum, ota.pageBuf, ota.pageBufPos) != 0) return -1;
-
-    ota.pagesWritten++;
-    ota.pageBufPos = 0;
-    return 0;
-}
-
-static int otaCopyConfig(void)
-{
-    /* Read config from Bank 2 last page */
-    const device_config_t *src = (const device_config_t *)CONFIG_FLASH_ADDR;
-    device_config_t tmp;
-    memcpy(&tmp, src, sizeof(tmp));
-
-    /* Validate -if corrupt, use current RAM config */
-    if (tmp.magic != CONFIG_MAGIC ||
-        tmp.crc32 != crc32_compute((const uint8_t *)&tmp, sizeof(tmp) - 4)) {
-        memcpy(&tmp, &cfg, sizeof(tmp));
-        tmp.crc32 = configComputeCrc(&tmp);
-    }
-
-    /* Erase active bank page 127 */
-    FLASH_EraseInitTypeDef erase = {0};
-    erase.TypeErase = FLASH_TYPEERASE_PAGES;
-    erase.Banks = FLASH_BANK_1;
-    erase.Page = OTA_CONFIG_PAGE;
-    erase.NbPages = 1;
-    uint32_t pageError = 0;
-
-    HAL_FLASH_Unlock();
-    if (HAL_FLASHEx_Erase(&erase, &pageError) != HAL_OK) {
-        HAL_FLASH_Lock();
-        return -1;
-    }
-
-    /* Program config to 0x080FE000 (8 quadwords = 128 bytes) */
-    const uint8_t *data = (const uint8_t *)&tmp;
-    for (int i = 0; i < 8; i++) {
-        uint32_t addr = OTA_CONFIG_MIRROR + (uint32_t)(i * 16);
-        if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_QUADWORD, addr,
-                              (uint32_t)(data + i * 16)) != HAL_OK) {
-            HAL_FLASH_Lock();
-            return -1;
-        }
-    }
-    HAL_FLASH_Lock();
-
-    /* Verify */
-    if (memcmp((const void *)OTA_CONFIG_MIRROR, &tmp, sizeof(tmp)) != 0)
-        return -1;
-
-    return 0;
-}
-
-static void otaSwapBank(void)
-{
-    /* Read current option bytes */
-    FLASH_OBProgramInitTypeDef ob = {0};
-    HAL_FLASHEx_OBGetConfig(&ob);
-
-    HAL_FLASH_Unlock();
-    HAL_FLASH_OB_Unlock();
-
-    /* Toggle SWAP_BANK */
-    FLASH_OBProgramInitTypeDef obNew = {0};
-    obNew.OptionType = OPTIONBYTE_USER;
-    obNew.USERType = OB_USER_SWAP_BANK;
-    obNew.USERConfig = (ob.USERConfig & OB_SWAP_BANK_ENABLE)
-                        ? OB_SWAP_BANK_DISABLE : OB_SWAP_BANK_ENABLE;
-
-    HAL_FLASHEx_OBProgram(&obNew);
-    HAL_FLASH_OB_Launch();  /* triggers system reset -does not return */
-}
-
-static void otaBegin(const char *args)
-{
-    if (isRecording) { bleSendLine("$ERR,RECORDING"); return; }
-    if (ota.state != OTA_IDLE) { bleSendLine("$ERR,ALREADY"); return; }
-
-    /* Parse size */
-    uint32_t size = 0;
-    const char *p = args;
-    while (*p >= '0' && *p <= '9') { size = size * 10 + (*p++ - '0'); }
-    if (*p != ',') { bleSendLine("$ERR,BADARG"); return; }
-    p++;
-
-    /* Parse CRC-32 hex (8 hex digits) */
-    uint32_t crc = 0;
-    for (int i = 0; i < 8 && *p; i++, p++) {
-        uint8_t nib;
-        if (*p >= '0' && *p <= '9') nib = *p - '0';
-        else if (*p >= 'A' && *p <= 'F') nib = *p - 'A' + 10;
-        else if (*p >= 'a' && *p <= 'f') nib = *p - 'a' + 10;
-        else { bleSendLine("$ERR,BADARG"); return; }
-        crc = (crc << 4) | nib;
-    }
-
-    /* Validate: must fit in 127 pages */
-    if (size == 0 || size > (uint32_t)OTA_CONFIG_PAGE * OTA_PAGE_SIZE) {
-        bleSendLine("$ERR,TOOBIG");
-        return;
-    }
-
-    /* Init OTA context */
-    memset(&ota, 0, sizeof(ota));
-    ota.state = OTA_RECEIVING;
-    ota.imageSize = size;
-    ota.imageCrc = crc;
-    ota.totalPages = (size + OTA_PAGE_SIZE - 1) / OTA_PAGE_SIZE;
-    ota.lastActivityTick = HAL_GetTick();
-
-    printf("OTA: BEGIN size=%lu crc=%08lx pages=%lu\r\n",
-           (unsigned long)size, (unsigned long)crc, (unsigned long)ota.totalPages);
-    bleSendLine("$OTA,READY,%lu", (unsigned long)ota.totalPages);
-}
-
-static void otaData(const char *hexStr)
-{
-    if (ota.state != OTA_RECEIVING) { bleSendLine("$ERR,BADSTATE"); return; }
-
-    ota.lastActivityTick = HAL_GetTick();
-
-    int hexLen = strlen(hexStr);
-    uint8_t tmp[48];  /* max 96 hex chars = 48 bytes */
-    int nBytes = hexDecode(hexStr, hexLen, tmp, sizeof(tmp));
-    if (nBytes <= 0) { bleSendLine("$ERR,BADHEX"); return; }
-
-    if (ota.bytesReceived + (uint32_t)nBytes > ota.imageSize) {
-        bleSendLine("$ERR,OVERFLOW");
-        return;
-    }
-
-    int pos = 0;
-    while (pos < nBytes) {
-        int space = OTA_PAGE_SIZE - ota.pageBufPos;
-        int chunk = (nBytes - pos < space) ? (nBytes - pos) : space;
-        memcpy(ota.pageBuf + ota.pageBufPos, tmp + pos, chunk);
-        ota.pageBufPos += chunk;
-        ota.bytesReceived += chunk;
-        pos += chunk;
-
-        /* Page buffer full -write to flash */
-        if (ota.pageBufPos == OTA_PAGE_SIZE) {
-            if (otaWritePage() != 0) {
-                bleSendLine("$ERR,FLASH");
-                ota.state = OTA_IDLE;
-                return;
-            }
-            bleSendLine("$OTA,P,%lu", (unsigned long)ota.pagesWritten);
-        }
-    }
-}
-
-static void otaEnd(void)
-{
-    if (ota.state != OTA_RECEIVING) { bleSendLine("$ERR,BADSTATE"); return; }
-
-    /* Write final partial page if any data remains */
-    if (ota.pageBufPos > 0) {
-        if (otaWritePage() != 0) {
-            bleSendLine("$ERR,FLASH");
-            ota.state = OTA_IDLE;
-            return;
-        }
-    }
-
-    /* Verify received size */
-    if (ota.bytesReceived != ota.imageSize) {
-        bleSendLine("$ERR,SIZE");
-        ota.state = OTA_IDLE;
-        return;
-    }
-
-    /* CRC-32 verify entire image from flash readback */
-    uint32_t crc = crc32_compute((const uint8_t *)OTA_BANK2_BASE, ota.imageSize);
-    if (crc != ota.imageCrc) {
-        printf("OTA: CRC mismatch: expected %08lx got %08lx\r\n",
-               (unsigned long)ota.imageCrc, (unsigned long)crc);
-        bleSendLine("$ERR,CRC");
-        ota.state = OTA_IDLE;
-        return;
-    }
-
-    printf("OTA: Verified %lu bytes, CRC OK\r\n", (unsigned long)ota.imageSize);
-    ota.state = OTA_COMPLETE;
-    bleSendLine("$OTA,VERIFIED");
-}
-
-static void otaCommit(void)
-{
-    if (ota.state != OTA_COMPLETE) { bleSendLine("$ERR,BADSTATE"); return; }
-
-    printf("OTA: Copying config...\r\n");
-    if (otaCopyConfig() != 0) {
-        bleSendLine("$ERR,CONFIG");
-        return;
-    }
-
-    printf("OTA: Swapping banks...\r\n");
-    bleSendLine("$OTA,SWAPPING");
-    osDelay(50);  /* let BLE transmit response */
-    otaSwapBank();  /* does not return */
-}
-
-static void otaAbort(void)
-{
-    ota.state = OTA_IDLE;
-    printf("OTA: Aborted\r\n");
-    bleSendLine("$OK");
-}
-
-static void otaRollback(void)
-{
-    if (ota.state != OTA_IDLE) { bleSendLine("$ERR,BADSTATE"); return; }
-
-    printf("OTA: Rolling back -copying config...\r\n");
-    if (otaCopyConfig() != 0) {
-        bleSendLine("$ERR,CONFIG");
-        return;
-    }
-
-    printf("OTA: Swapping banks...\r\n");
-    bleSendLine("$OTA,SWAPPING");
-    osDelay(50);
-    otaSwapBank();  /* does not return */
-}
-
-static void otaStatus(void)
-{
-    bleSendLine("$OTA,STATUS,%d,%lu,%lu,%lu",
-                ota.state,
-                (unsigned long)ota.bytesReceived,
-                (unsigned long)ota.pagesWritten,
-                (unsigned long)ota.totalPages);
-}
-
-static void bleHandleOta(const char *args)
-{
-    if (strncmp(args, "BEGIN,", 6) == 0) {
-        otaBegin(args + 6);
-    } else if (strncmp(args, "D,", 2) == 0) {
-        otaData(args + 2);
-    } else if (strcmp(args, "END") == 0) {
-        otaEnd();
-    } else if (strcmp(args, "COMMIT") == 0) {
-        otaCommit();
-    } else if (strcmp(args, "ABORT") == 0) {
-        otaAbort();
-    } else if (strcmp(args, "ROLLBACK") == 0) {
-        otaRollback();
-    } else if (strcmp(args, "STATUS") == 0) {
-        otaStatus();
-    } else {
-        bleSendLine("$ERR,BADCMD");
-    }
-}
-
-static void bleHandleCommand(const char *cmd)
-{
-    printf("BLE CMD: %s\r\n", cmd);
-
-    /* OTA commands always routed regardless of state */
-    if (strncmp(cmd, "$OTA,", 5) == 0) {
-        bleHandleOta(cmd + 5);
-        return;
-    }
-
-    /* Block non-OTA commands during OTA */
-    if (ota.state != OTA_IDLE) {
-        bleSendLine("$ERR,OTA_BUSY");
-        return;
-    }
-
-    if (strcmp(cmd, "$PING") == 0) {
-        bleSendLine("$PONG");
-    } else if (strcmp(cmd, "$MENU") == 0) {
-        bleSendLine("$MENU");
-        bleSendLine("$PING              - connection test");
-        bleSendLine("$VER               - firmware version");
-        bleSendLine("$STATUS,<0-3>      - device status page");
-        bleSendLine("$CONFIG            - current configuration");
-        bleSendLine("$REC,START         - start recording");
-        bleSendLine("$REC,STOP          - stop recording");
-        bleSendLine("$REC,TOGGLE        - toggle recording");
-        bleSendLine("$SD,MOUNT          - mount SD card");
-        bleSendLine("$SD,EJECT          - eject SD card");
-        bleSendLine("$SD,FORMAT         - format SD card");
-        bleSendLine("$SET,STATION,<id>  - set station ID");
-        bleSendLine("$SET,GAIN,<0-24>   - set mic gain (3dB steps)");
-        bleSendLine("$SET,BPFLOW,<0-1500> - set HPF cutoff Hz");
-        bleSendLine("$SET,BPFHIGH,<0-24000> - set LPF cutoff Hz");
-        bleSendLine("$SET,FORMAT,<WAV|FLAC>");
-        bleSendLine("$LOGS              - toggle log forwarding");
-        bleSendLine("$SET,STREAM,AUDIO,<ms> - audio level push");
-        bleSendLine("$SET,STREAM,REC,<ms>   - rec stats push");
-        bleSendLine("$SET,STREAM,0          - stop all streams");
-        bleSendLine("$SET,SURVEY,START  - begin 5-min survey");
-        bleSendLine("$SET,SURVEY,STOP   - stop survey early");
-        bleSendLine("$SET,SURVEY,CLEAR  - reset survey data");
-        bleSendLine("$SET,SUNRISE,<e>,<before>,<after>");
-        bleSendLine("$SET,SUNSET,<e>,<before>,<after>");
-        bleSendLine("$SET,WINDOWS,<n>,<HHMM>,<HHMM>,...");
-        bleSendLine("$SET,TRIG,<0|1>    - amplitude trigger");
-        bleSendLine("$SET,TRIGDB,<-60..0>");
-        bleSendLine("$SET,TRIGPRE,<0-30>");
-        bleSendLine("$SET,TRIGPOST,<0-60>");
-        bleSendLine("$SET,LOWBAT,<0-100>");
-        bleSendLine("$SET,AUTOSTOP,<0|1>");
-        bleSendLine("$SET,MISSION,<0|1|2> - record/detect/both");
-        bleSendLine("$SET,DETTHRESH,<0-100> - det confidence %%");
-        bleSendLine("$SET,DETSTEP,<1-3>   - window step sec");
-        bleSendLine("$MODEL,STATUS        - model info");
-        bleSendLine("$MODEL,RELOAD        - reload from SD");
-        bleSendLine("$DET,STATUS          - detection stats");
-        bleSendLine("$DET,STREAM,<0|ms>   - push detections");
-        bleSendLine("$OTA,BEGIN,<size>,<crc32hex>");
-        bleSendLine("$OTA,D,<hexdata>   - OTA data chunk");
-        bleSendLine("$OTA,END           - finalize OTA");
-        bleSendLine("$OTA,COMMIT        - swap banks + reboot");
-        bleSendLine("$OTA,ABORT         - cancel OTA");
-        bleSendLine("$OTA,ROLLBACK      - revert to prev FW");
-        bleSendLine("$OTA,STATUS        - OTA progress");
-        bleSendLine("$END");
-    } else if (strcmp(cmd, "$VER") == 0) {
-        bleSendLine("$VER," FW_VERSION);
-    } else if (strcmp(cmd, "$LOGS") == 0) {
-        bleLogEnabled = !bleLogEnabled;
-        if (bleLogEnabled) {
-            bleLogHead = 0;
-            bleLogTail = 0;
-        }
-        printf("BLE: Log forwarding = %s\r\n", bleLogEnabled ? "ON" : "OFF");
-        bleSendLine("$OK,%s", bleLogEnabled ? "ON" : "OFF");
-    } else if (strcmp(cmd, "$STATUS") == 0) {
-        bleHandleStatusPage(0);  /* bare $STATUS returns page 0 */
-    } else if (strncmp(cmd, "$STATUS,", 8) == 0) {
-        int page = atoi(cmd + 8);
-        bleHandleStatusPage(page);
-    } else if (strcmp(cmd, "$CONFIG") == 0) {
-        bleHandleConfig();
-    } else if (strcmp(cmd, "$REC,START") == 0) {
-        if (isRecording) { bleSendLine("$ERR,ALREADY"); return; }
-        if (!sdMounted)  { bleSendLine("$ERR,NOSD"); return; }
-        uint8_t c = CMD_START_REC;
-        osMessageQueuePut(audioCmdQueueHandle, &c, 0, 0);
-        osDelay(100);
-        bleSendLine("$OK");
-    } else if (strcmp(cmd, "$REC,STOP") == 0) {
-        if (!isRecording) { bleSendLine("$ERR,ALREADY"); return; }
-        uint8_t c = CMD_STOP_REC;
-        osMessageQueuePut(audioCmdQueueHandle, &c, 0, 0);
-        osDelay(100);
-        bleSendLine("$OK");
-    } else if (strcmp(cmd, "$REC,TOGGLE") == 0) {
-        if (!isRecording && !sdMounted) { bleSendLine("$ERR,NOSD"); return; }
-        uint8_t c = isRecording ? CMD_STOP_REC : CMD_START_REC;
-        osMessageQueuePut(audioCmdQueueHandle, &c, 0, 0);
-        osDelay(100);
-        bleSendLine("$OK");
-    } else if (strncmp(cmd, "$SD,", 4) == 0) {
-        bleHandleSd(cmd + 4);
-    } else if (strncmp(cmd, "$SET,", 5) == 0) {
-        bleHandleSet(cmd + 5);
-    } else if (strncmp(cmd, "$MODEL,", 7) == 0) {
-        const char *arg = cmd + 7;
-        if (strcmp(arg, "STATUS") == 0) {
-            bleSendLine("$MODEL,STATUS");
-            bleSendLine("loaded=%d", modelLoaded ? 1 : 0);
-            bleSendLine("size=%lu", (unsigned long)modelBufSize);
-            bleSendLine("labels=%d", modelNumLabels);
-            for (int i = 0; i < modelNumLabels; i++) {
-                bleSendLine("label_%d=%s", i, modelLabels[i]);
-            }
-            const tflite_info_t *info = tflite_get_info();
-            if (info->ready) {
-                bleSendLine("input=%d", info->input_size);
-                bleSendLine("classes=%d", info->output_classes);
-                bleSendLine("arena=%d", info->arena_used);
-            }
-            bleSendLine("$END");
-        } else if (strcmp(arg, "RELOAD") == 0) {
-            if (inferenceTaskHandle != NULL) {
-                osThreadFlagsSet(inferenceTaskHandle, 0x02);
-                bleSendLine("$OK");
-            } else {
-                bleSendLine("$ERR,NOTASK");
-            }
-        } else {
-            bleSendLine("$ERR,BADARG");
-        }
-    } else if (strncmp(cmd, "$DET,", 5) == 0) {
-        const char *arg = cmd + 5;
-        if (strcmp(arg, "STATUS") == 0) {
-            bleSendLine("$DET,STATUS");
-            bleSendLine("active=%d", (cfg.missionMode != MISSION_RECORD && modelLoaded) ? 1 : 0);
-            bleSendLine("mission=%d", cfg.missionMode);
-            bleSendLine("windows=%lu", (unsigned long)detWindowsProcessed);
-            bleSendLine("hits=%lu", (unsigned long)detHits);
-            bleSendLine("last_species=%s", detLastSpecies);
-            bleSendLine("last_conf=%d", (int)detLastConf);
-            bleSendLine("last_time=%s", detLastTime);
-            bleSendLine("$END");
-        } else if (strncmp(arg, "STREAM,", 7) == 0) {
-            int v = atoi(arg + 7);
-            if (v != 0 && (v < 100 || v > 30000)) { bleSendLine("$ERR,BADARG"); return; }
-            streamDetInterval = (uint32_t)v;
-            if (v > 0) lastDetTick = HAL_GetTick();
-            bleSendLine("$OK");
-        } else {
-            bleSendLine("$ERR,BADARG");
-        }
-    } else {
-        bleSendLine("$ERR,BADCMD");
-    }
-}
 
 /* USER CODE END Application */
 

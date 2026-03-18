@@ -18,10 +18,11 @@
 
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Avalonia.Threading;
+using Google.Protobuf;
 using Plugin.BLE;
 using Plugin.BLE.Abstractions;
 using Plugin.BLE.Abstractions.Contracts;
@@ -33,7 +34,7 @@ namespace QuailTracker.Shared.Services;
 /// <summary>
 /// Real Bluetooth Low Energy service using Plugin.BLE.
 /// Communicates with QuailTracker firmware via transparent UART (HM-19/PB-03F)
-/// using newline-terminated $CMD text protocol.
+/// using COBS-framed protobuf binary protocol.
 /// </summary>
 public class BluetoothService : IBluetoothService
 {
@@ -48,27 +49,20 @@ public class BluetoothService : IBluetoothService
 
     private readonly IAdapter _adapter;
     private IDevice? _device;
-    private ICharacteristic? _writeCharacteristic;  // TX: app → device
-    private ICharacteristic? _notifyCharacteristic; // RX: device → app
+    private ICharacteristic? _writeCharacteristic;  // TX: app -> device
+    private ICharacteristic? _notifyCharacteristic; // RX: device -> app
     private int _mtu = 20; // BLE default, updated after negotiation
 
-    // RX line assembly
-    private readonly StringBuilder _rxBuffer = new();
+    // COBS frame assembler for incoming BLE data
+    private readonly BleFrameAssembler _frameAssembler = new();
+    private readonly BleProtoFrame _frameBuilder = new();
+    private DeviceStatus _cachedStatus = new();  // merged status from all push topics
 
     // Command/response serialization
     private readonly SemaphoreSlim _cmdLock = new(1, 1);
-    private TaskCompletionSource<string>? _responseTcs;
-
-    // Multi-line response buffering ($STATUS / $CONFIG blocks)
-    private List<string>? _multiLines;
-    private string? _multiLineType;
-
-    // Paginated status: stores lines from last completed $STATUS,N page
-    private List<string>? _lastMultiLines;
-
-    // Last full status from $STATUS pages — used as base for merging $STREAM fields.
-    // $STREAM is a compact subset; missing keys inherit from the last full status.
-    private Dictionary<string, string>? _lastFullStatusDict;
+    private TaskCompletionSource<Quailtracker.CommandAck>? _ackTcs;
+    private TaskCompletionSource<Quailtracker.Config>? _configTcs;
+    private TaskCompletionSource<Quailtracker.Status>? _statusTcs;
 
     private CancellationTokenSource? _scanCts;
 
@@ -136,8 +130,7 @@ public class BluetoothService : IBluetoothService
             ConnectedDeviceName = _device.Name ?? "QuailTracker";
             SetState(ConnectionState.Connected);
 
-            try { await SendRawAsync("$PING"); } catch { }
-            _ = RequestStatusAsync();
+            await OnConnectedAsync();
         }
         catch
         {
@@ -193,7 +186,7 @@ public class BluetoothService : IBluetoothService
     {
         var dev = e.Device;
 
-        // Prefer the advertisement local name over dev.Name — iOS caches
+        // Prefer the advertisement local name over dev.Name -- iOS caches
         // CBPeripheral.Name across sessions, so it can return a stale name
         // (e.g. "AI-Thinker") even after the device renamed to "QT001".
         var name = dev.Name ?? "Unknown";
@@ -257,11 +250,11 @@ public class BluetoothService : IBluetoothService
             ConnectedDeviceName = device.Name is { Length: > 0 } ? device.Name : (_device.Name ?? "QuailTracker");
             SetState(ConnectionState.Connected);
 
-            try { await SendRawAsync("$PING"); } catch { }
-            _ = RequestStatusAsync();
+            await OnConnectedAsync();
         }
-        catch
+        catch (Exception ex)
         {
+            System.Console.WriteLine($"[BLE] ConnectToDeviceAsync error: {ex}");
             await CleanupConnection();
             SetState(ConnectionState.Disconnected);
         }
@@ -354,35 +347,65 @@ public class BluetoothService : IBluetoothService
         SetState(ConnectionState.Disconnected);
     }
 
+    // ── Post-connect setup ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Called after BLE connection and characteristic discovery are complete.
+    /// Sends a Ping and subscribes to periodic/on-change topics.
+    /// </summary>
+    private async Task OnConnectedAsync()
+    {
+        try
+        {
+            System.Console.WriteLine("[BLE] OnConnectedAsync: sending Ping...");
+            await SendFrameAsync(_frameBuilder.EncodeEmpty(BleProtoTopic.Ping));
+            System.Console.WriteLine("[BLE] Ping sent OK");
+
+            // Subscribe to topics the app needs
+            System.Console.WriteLine("[BLE] Subscribing to topics...");
+            await SendSubscribeAsync(BleProtoTopic.Status, 30000);
+            await SendSubscribeAsync(BleProtoTopic.GpsFix, 10000);
+            await SendSubscribeAsync(BleProtoTopic.RecordingState, 0);  // on-change
+            await SendSubscribeAsync(BleProtoTopic.Detection, 0);      // on-change
+            System.Console.WriteLine("[BLE] Subscriptions sent OK");
+        }
+        catch (Exception ex)
+        {
+            System.Console.WriteLine($"[BLE] OnConnectedAsync error: {ex}");
+        }
+
+        // Request initial status
+        _ = RequestStatusAsync();
+    }
+
+    // ── Command methods (IBluetoothService) ───────────────────────────────
+
     public async Task RequestStatusAsync()
     {
         if (CurrentState != ConnectionState.Connected) return;
 
-        var allLines = new List<string>();
-
-        for (var page = 0; page < 4; page++)
+        try
         {
-            try
-            {
-                await SendRawAsync($"$STATUS,{page}");
-                if (_lastMultiLines != null)
-                {
-                    allLines.AddRange(_lastMultiLines);
-                    _lastMultiLines = null;
-                }
-            }
-            catch
-            {
-                // Page timed out — continue with whatever we have
-            }
+            _statusTcs = new TaskCompletionSource<Quailtracker.Status>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+
+            await SendCommandFrameAsync(Quailtracker.CommandType.CmdGetStatus);
+
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            timeoutCts.Token.Register(() => _statusTcs?.TrySetCanceled());
+
+            var status = await _statusTcs.Task;
+            MergeStatusIntoCache(status, _cachedStatus);
+            var snapshot = _cachedStatus;
+            Dispatcher.UIThread.Post(() => StatusReceived?.Invoke(this, snapshot));
         }
-
-        if (allLines.Count > 0)
+        catch
         {
-            var dict = LinesToDict(allLines);
-            _lastFullStatusDict = dict;
-            var status = ParseStatus(dict);
-            StatusReceived?.Invoke(this, status);
+            // Timeout or disconnect
+        }
+        finally
+        {
+            _statusTcs = null;
         }
     }
 
@@ -392,12 +415,25 @@ public class BluetoothService : IBluetoothService
 
         try
         {
-            await SendRawAsync("$CONFIG");
-            // Response handled in multi-line parser → fires ConfigReceived
+            _configTcs = new TaskCompletionSource<Quailtracker.Config>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+
+            await SendCommandFrameAsync(Quailtracker.CommandType.CmdGetConfig);
+
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            timeoutCts.Token.Register(() => _configTcs?.TrySetCanceled());
+
+            var config = await _configTcs.Task;
+            var mapped = MapConfig(config);
+            Dispatcher.UIThread.Post(() => ConfigReceived?.Invoke(this, mapped));
         }
         catch
         {
             // Timeout or disconnect
+        }
+        finally
+        {
+            _configTcs = null;
         }
     }
 
@@ -405,90 +441,91 @@ public class BluetoothService : IBluetoothService
     {
         if (CurrentState != ConnectionState.Connected) return false;
 
-        var commands = new[]
+        try
         {
-            $"$SET,STATION,{config.StationId}",
-            $"$SET,GAIN,{config.GainDb}",
-            $"$SET,BPFLOW,{config.BandPassLowHz}",
-            $"$SET,BPFHIGH,{config.BandPassHighHz}",
-            $"$SET,FORMAT,{config.Format}",
-            $"$SET,TRIG,{(config.AmplitudeTriggerEnabled ? 1 : 0)}",
-            $"$SET,TRIGDB,{config.AmplitudeThresholdDb}",
-            $"$SET,TRIGPRE,{config.PreTriggerSeconds}",
-            $"$SET,TRIGPOST,{config.PostTriggerSeconds}",
-            $"$SET,LOWBAT,{config.LowBatteryThresholdPercent}",
-            $"$SET,AUTOSTOP,{(config.AutoStopOnLowBattery ? 1 : 0)}",
-            $"$SET,ACTMODE,{(int)config.ActivityMode}",
-            $"$SET,ACTMIN,{config.ActivityMinPercent}",
-            $"$SET,ACTMAX,{config.ActivityMaxPercent}",
-            $"$SET,ACTHOLD,{config.ActivityHoldSeconds}",
-        };
+            var sc = new Quailtracker.SetConfig
+            {
+                StationId = config.StationId ?? "QT001",
+                Gain = (uint)config.GainDb,
+                BpfLowHz = (uint)config.BandPassLowHz,
+                BpfHighHz = (uint)config.BandPassHighHz,
+                RecFormat = (uint)(config.Format == RecordingFormat.WAV ? 1 : 0),
+                TrigEnabled = config.AmplitudeTriggerEnabled,
+                TrigDb = config.AmplitudeThresholdDb,
+                TrigPreS = (uint)config.PreTriggerSeconds,
+                TrigPostS = (uint)config.PostTriggerSeconds,
+                LowBatPct = (uint)config.LowBatteryThresholdPercent,
+                AutoStop = config.AutoStopOnLowBattery,
+                ActMode = (uint)config.ActivityMode,
+                ActMinPct = (uint)config.ActivityMinPercent,
+                ActMaxPct = (uint)config.ActivityMaxPercent,
+                ActHoldS = (uint)config.ActivityHoldSeconds,
+            };
 
-        foreach (var cmd in commands)
-        {
-            try
-            {
-                var response = await SendRawAsync(cmd);
-                if (response.StartsWith("$ERR", StringComparison.Ordinal))
-                    return false;
-            }
-            catch
-            {
-                return false;
-            }
+            var ack = await SendSetConfigAsync(sc);
+            return ack?.Success ?? false;
         }
-
-        return true;
+        catch
+        {
+            return false;
+        }
     }
 
     public async Task<bool> SendScheduleAsync(DeviceConfig config)
     {
         if (CurrentState != ConnectionState.Connected) return false;
 
-        var commands = new List<string>
+        try
         {
-            $"$SET,SUNRISE,{(config.SunriseEnabled ? 1 : 0)},{config.SunriseBeforeMinutes},{config.SunriseAfterMinutes}",
-            $"$SET,SUNSET,{(config.SunsetEnabled ? 1 : 0)},{config.SunsetBeforeMinutes},{config.SunsetAfterMinutes}",
-        };
-
-        // Build WINDOWS command
-        var wins = config.FreeformWindows ?? [];
-        var winParts = new List<string> { wins.Length.ToString() };
-        foreach (var w in wins)
-        {
-            winParts.Add(w.Start.ToString("HHmm"));
-            winParts.Add(w.End.ToString("HHmm"));
-        }
-        commands.Add($"$SET,WINDOWS,{string.Join(",", winParts)}");
-
-        foreach (var cmd in commands)
-        {
-            try
+            var sc = new Quailtracker.SetConfig
             {
-                var response = await SendRawAsync(cmd);
-                if (response.StartsWith("$ERR", StringComparison.Ordinal))
-                    return false;
-            }
-            catch
-            {
-                return false;
-            }
-        }
+                SunriseEnabled = config.SunriseEnabled,
+                SunriseBefore = (uint)config.SunriseBeforeMinutes,
+                SunriseAfter = (uint)config.SunriseAfterMinutes,
+                SunsetEnabled = config.SunsetEnabled,
+                SunsetBefore = (uint)config.SunsetBeforeMinutes,
+                SunsetAfter = (uint)config.SunsetAfterMinutes,
+            };
 
-        return true;
+            // Add freeform windows
+            var wins = config.FreeformWindows ?? [];
+            foreach (var w in wins)
+            {
+                sc.Windows.Add(new Quailtracker.TimeWindow
+                {
+                    StartHhmm = (uint)(w.Start.Hour * 100 + w.Start.Minute),
+                    EndHhmm = (uint)(w.End.Hour * 100 + w.End.Minute),
+                });
+            }
+
+            var ack = await SendSetConfigAsync(sc);
+            return ack?.Success ?? false;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     public async Task SendSdCommandAsync(string operation)
     {
         if (CurrentState != ConnectionState.Connected) return;
 
+        var cmdType = operation.ToUpperInvariant() switch
+        {
+            "MOUNT" => Quailtracker.CommandType.CmdSdMount,
+            "EJECT" => Quailtracker.CommandType.CmdSdEject,
+            "FORMAT" => Quailtracker.CommandType.CmdSdFormat,
+            _ => Quailtracker.CommandType.CmdSdMount,
+        };
+
         try
         {
-            await SendRawAsync($"$SD,{operation}");
+            await SendCommandFrameAsync(cmdType);
         }
         catch
         {
-            // Timeout — non-fatal
+            // Timeout -- non-fatal
         }
     }
 
@@ -498,11 +535,14 @@ public class BluetoothService : IBluetoothService
 
         try
         {
-            await SendRawAsync($"$SET,STREAM,AUDIO,{intervalMs}");
+            if (intervalMs > 0)
+                await SendSubscribeAsync(BleProtoTopic.AudioLevel, (uint)intervalMs);
+            else
+                await SendUnsubscribeAsync(BleProtoTopic.AudioLevel);
         }
         catch
         {
-            // Timeout — non-fatal
+            // Timeout -- non-fatal
         }
     }
 
@@ -512,11 +552,14 @@ public class BluetoothService : IBluetoothService
 
         try
         {
-            await SendRawAsync($"$SET,STREAM,REC,{intervalMs}");
+            if (intervalMs > 0)
+                await SendSubscribeAsync(BleProtoTopic.RecordingState, (uint)intervalMs);
+            else
+                await SendUnsubscribeAsync(BleProtoTopic.RecordingState);
         }
         catch
         {
-            // Timeout — non-fatal
+            // Timeout -- non-fatal
         }
     }
 
@@ -524,13 +567,21 @@ public class BluetoothService : IBluetoothService
     {
         if (CurrentState != ConnectionState.Connected) return;
 
+        var cmdType = operation.ToUpperInvariant() switch
+        {
+            "START" => Quailtracker.CommandType.CmdSurveyStart,
+            "STOP" => Quailtracker.CommandType.CmdSurveyStop,
+            "CLEAR" => Quailtracker.CommandType.CmdSurveyClear,
+            _ => Quailtracker.CommandType.CmdSurveyStart,
+        };
+
         try
         {
-            await SendRawAsync($"$SET,SURVEY,{operation}");
+            await SendCommandFrameAsync(cmdType);
         }
         catch
         {
-            // Timeout — non-fatal
+            // Timeout -- non-fatal
         }
     }
 
@@ -538,13 +589,20 @@ public class BluetoothService : IBluetoothService
     {
         if (CurrentState != ConnectionState.Connected) return;
 
+        var cmdType = operation.ToUpperInvariant() switch
+        {
+            "RELOAD" => Quailtracker.CommandType.CmdModelReload,
+            "STATUS" => Quailtracker.CommandType.CmdModelStatus,
+            _ => Quailtracker.CommandType.CmdModelReload,
+        };
+
         try
         {
-            await SendRawAsync($"$MODEL,{operation}");
+            await SendCommandFrameAsync(cmdType);
         }
         catch
         {
-            // Timeout — non-fatal
+            // Timeout -- non-fatal
         }
     }
 
@@ -554,11 +612,19 @@ public class BluetoothService : IBluetoothService
 
         try
         {
-            await SendRawAsync($"$DET,{operation}");
+            // "STREAM,1000" -> subscribe to detection topic
+            if (operation.StartsWith("STREAM", StringComparison.OrdinalIgnoreCase))
+            {
+                await SendSubscribeAsync(BleProtoTopic.Detection, 0);
+            }
+            else
+            {
+                await SendCommandFrameAsync(Quailtracker.CommandType.CmdDetStatus);
+            }
         }
         catch
         {
-            // Timeout — non-fatal
+            // Timeout -- non-fatal
         }
     }
 
@@ -566,237 +632,286 @@ public class BluetoothService : IBluetoothService
     {
         if (CurrentState != ConnectionState.Connected) return false;
 
-        var commands = new[]
+        try
         {
-            $"$SET,MISSION,{(int)config.Mission}",
-            $"$SET,DETTHRESH,{config.DetectionThresholdPercent}",
-            $"$SET,DETSTEP,{config.DetectionWindowStep}",
-        };
+            var sc = new Quailtracker.SetConfig
+            {
+                MissionMode = (uint)config.Mission,
+                DetThreshold = (uint)config.DetectionThresholdPercent,
+                DetStepS = (uint)config.DetectionWindowStep,
+            };
 
-        foreach (var cmd in commands)
-        {
-            try
-            {
-                var response = await SendRawAsync(cmd);
-                if (response.StartsWith("$ERR", StringComparison.Ordinal))
-                    return false;
-            }
-            catch
-            {
-                return false;
-            }
+            var ack = await SendSetConfigAsync(sc);
+            return ack?.Success ?? false;
         }
-
-        return true;
+        catch
+        {
+            return false;
+        }
     }
 
     public async Task SendCommandAsync(string command)
     {
         if (CurrentState != ConnectionState.Connected) return;
 
-        var wire = command.ToUpperInvariant() switch
+        var cmdType = command.ToUpperInvariant() switch
         {
-            "START" => "$REC,START",
-            "STOP" => "$REC,STOP",
-            "TOGGLE" => "$REC,TOGGLE",
-            _ => command.StartsWith('$') ? command : $"${command}",
+            "START" => Quailtracker.CommandType.CmdRecStart,
+            "STOP" => Quailtracker.CommandType.CmdRecStop,
+            "TOGGLE" => Quailtracker.CommandType.CmdRecToggle,
+            _ => Quailtracker.CommandType.CmdNone,
         };
+
+        if (cmdType == Quailtracker.CommandType.CmdNone)
+            return;
 
         try
         {
-            await SendRawAsync(wire);
+            await SendCommandFrameAsync(cmdType);
         }
         catch
         {
-            // Timeout — non-fatal
+            // Timeout -- non-fatal
         }
 
         // Auto-refresh status after recording commands
-        if (wire.StartsWith("$REC,", StringComparison.Ordinal))
-        {
-            await Task.Delay(100); // Brief settle time
-            _ = RequestStatusAsync();
-        }
+        await Task.Delay(100); // Brief settle time
+        _ = RequestStatusAsync();
     }
 
+    // ── Frame sending helpers ─────────────────────────────────────────────
+
     /// <summary>
-    /// Send a raw command string and await the single-line or multi-line response.
-    /// Commands are serialized via _cmdLock so only one is in-flight at a time.
+    /// Send a Command protobuf frame and await the CommandAck response.
     /// </summary>
-    private async Task<string> SendRawAsync(string cmd)
+    private async Task<Quailtracker.CommandAck?> SendCommandFrameAsync(Quailtracker.CommandType cmdType)
     {
         await _cmdLock.WaitAsync();
         try
         {
-            if (_writeCharacteristic == null)
-                throw new InvalidOperationException("Not connected");
-
-            _responseTcs = new TaskCompletionSource<string>(
+            _ackTcs = new TaskCompletionSource<Quailtracker.CommandAck>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
 
-            // Write UTF-8 bytes, chunked to fit MTU
-            var bytes = Encoding.UTF8.GetBytes(cmd + "\n");
-            var chunkSize = Math.Max(_mtu - 3, 20); // ATT overhead = 3 bytes
+            var cmd = new Quailtracker.Command { Type = cmdType };
+            var frame = _frameBuilder.Encode(BleProtoTopic.Command, cmd);
+            await SendFrameAsync(frame);
 
-            for (var offset = 0; offset < bytes.Length; offset += chunkSize)
-            {
-                var len = Math.Min(chunkSize, bytes.Length - offset);
-                var chunk = new byte[len];
-                Array.Copy(bytes, offset, chunk, 0, len);
-                await _writeCharacteristic.WriteAsync(chunk);
-            }
-
-            // Await response with 5s timeout
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            timeoutCts.Token.Register(() =>
-                _responseTcs?.TrySetCanceled());
+            timeoutCts.Token.Register(() => _ackTcs?.TrySetCanceled());
 
-            return await _responseTcs.Task;
+            return await _ackTcs.Task;
         }
         finally
         {
-            _responseTcs = null;
+            _ackTcs = null;
             _cmdLock.Release();
         }
     }
 
     /// <summary>
+    /// Send a SetConfig protobuf frame and await the CommandAck response.
+    /// </summary>
+    private async Task<Quailtracker.CommandAck?> SendSetConfigAsync(Quailtracker.SetConfig setConfig)
+    {
+        await _cmdLock.WaitAsync();
+        try
+        {
+            _ackTcs = new TaskCompletionSource<Quailtracker.CommandAck>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var frame = _frameBuilder.Encode(BleProtoTopic.SetConfig, setConfig);
+            await SendFrameAsync(frame);
+
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            timeoutCts.Token.Register(() => _ackTcs?.TrySetCanceled());
+
+            return await _ackTcs.Task;
+        }
+        finally
+        {
+            _ackTcs = null;
+            _cmdLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Send a Subscribe frame (fire-and-forget, no ack expected).
+    /// </summary>
+    private async Task SendSubscribeAsync(BleProtoTopic topic, uint intervalMs)
+    {
+        var sub = new Quailtracker.Subscribe
+        {
+            Topic = (uint)topic,
+            IntervalMs = intervalMs,
+        };
+        var frame = _frameBuilder.Encode(BleProtoTopic.Subscribe, sub);
+        await SendFrameAsync(frame);
+    }
+
+    /// <summary>
+    /// Send an Unsubscribe frame (fire-and-forget, no ack expected).
+    /// </summary>
+    private async Task SendUnsubscribeAsync(BleProtoTopic topic)
+    {
+        var unsub = new Quailtracker.Unsubscribe
+        {
+            Topic = (uint)topic,
+        };
+        var frame = _frameBuilder.Encode(BleProtoTopic.Unsubscribe, unsub);
+        await SendFrameAsync(frame);
+    }
+
+    /// <summary>
+    /// Write a COBS-framed byte array to the BLE characteristic, chunked to fit MTU.
+    /// </summary>
+    private async Task SendFrameAsync(byte[] frame)
+    {
+        if (_writeCharacteristic == null)
+            throw new InvalidOperationException("Not connected");
+
+        var chunkSize = Math.Max(_mtu - 3, 20); // ATT overhead = 3 bytes
+
+        for (var offset = 0; offset < frame.Length; offset += chunkSize)
+        {
+            var len = Math.Min(chunkSize, frame.Length - offset);
+            var chunk = new byte[len];
+            Array.Copy(frame, offset, chunk, 0, len);
+            await _writeCharacteristic.WriteAsync(chunk);
+        }
+    }
+
+    // ── Frame receiving ───────────────────────────────────────────────────
+
+    /// <summary>
     /// Called by Plugin.BLE when the characteristic sends a notification.
-    /// Accumulates bytes into lines and dispatches complete lines.
+    /// Feeds raw bytes into the COBS frame assembler.
     /// </summary>
     private void OnValueUpdated(object? sender, CharacteristicUpdatedEventArgs e)
     {
-        var text = Encoding.UTF8.GetString(e.Characteristic.Value);
-        _rxBuffer.Append(text);
+        var data = e.Characteristic.Value;
+        if (data == null || data.Length == 0) return;
 
-        // Process all complete lines
-        var buf = _rxBuffer.ToString();
-        int nlIndex;
-        while ((nlIndex = buf.IndexOf('\n')) >= 0)
-        {
-            var line = buf.Substring(0, nlIndex).TrimEnd('\r');
-            buf = buf.Substring(nlIndex + 1);
-            if (line.Length > 0)
-                ProcessLine(line);
-        }
-        _rxBuffer.Clear();
-        _rxBuffer.Append(buf);
+        _frameAssembler.Feed(data, OnFrameReceived);
     }
 
-    private void ProcessLine(string line)
+    /// <summary>
+    /// Called by BleFrameAssembler when a complete COBS frame (without delimiter) is ready.
+    /// Decodes the frame header, parses the protobuf payload, and dispatches to handlers.
+    /// </summary>
+    private void OnFrameReceived(ReadOnlySpan<byte> cobsFrame)
     {
-        // Skip HM-19 module noise
-        if (line.StartsWith("OK+", StringComparison.Ordinal))
-            return;
-
-        // Multi-line mode: accumulating $STATUS/$CONFIG/$STREAM block
-        if (_multiLines != null)
+        try
         {
-            if (line == "$END")
-            {
-                var type = _multiLineType;
-                var lines = _multiLines;
-                _multiLines = null;
-                _multiLineType = null;
-
-                if (type != null && type.StartsWith("$STATUS,", StringComparison.Ordinal))
-                {
-                    // Paginated status page — store lines for RequestStatusAsync to collect
-                    _lastMultiLines = lines;
-                    _responseTcs?.TrySetResult(type);
-                }
-                else if (type is "$STATUS" or "$STREAM")
-                {
-                    Dictionary<string, string> dict;
-                    if (type == "$STREAM" && _lastFullStatusDict != null)
-                    {
-                        // $STREAM is a compact subset — merge its fields on top
-                        // of the last full status so missing keys keep their
-                        // previous values instead of defaulting to false/0.
-                        dict = new Dictionary<string, string>(_lastFullStatusDict, StringComparer.Ordinal);
-                        foreach (var streamLine in lines)
-                        {
-                            var eq = streamLine.IndexOf('=');
-                            if (eq > 0)
-                                dict[streamLine.Substring(0, eq)] = streamLine.Substring(eq + 1);
-                        }
-                    }
-                    else
-                    {
-                        dict = LinesToDict(lines);
-                        if (type == "$STATUS")
-                            _lastFullStatusDict = dict;
-                    }
-                    var status = ParseStatus(dict);
-                    StatusReceived?.Invoke(this, status);
-                    if (type == "$STATUS")
-                        _responseTcs?.TrySetResult("$STATUS");
-                }
-                else if (type == "$CONFIG")
-                {
-                    var config = ParseConfig(lines);
-                    ConfigReceived?.Invoke(this, config);
-                    _responseTcs?.TrySetResult("$CONFIG");
-                }
-                else if (type == "$DETECTION")
-                {
-                    var det = ParseDetection(lines);
-                    DetectionReceived?.Invoke(this, det);
-                }
-            }
-            else if (line is "$STATUS" or "$CONFIG" or "$STREAM" or "$DETECTION" ||
-                     line.StartsWith("$STATUS,", StringComparison.Ordinal))
-            {
-                // New multi-line block started before previous $END arrived.
-                // The previous block was corrupted (dropped BLE packet) — discard
-                // it and start fresh.
-                _multiLineType = line;
-                _multiLines = new List<string>();
-            }
-            else if (line.StartsWith("$OK", StringComparison.Ordinal) ||
-                     line.StartsWith("$ERR", StringComparison.Ordinal) ||
-                     line.StartsWith("$PONG", StringComparison.Ordinal))
-            {
-                // Single-line response arrived while accumulating a multi-line
-                // block — the block's $END was lost. Discard the incomplete block
-                // and deliver the single-line response so commands don't hang.
-                _multiLines = null;
-                _multiLineType = null;
-                _responseTcs?.TrySetResult(line);
-            }
-            else
-            {
-                _multiLines.Add(line);
-                // Safety: if we've accumulated too many lines without $END,
-                // the block is corrupt — discard and reset.
-                if (_multiLines.Count > 60)
-                {
-                    _multiLines = null;
-                    _multiLineType = null;
-                }
-            }
-            return;
+            if (!BleProtoFrame.TryDecode(cobsFrame, out var topic, out var sequence, out var payload))
+                return;
+            OnFrameDecoded(topic, sequence, payload);
         }
-
-        // Start of multi-line block
-        if (line is "$STATUS" or "$CONFIG" or "$STREAM" or "$DETECTION" ||
-            line.StartsWith("$STATUS,", StringComparison.Ordinal))
+        catch (Exception ex)
         {
-            _multiLineType = line;
-            _multiLines = new List<string>();
-            return;
+            System.Console.WriteLine($"[BLE] Frame decode error: {ex.Message}");
         }
-
-        // Single-line response ($OK, $PONG, $ERR,... etc.)
-        _responseTcs?.TrySetResult(line);
     }
+
+    private void OnFrameDecoded(BleProtoTopic topic, ushort sequence, byte[] payload)
+    {
+
+        switch (topic)
+        {
+            case BleProtoTopic.Status:
+            {
+                var status = Quailtracker.Status.Parser.ParseFrom(payload);
+                MergeStatusIntoCache(status, _cachedStatus);
+                if (_statusTcs != null)
+                    _statusTcs.TrySetResult(status);
+                var snapshot = _cachedStatus;
+                Dispatcher.UIThread.Post(() => StatusReceived?.Invoke(this, snapshot));
+                break;
+            }
+
+            case BleProtoTopic.GpsFix:
+            {
+                var gps = Quailtracker.GpsFix.Parser.ParseFrom(payload);
+                MergeGpsIntoStatus(gps, _cachedStatus);
+                var snapshot = _cachedStatus;
+                Dispatcher.UIThread.Post(() => StatusReceived?.Invoke(this, snapshot));
+                break;
+            }
+
+            case BleProtoTopic.AudioLevel:
+            {
+                var audio = Quailtracker.AudioLevel.Parser.ParseFrom(payload);
+                MergeAudioIntoStatus(audio, _cachedStatus);
+                var snapshot = _cachedStatus;
+                Dispatcher.UIThread.Post(() => StatusReceived?.Invoke(this, snapshot));
+                break;
+            }
+
+            case BleProtoTopic.RecordingState:
+            {
+                var rec = Quailtracker.RecordingState.Parser.ParseFrom(payload);
+                MergeRecordingIntoStatus(rec, _cachedStatus);
+                var snapshot = _cachedStatus;
+                Dispatcher.UIThread.Post(() => StatusReceived?.Invoke(this, snapshot));
+                break;
+            }
+
+            case BleProtoTopic.Detection:
+            {
+                var det = Quailtracker.Detection.Parser.ParseFrom(payload);
+                var mapped = MapDetection(det);
+                Dispatcher.UIThread.Post(() => DetectionReceived?.Invoke(this, mapped));
+                break;
+            }
+
+            case BleProtoTopic.ConfigDump:
+            {
+                var config = Quailtracker.Config.Parser.ParseFrom(payload);
+                if (_configTcs != null)
+                    _configTcs.TrySetResult(config);
+
+                var mapped = MapConfig(config);
+                Dispatcher.UIThread.Post(() => ConfigReceived?.Invoke(this, mapped));
+
+                // Merge survey fields into cached status so OperationsViewModel sees them
+                _cachedStatus.SurveyLatitude = config.SurveyLatE7 / 1e7;
+                _cachedStatus.SurveyLongitude = config.SurveyLonE7 / 1e7;
+                _cachedStatus.SurveyAltitude = config.SurveyAltMm / 1000f;
+                _cachedStatus.SurveyCount = (int)config.SurveyCount;
+                _cachedStatus.LastUpdated = DateTime.Now;
+                var statusSnapshot = _cachedStatus;
+                Dispatcher.UIThread.Post(() => StatusReceived?.Invoke(this, statusSnapshot));
+                break;
+            }
+
+            case BleProtoTopic.CommandAck:
+            {
+                var ack = Quailtracker.CommandAck.Parser.ParseFrom(payload);
+                _ackTcs?.TrySetResult(ack);
+                break;
+            }
+
+            case BleProtoTopic.Pong:
+                // Pong received -- connection confirmed, nothing to do
+                break;
+
+            case BleProtoTopic.Log:
+                // Log lines -- could be forwarded to a debug console in the future
+                break;
+        }
+    }
+
+    // ── Connection lifecycle ──────────────────────────────────────────────
 
     private void OnDeviceDisconnected(object? sender, DeviceEventArgs e)
     {
         if (_device != null && e.Device.Id == _device.Id)
         {
             // Unexpected disconnect
-            _responseTcs?.TrySetCanceled();
+            _ackTcs?.TrySetCanceled();
+            _statusTcs?.TrySetCanceled();
+            _configTcs?.TrySetCanceled();
+            _frameAssembler.Reset();
+        _cachedStatus = new DeviceStatus();
             _device = null;
             _writeCharacteristic = null;
             _notifyCharacteristic = null;
@@ -807,7 +922,11 @@ public class BluetoothService : IBluetoothService
 
     private async Task CleanupConnection()
     {
-        _responseTcs?.TrySetCanceled();
+        _ackTcs?.TrySetCanceled();
+        _statusTcs?.TrySetCanceled();
+        _configTcs?.TrySetCanceled();
+        _frameAssembler.Reset();
+        _cachedStatus = new DeviceStatus();
 
         if (_notifyCharacteristic != null)
         {
@@ -829,9 +948,6 @@ public class BluetoothService : IBluetoothService
         }
 
         ConnectedDeviceName = null;
-        _multiLines = null;
-        _multiLineType = null;
-        _rxBuffer.Clear();
     }
 
     private void SetState(ConnectionState state)
@@ -840,194 +956,163 @@ public class BluetoothService : IBluetoothService
         ConnectionStateChanged?.Invoke(this, state);
     }
 
-    // ── Parsing helpers ─────────────────────────────────────────────────
+    // ── Protobuf -> App model mapping ─────────────────────────────────────
 
-    private static Dictionary<string, string> LinesToDict(List<string> lines)
+    /// <summary>
+    /// Merge Status fields into cached status. GPS fields are NOT in Status —
+    /// they come from GpsFix topic. Preserve existing GPS/Audio fields.
+    /// </summary>
+    private static void MergeStatusIntoCache(Quailtracker.Status s, DeviceStatus c)
     {
-        var dict = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var line in lines)
-        {
-            var eq = line.IndexOf('=');
-            if (eq > 0)
-                dict[line.Substring(0, eq)] = line.Substring(eq + 1);
+        c.StationId = s.StationId is { Length: > 0 } ? s.StationId : "Unknown";
+        c.FirmwareVersion = s.FirmwareVersion is { Length: > 0 } ? s.FirmwareVersion : "0.0.0";
+
+        c.BatteryVoltage = s.BatteryMv / 1000f;
+        c.BatteryPercentage = (int)s.BatteryPct;
+
+        c.BleModuleReady = s.BleReady;
+        c.BleModuleName = s.BleName ?? "";
+        if (s.BleAddr is { Length: > 0 })
+            c.BleModuleAddr = s.BleAddr;
+
+        c.Temperature = s.TemperatureC100 / 100f;
+        c.Humidity = s.HumidityRh100 / 100f;
+
+        var sdTotal = (long)s.SdTotalKb * 1024;
+        var sdFree = (long)s.SdFreeKb * 1024;
+        c.SdCardMounted = s.SdMounted;
+        c.SdTotalBytes = sdTotal;
+        c.SdFreeBytes = sdFree;
+        c.SdUsedBytes = sdTotal - sdFree;
+
+        c.IsRecording = s.Recording;
+        c.CurrentFilename = s.RecFilename is { Length: > 0 } ? s.RecFilename : null;
+        c.CurrentFileSize = s.RecBytes;
+        c.BufferOverflows = s.RecOverruns;
+
+        c.DetectionActive = s.DetActive;
+        c.DetectionWindows = s.DetWindows;
+        c.DetectionHits = s.DetHits;
+        c.DetectionLastSpecies = s.DetLastSpecies ?? "";
+        c.ModelLoaded = s.ModelLoaded;
+        c.ModelSize = s.ModelSize;
+        c.ModelLabels = (int)s.ModelLabels;
+
+        // Survey-in progress
+        c.SurveyActive = s.SurveyActive;
+        c.SurveyCount = (int)s.SurveyCount;
+        c.SurveySecondsLeft = (int)s.SurveySecondsLeft;
+        if (s.SurveyCount > 0) {
+            c.SurveyLatitude = s.SurveyLatE7 / 1e7;
+            c.SurveyLongitude = s.SurveyLonE7 / 1e7;
+            c.SurveyAltitude = s.SurveyAltMm / 1000f;
         }
-        return dict;
+
+        c.LastUpdated = DateTime.Now;
     }
 
-    private static string Get(Dictionary<string, string> d, string key, string def = "") =>
-        d.TryGetValue(key, out var v) ? v : def;
-
-    private static int GetInt(Dictionary<string, string> d, string key, int def = 0) =>
-        d.TryGetValue(key, out var v) && int.TryParse(v, out var i) ? i : def;
-
-    private static long GetLong(Dictionary<string, string> d, string key, long def = 0) =>
-        d.TryGetValue(key, out var v) && long.TryParse(v, out var l) ? l : def;
-
-    private static float GetFloat(Dictionary<string, string> d, string key, float def = 0f) =>
-        d.TryGetValue(key, out var v) && float.TryParse(v, CultureInfo.InvariantCulture, out var f) ? f : def;
-
-    private static bool GetBool(Dictionary<string, string> d, string key) =>
-        d.TryGetValue(key, out var v) && v == "1";
-
-    private static DeviceStatus ParseStatus(Dictionary<string, string> d)
+    private static void MergeGpsIntoStatus(Quailtracker.GpsFix g, DeviceStatus s)
     {
-
-        var sdTotal = GetLong(d, "sd_tot") * 1024; // firmware sends KB
-        var sdFree = GetLong(d, "sd_free") * 1024;
-
-        DateTime? gpsTime = null;
-        var timeStr = Get(d, "gps_time");
-        if (timeStr.Length >= 14 &&
+        s.GpsValid = g.Valid;
+        s.GpsFixType = (int)g.FixType;
+        s.GpsSatellites = (int)g.Satellites;
+        s.Latitude = g.LatitudeE7 / 1e7;
+        s.Longitude = g.LongitudeE7 / 1e7;
+        s.Altitude = g.AltitudeMm / 1000f;
+        s.PpsValid = g.PpsSynced;
+        s.PpsCount = g.PpsCount;
+        if (g.UtcTime is { Length: >= 14 } timeStr &&
             DateTime.TryParseExact(timeStr, "yyyyMMddHHmmss",
-                CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var t))
-        {
-            gpsTime = t;
-        }
-
-        return new DeviceStatus
-        {
-            StationId = Get(d, "id", "Unknown"),
-            FirmwareVersion = Get(d, "fw", "0.0.0"),
-
-            BatteryVoltage = GetFloat(d, "bat_v"),
-            BatteryPercentage = GetInt(d, "bat_pct"),
-            BatteryLevel = (BatteryLevel)GetInt(d, "bat_lvl"),
-
-            GpsValid = GetBool(d, "gps_valid"),
-            GpsFixType = GetInt(d, "gps_fix"),
-            GpsSatellites = GetInt(d, "gps_sats"),
-            Latitude = GetLong(d, "gps_lat") / 1e7,
-            Longitude = GetLong(d, "gps_lon") / 1e7,
-            Altitude = GetFloat(d, "gps_alt"),
-            GpsDate = Get(d, "gps_date"),
-            PpsValid = GetBool(d, "pps"),
-            PpsCount = GetLong(d, "pps_count"),
-            PpsAgeMs = GetLong(d, "pps_ms"),
-            GpsTime = gpsTime,
-
-            Temperature = GetFloat(d, "temp") / 100f,
-            Humidity = GetFloat(d, "hum") / 100f,
-
-            SdCardMounted = GetBool(d, "sd"),
-            SdTotalBytes = sdTotal,
-            SdFreeBytes = sdFree,
-            SdUsedBytes = sdTotal - sdFree,
-
-            IsRecording = GetBool(d, "rec"),
-            CurrentFilename = Get(d, "rec_file") is { Length: > 0 } fn ? fn : null,
-            CurrentFileSize = GetLong(d, "rec_bytes"),
-            BufferOverflows = (uint)GetInt(d, "rec_ovf"),
-
-            PeakLevel = GetInt(d, "aud_peak"),
-            BufferUsed = GetInt(d, "aud_buf"),
-            BufferCapacity = GetInt(d, "aud_cap"),
-            LimiterClipCount = (uint)GetInt(d, "aud_clip"),
-            ActivityRatio = GetInt(d, "act_ratio"),
-
-            BleModuleReady = GetBool(d, "ble_ready"),
-            BleModuleName = Get(d, "ble_name"),
-            BleModuleAddr = Get(d, "ble_addr"),
-            BleConnected = GetBool(d, "ble_conn"),
-
-            SurveyLatitude = GetLong(d, "survey_lat") / 1e7,
-            SurveyLongitude = GetLong(d, "survey_lon") / 1e7,
-            SurveyAltitude = GetLong(d, "survey_alt") / 1000f,
-            SurveyCount = GetInt(d, "survey_count"),
-            SurveyActive = GetBool(d, "survey_active"),
-
-            DetectionActive = GetBool(d, "det_active"),
-            DetectionWindows = GetLong(d, "det_windows"),
-            DetectionHits = GetLong(d, "det_hits"),
-            DetectionLastSpecies = Get(d, "det_last"),
-            ModelLoaded = GetBool(d, "model_loaded"),
-            ModelSize = GetLong(d, "model_size"),
-            ModelLabels = GetInt(d, "model_labels"),
-
-            LastUpdated = DateTime.Now,
-        };
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal, out var t))
+            s.GpsTime = t;
+        s.LastUpdated = DateTime.Now;
     }
 
-    private static DeviceConfig ParseConfig(List<string> lines)
+    private static void MergeAudioIntoStatus(Quailtracker.AudioLevel a, DeviceStatus s)
     {
-        var d = LinesToDict(lines);
-
-        return new DeviceConfig
-        {
-            StationId = Get(d, "id", "QT001"),
-            GainDb = GetInt(d, "gain"),
-            BandPassLowHz = GetInt(d, "bpf_low", 150),
-            BandPassHighHz = GetInt(d, "bpf_high", 8000),
-            SampleRate = GetInt(d, "rate", 48000),
-            Format = Get(d, "fmt") == "WAV" ? RecordingFormat.WAV : RecordingFormat.FLAC,
-            SunriseEnabled = GetBool(d, "sunrise"),
-            SunriseBeforeMinutes = GetInt(d, "sunrise_before", 30),
-            SunriseAfterMinutes = GetInt(d, "sunrise_after", 60),
-            SunsetEnabled = GetBool(d, "sunset"),
-            SunsetBeforeMinutes = GetInt(d, "sunset_before", 30),
-            SunsetAfterMinutes = GetInt(d, "sunset_after", 30),
-            FreeformWindows = ParseWindows(d),
-            AmplitudeTriggerEnabled = GetBool(d, "trig"),
-            AmplitudeThresholdDb = GetInt(d, "trig_db", -40),
-            PreTriggerSeconds = GetInt(d, "trig_pre", 2),
-            PostTriggerSeconds = GetInt(d, "trig_post", 5),
-            LowBatteryThresholdPercent = GetInt(d, "lowbat", 10),
-            AutoStopOnLowBattery = GetBool(d, "autostop"),
-
-            ActivityMode = (ActivityFilterMode)GetInt(d, "act_mode"),
-            ActivityMinPercent = GetInt(d, "act_min", 5),
-            ActivityMaxPercent = GetInt(d, "act_max", 80),
-            ActivityHoldSeconds = GetInt(d, "act_hold", 3),
-
-            SurveyLatitude = GetLong(d, "survey_lat") / 1e7,
-            SurveyLongitude = GetLong(d, "survey_lon") / 1e7,
-            SurveyAltitude = GetLong(d, "survey_alt") / 1000f,
-            SurveyCount = GetInt(d, "survey_count"),
-
-            Mission = (MissionMode)GetInt(d, "mission"),
-            DetectionThresholdPercent = GetInt(d, "det_thresh", 70),
-            DetectionWindowStep = GetInt(d, "det_step", 3),
-        };
+        s.PeakLevel = (int)a.Peak;
+        s.ActivityRatio = (int)a.ActivityPct;
+        s.LimiterClipCount = a.ClipCount;
+        s.BufferUsed = (int)a.BufUsed;
+        s.BufferCapacity = (int)a.BufCapacity;
+        s.LastUpdated = DateTime.Now;
     }
 
-    private static DetectionEvent ParseDetection(List<string> lines)
+    private static void MergeRecordingIntoStatus(Quailtracker.RecordingState r, DeviceStatus s)
     {
-        var d = LinesToDict(lines);
+        s.IsRecording = r.Active;
+        s.CurrentFilename = r.Filename is { Length: > 0 } ? r.Filename : null;
+        s.CurrentFileSize = r.BytesWritten;
+        s.BufferOverflows = r.Overruns;
+        s.SdFreeBytes = (long)r.SdFreeKb * 1024;
+        s.LastUpdated = DateTime.Now;
+    }
+
+    private static DetectionEvent MapDetection(Quailtracker.Detection d)
+    {
         return new DetectionEvent
         {
-            Species = Get(d, "species"),
-            Confidence = GetInt(d, "conf"),
-            Timestamp = Get(d, "time"),
+            Species = d.Species ?? "",
+            Confidence = (int)d.Confidence,
+            Timestamp = d.UtcTime ?? "",
             ReceivedAt = DateTime.Now,
         };
     }
 
-    private static TimeOnly ParseHhmm(string hhmm)
+    private static DeviceConfig MapConfig(Quailtracker.Config c)
     {
-        if (hhmm.Length >= 4 &&
-            int.TryParse(hhmm.Substring(0, 2), out var h) &&
-            int.TryParse(hhmm.Substring(2, 2), out var m))
+        // Map windows
+        var windows = new List<TimeWindow>();
+        foreach (var w in c.Windows)
         {
-            return new TimeOnly(h, m);
+            var startH = (int)(w.StartHhmm / 100);
+            var startM = (int)(w.StartHhmm % 100);
+            var endH = (int)(w.EndHhmm / 100);
+            var endM = (int)(w.EndHhmm % 100);
+            windows.Add(new TimeWindow(
+                new TimeOnly(Math.Clamp(startH, 0, 23), Math.Clamp(startM, 0, 59)),
+                new TimeOnly(Math.Clamp(endH, 0, 23), Math.Clamp(endM, 0, 59))));
         }
-        return new TimeOnly(6, 0);
-    }
 
-    private static TimeWindow[] ParseWindows(Dictionary<string, string> d)
-    {
-        var n = GetInt(d, "nwin");
-        if (n <= 0) return [];
-
-        var winStr = Get(d, "win");
-        if (string.IsNullOrEmpty(winStr)) return [];
-
-        var parts = winStr.Split(',');
-        var list = new List<TimeWindow>();
-        for (var i = 0; i + 1 < parts.Length && list.Count < n; i += 2)
+        return new DeviceConfig
         {
-            var start = ParseHhmm(parts[i]);
-            var end = ParseHhmm(parts[i + 1]);
-            list.Add(new TimeWindow(start, end));
-        }
-        return list.ToArray();
+            StationId = c.StationId is { Length: > 0 } ? c.StationId : "QT001",
+            GainDb = (int)c.Gain,
+            BandPassLowHz = (int)c.BpfLowHz,
+            BandPassHighHz = (int)c.BpfHighHz,
+            SampleRate = (int)c.SampleRate,
+            Format = c.RecFormat == 1 ? RecordingFormat.WAV : RecordingFormat.FLAC,
+
+            AmplitudeTriggerEnabled = c.TrigEnabled,
+            AmplitudeThresholdDb = c.TrigDb,
+            PreTriggerSeconds = (int)c.TrigPreS,
+            PostTriggerSeconds = (int)c.TrigPostS,
+
+            LowBatteryThresholdPercent = (int)c.LowBatPct,
+            AutoStopOnLowBattery = c.AutoStop,
+
+            ActivityMode = (ActivityFilterMode)c.ActMode,
+            ActivityMinPercent = (int)c.ActMinPct,
+            ActivityMaxPercent = (int)c.ActMaxPct,
+            ActivityHoldSeconds = (int)c.ActHoldS,
+
+            SunriseEnabled = c.SunriseEnabled,
+            SunriseBeforeMinutes = (int)c.SunriseBefore,
+            SunriseAfterMinutes = (int)c.SunriseAfter,
+            SunsetEnabled = c.SunsetEnabled,
+            SunsetBeforeMinutes = (int)c.SunsetBefore,
+            SunsetAfterMinutes = (int)c.SunsetAfter,
+            FreeformWindows = windows.ToArray(),
+
+            Mission = (MissionMode)c.MissionMode,
+            DetectionThresholdPercent = (int)c.DetThreshold,
+            DetectionWindowStep = (int)c.DetStepS,
+
+            SurveyLatitude = c.SurveyLatE7 / 1e7,
+            SurveyLongitude = c.SurveyLonE7 / 1e7,
+            SurveyAltitude = c.SurveyAltMm / 1000f,
+            SurveyCount = (int)c.SurveyCount,
+        };
     }
 }

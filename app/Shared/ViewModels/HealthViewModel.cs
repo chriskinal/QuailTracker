@@ -60,6 +60,7 @@ public partial class HealthViewModel : ObservableObject
     // BLE Connection
     [ObservableProperty] private string _bleStatus = "Disconnected";
     [ObservableProperty] private string _bleDeviceName = "--";
+    [ObservableProperty] private string _bleAddress = "--";
 
     // Last Update
     [ObservableProperty] private string _lastUpdated = "Never";
@@ -84,6 +85,8 @@ public partial class HealthViewModel : ObservableObject
         BleDeviceName = state == ConnectionState.Connected
             ? _bluetoothService.ConnectedDeviceName ?? "QuailTracker"
             : "--";
+        if (state != ConnectionState.Connected)
+            BleAddress = "--";
     }
 
     private void OnStatusReceived(object? sender, DeviceStatus status)
@@ -141,6 +144,10 @@ public partial class HealthViewModel : ObservableObject
             SdFreePercent = 0;
             SdColor = "#F44336";
         }
+
+        // BLE address from firmware
+        if (status.BleModuleAddr is { Length: > 0 })
+            BleAddress = status.BleModuleAddr;
 
         // Timestamp
         LastUpdated = status.LastUpdated.ToString("HH:mm:ss");

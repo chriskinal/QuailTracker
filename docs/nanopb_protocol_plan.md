@@ -412,15 +412,15 @@ PING/PONG is available as a lightweight fallback if the app wants a sub-second c
 
 ## Implementation Phases
 
-### Phase 1: Foundation (No Behavior Change)
+### Phase 1: Foundation + Build Integration
 
-**Goal:** Add nanopb and protobuf infrastructure, build system integration, COBS framing. No user-visible changes.
+**Goal:** Add nanopb/protobuf infrastructure, COBS framing, build-time code generation for both sides.
 
 **Firmware:**
 - [ ] Add nanopb as a PlatformIO library or vendor it into `Middlewares/Third_Party/nanopb/`
 - [ ] Create `proto/quailtracker.proto`
 - [ ] Add `proto/quailtracker.options` (nanopb field size limits: max string lengths, max repeated counts)
-- [ ] Add CMake/Python protoc generation step to `extra_build.py`
+- [ ] Add protoc generation step to `extra_build.py`
 - [ ] Implement COBS encoder/decoder (`cobs.c` / `cobs.h`, ~60 lines)
 - [ ] Implement frame send/receive functions over USART2 (BLE UART)
 - [ ] Unit test: encode a Status message → COBS frame → decode → verify fields match
@@ -437,35 +437,34 @@ PING/PONG is available as a lightweight fallback if the app wants a sub-second c
 
 ---
 
-### Phase 2: Dual Protocol (Text + Binary)
+### Phase 2: Replace BLE Protocol (Full Cut)
 
-**Goal:** Firmware supports both protocols simultaneously. App can switch. Enables incremental migration without breaking existing app versions.
+**Goal:** Remove the text protocol entirely. Replace with binary protobuf pub/sub on both sides.
 
 **Firmware:**
-- [ ] Detect protocol by first byte of incoming frame:
-  - `0x00`-`0x7F` with no `$` → binary (COBS frame)
-  - `$` or ASCII printable → legacy text command
+- [ ] Remove all `bleHandleCommand()` text parsing (`strcmp` chains)
+- [ ] Remove `bleSendLine()` formatted text output
+- [ ] Remove `$STATUS`, `$SET`, `$CONFIG`, `$REC`, `$SD` handler functions
 - [ ] Implement binary command dispatcher (switch on Topic byte in header)
 - [ ] Implement Status, GpsFix, AudioLevel, RecordingState, Detection, Config message encoding
 - [ ] Implement Command, SetConfig, Subscribe, Unsubscribe message decoding
 - [ ] Implement subscription table and push loop in BLE task
-- [ ] Keep all existing `$STATUS`, `$SET`, etc. handlers working in parallel
+- [ ] Keep USART3 debug console as text (human-readable, not BLE)
 
 **App:**
-- [ ] Add `ProtobufBluetoothService` implementing `IBluetoothService`
-- [ ] Parse incoming COBS frames, dispatch by topic
-- [ ] Convert Subscribe/Unsubscribe/Command/SetConfig to COBS frames
+- [ ] Rewrite `BluetoothService` to use protobuf framing
+- [ ] Parse incoming COBS frames, dispatch by topic to view models
+- [ ] Send Subscribe/Unsubscribe/Command/SetConfig as COBS frames
+- [ ] Remove all string parsing (`ParseStatusResponse`, etc.)
 - [ ] Map protobuf messages to existing `DeviceStatus` / `DeviceConfig` view models
-- [ ] Add protocol toggle in settings (text vs binary) for testing
-- [ ] Verify all tabs work with both protocols
 
 **Estimated effort:** 4-5 sessions
 
 ---
 
-### Phase 3: Pub/Sub Lifecycle
+### Phase 3: Pub/Sub Lifecycle + Connection Stability
 
-**Goal:** App uses subscription-based updates. No more manual polling.
+**Goal:** App uses subscription-based updates. No more manual polling. Connection stays alive.
 
 **App:**
 - [ ] On connect: subscribe to STATUS (30s), GPS_FIX (10s), RECORDING_STATE (on-change), DETECTION (on-change)
@@ -477,7 +476,7 @@ PING/PONG is available as a lightweight fallback if the app wants a sub-second c
 - [ ] Handle reconnection: re-send all subscriptions
 
 **Firmware:**
-- [ ] Push Status on 30s subscription timer
+- [ ] Push Status on 30s subscription timer (keepalive)
 - [ ] Push GpsFix when satellite count, fix type, or position changes (and on timer)
 - [ ] Push Detection immediately on each inference hit
 - [ ] Push RecordingState on start/stop and every 5s during recording
@@ -487,28 +486,7 @@ PING/PONG is available as a lightweight fallback if the app wants a sub-second c
 
 ---
 
-### Phase 4: Remove Legacy Text Protocol
-
-**Goal:** Clean up. Single protocol path.
-
-**Firmware:**
-- [ ] Remove all `bleHandleCommand()` text parsing (`strcmp` chains)
-- [ ] Remove `bleSendLine()` formatted text output
-- [ ] Remove `$STATUS`, `$SET`, `$CONFIG` handler functions
-- [ ] Keep USART3 debug console as text (human-readable, not BLE)
-- [ ] Update CLI menu references if any
-
-**App:**
-- [ ] Remove `BluetoothService` text protocol implementation
-- [ ] Remove string parsing (`ParseStatusResponse`, etc.)
-- [ ] Rename `ProtobufBluetoothService` → `BluetoothService`
-- [ ] Remove protocol toggle setting
-
-**Estimated effort:** 1-2 sessions
-
----
-
-### Phase 5: OTA Over Protobuf
+### Phase 4: OTA Over Protobuf
 
 **Goal:** Migrate OTA firmware update to binary protocol.
 
@@ -653,10 +631,10 @@ Total: ~300-500 bytes across 4 pages. Binary is 5-10x more compact.
 | Risk | Mitigation |
 |------|-----------|
 | COBS sync loss on noisy BLE link | COBS is self-synchronizing — next `0x00` restarts frame. Add frame CRC8 if needed. |
-| Protobuf version mismatch (old app, new firmware) | Protobuf is forward/backward compatible by design. Unknown fields are ignored. |
+| Protobuf version mismatch (app/firmware version skew) | Protobuf is forward/backward compatible by design. Unknown fields are ignored. |
 | Nanopb stack overflow on encode | All buffers are fixed-size (256 B). Largest message (Config with 8 windows) fits in ~150 B. |
 | OTA reliability over binary | OTA already has CRC32 verification. Binary chunks are more reliable than hex encoding. |
-| Development disruption | Dual-protocol phase allows incremental migration. Text protocol stays working until Phase 4. |
+| Development disruption | Clean cut during prototyping — no production users on old protocol. Both sides change together on feature branch. |
 | PB-03F transparent UART limitations | Protocol is transport-agnostic. If we swap to a programmable BLE module later, same protocol works over proper GATT characteristics. |
 
 ---
@@ -688,6 +666,6 @@ The protobuf payloads stay identical — only the transport changes. The app swa
 | COBS over length-prefix | Self-synchronizing on byte loss. Critical for wireless links. |
 | Fixed header over protobuf envelope | 4-byte header enables topic dispatch without deserializing payload. Fast path for high-frequency messages. |
 | Subscription table on device | Device controls push rate, not app. Prevents app bugs from flooding the link. |
-| Dual protocol phase | De-risks migration. Can ship incremental improvements without breaking existing app installs. |
+| Clean cut over dual protocol | No production users yet. Dual protocol adds complexity for no benefit during prototyping. |
 | Keep USART3 console as text | Human-readable debug output is valuable during development. No reason to binary-encode it. |
 | `optional` fields in SetConfig | Proto3 field presence lets app send partial updates. "Set gain to 12" without re-sending every other field. |
