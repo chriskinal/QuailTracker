@@ -460,6 +460,7 @@ public class BluetoothService : IBluetoothService
                 ActMinPct = (uint)config.ActivityMinPercent,
                 ActMaxPct = (uint)config.ActivityMaxPercent,
                 ActHoldS = (uint)config.ActivityHoldSeconds,
+                ChunkMinutes = (uint)config.ChunkMinutes,
             };
 
             var ack = await SendSetConfigAsync(sc);
@@ -1108,6 +1109,8 @@ public class BluetoothService : IBluetoothService
             Mission = (MissionMode)c.MissionMode,
             DetectionThresholdPercent = (int)c.DetThreshold,
             DetectionWindowStep = (int)c.DetStepS,
+
+            ChunkMinutes = (int)c.ChunkMinutes,
 
             SurveyLatitude = c.SurveyLatE7 / 1e7,
             SurveyLongitude = c.SurveyLonE7 / 1e7,

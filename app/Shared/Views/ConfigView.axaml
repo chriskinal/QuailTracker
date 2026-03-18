@@ -73,6 +73,19 @@
                                       HorizontalAlignment="Stretch" />
                         </StackPanel>
                     </Grid>
+
+                    <!-- Chunk Duration -->
+                    <StackPanel Spacing="4">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Text="File Chunk Duration" Classes="DataLabel" />
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding ChunkMinutesLabel}"
+                                       Foreground="White" FontSize="12" />
+                        </Grid>
+                        <Slider Minimum="0" Maximum="120"
+                                Value="{Binding ChunkMinutes}"
+                                TickFrequency="15" IsSnapToTickEnabled="True" />
+                    </StackPanel>
                 </StackPanel>
             </Border>
 

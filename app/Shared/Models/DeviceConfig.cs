@@ -56,6 +56,9 @@ public record DeviceConfig
     public int LowBatteryThresholdPercent { get; init; } = 10;
     public bool AutoStopOnLowBattery { get; init; } = true;
 
+    // Recording Chunking
+    public int ChunkMinutes { get; init; } = 30;
+
     // Activity Filter
     public ActivityFilterMode ActivityMode { get; init; } = ActivityFilterMode.Off;
     public int ActivityMinPercent { get; init; } = 5;

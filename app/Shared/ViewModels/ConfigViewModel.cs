@@ -38,6 +38,9 @@ public partial class ConfigViewModel : ObservableObject
     [ObservableProperty] private int _bandPassHighHz = 8000;
     [ObservableProperty] private int _selectedSampleRateIndex = 0; // 48kHz
     [ObservableProperty] private int _selectedFormatIndex = 0; // FLAC
+    [ObservableProperty] private int _chunkMinutes = 30;
+    public string ChunkMinutesLabel => ChunkMinutes == 0 ? "Off" : $"{ChunkMinutes} min";
+    partial void OnChunkMinutesChanged(int value) => OnPropertyChanged(nameof(ChunkMinutesLabel));
 
     // Triggering
     [ObservableProperty] private bool _amplitudeTriggerEnabled = false;
@@ -147,6 +150,8 @@ public partial class ConfigViewModel : ObservableObject
         ActivityMaxPercent = config.ActivityMaxPercent;
         ActivityHoldSeconds = config.ActivityHoldSeconds;
 
+        ChunkMinutes = config.ChunkMinutes;
+
         HasChanges = false;
         StatusMessage = "Configuration loaded";
     }
@@ -187,7 +192,8 @@ public partial class ConfigViewModel : ObservableObject
             ActivityMode = (ActivityFilterMode)SelectedActivityModeIndex,
             ActivityMinPercent = ActivityMinPercent,
             ActivityMaxPercent = ActivityMaxPercent,
-            ActivityHoldSeconds = ActivityHoldSeconds
+            ActivityHoldSeconds = ActivityHoldSeconds,
+            ChunkMinutes = ChunkMinutes
         };
 
         var success = await _bluetoothService.SendConfigAsync(config);
