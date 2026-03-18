@@ -88,7 +88,7 @@
                                 Background="{Binding GpsColor}">
                             <TextBlock Text="{Binding GpsStatus}" Foreground="White" FontSize="11" />
                         </Border>
-                        <TextBlock Grid.Column="2" Text="{Binding GpsSatellites, StringFormat={}{0} sats}"
+                        <TextBlock Grid.Column="2" Text="{Binding GpsSatellites}"
                                    FontSize="13" FontWeight="Bold" Foreground="White"
                                    VerticalAlignment="Center" />
                         <TextBlock Grid.Column="4" Text="PPS" FontSize="11" Foreground="White" Opacity="0.5"

@@ -115,7 +115,7 @@ public partial class HealthViewModel : ObservableObject
 
         // GPS
         GpsStatus = status.GpsValid ? "Fix OK" : "No Fix";
-        GpsSatellites = status.GpsSatellites.ToString();
+        GpsSatellites = $"{status.GpsSatellites} sats";
         GpsPosition = status.GpsValid
             ? $"{status.Latitude:F6}, {status.Longitude:F6}"
             : "---, ---";
