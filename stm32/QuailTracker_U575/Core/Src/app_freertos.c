@@ -32,6 +32,9 @@
 #include "mel_spectrogram.h"
 #include "tflite_inference.h"
 #include "SEGGER_RTT.h"
+#include "ble_proto.h"
+#include "quailtracker.pb.h"
+#include <pb_encode.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -153,7 +156,7 @@ extern flac_enc_t flacEncoder;
 extern char deviceStationId[16];
 
 /* Live audio peak level (updated by audioTask, read by bleTask for $STATUS) */
-static volatile int32_t audioPeakLevel = 0;
+volatile int32_t audioPeakLevel = 0;
 
 /* Peak limiter: hard-clip samples above this threshold.
  * Prevents ADF Sinc4 saturation artifacts on loud close-range calls.
@@ -211,23 +214,23 @@ extern uint16_t sht30HumRH100;
 extern void sht30Read(void);
 
 /* GPS state */
-static gps_data_t gpsData;
+gps_data_t gpsData;
 static volatile uint8_t gpsRawOutput;
 static uint8_t gpsPowered = 1;
 
 /* Survey-in state */
-static uint8_t surveyActive = 0;       /* 1 = survey in progress */
-static uint32_t surveyStartTick = 0;   /* HAL tick when survey started */
+uint8_t surveyActive = 0;       /* 1 = survey in progress */
+uint32_t surveyStartTick = 0;   /* HAL tick when survey started */
 #define SURVEY_DURATION_MS  300000      /* 5 minutes */
 #define SURVEY_MIN_SATS     4           /* minimum satellites for valid fix */
 
 /* BLE state */
-static char bleName[32];
-static char bleAddr[20];
-static uint8_t bleReady;
-static volatile uint8_t bleConnected;
+char bleName[32];
+char bleAddr[20];
+uint8_t bleReady;
+volatile uint8_t bleConnected;
 static char bleLastResponse[64];
-static volatile uint8_t bleNameUpdatePending;  /* apply BLE name change on disconnect */
+volatile uint8_t bleNameUpdatePending;  /* apply BLE name change on disconnect */
 
 /* Recording filename from main.c (for BLE $STATUS) */
 extern char recFilename[];
@@ -238,7 +241,7 @@ static volatile uint8_t bleLiveProbeReady;
 static char bleLiveProbeResp[64];
 
 /* Flash-persisted device config (loaded at BLE task start) */
-static device_config_t cfg __attribute__((aligned(16)));
+device_config_t cfg __attribute__((aligned(16)));
 
 /* ---- BPF filter state (reset on recording start) ---- */
 static int32_t  hpfPrevIn  = 0;
@@ -260,7 +263,7 @@ static uint32_t computeLpfAlpha(uint16_t fc) {
 }
 
 /* ---- Activity filter state ---- */
-static volatile uint8_t actRatio = 0;     /* last computed activity % (read by BLE) */
+volatile uint8_t actRatio = 0;     /* last computed activity % (read by BLE) */
 static int32_t  actMean  = 0;             /* running mean(|sample|), Q0 */
 static int32_t  actMad   = 0;             /* running MAD, Q0 */
 static uint32_t actAbove = 0;             /* above-threshold count in current window */
@@ -284,29 +287,29 @@ extern uint8_t tensorArena[112 * 1024];
 extern volatile uint64_t absSampleCount;
 
 /* Inference task handle + notification */
-static osThreadId_t inferenceTaskHandle;
+osThreadId_t inferenceTaskHandle;
 
 /* Decimation + mel accumulation: 2 audio blocks of 128 → 256 at 24kHz (one mel hop) */
 static int16_t melAccumBuf[256];  /* MEL_HOP samples */
 static int melAccumIdx = 0;
 
 /* Inference state */
-static volatile uint8_t modelLoaded = 0;
-static volatile uint32_t detWindowsProcessed = 0;
-static volatile uint32_t detHits = 0;
-static char detLastSpecies[32] = "";
-static volatile uint8_t detLastConf = 0;
-static char detLastTime[20] = "";
+volatile uint8_t modelLoaded = 0;
+volatile uint32_t detWindowsProcessed = 0;
+volatile uint32_t detHits = 0;
+char detLastSpecies[32] = "";
+volatile uint8_t detLastConf = 0;
+char detLastTime[20] = "";
 
 /* Model metadata (loaded from model_config.json) */
 static char modelLabels[TFLITE_MAX_CLASSES][32];
-static int modelNumLabels = 0;
+int modelNumLabels = 0;
 static float modelMelMin = -80.0f;
 static float modelMelMax = 0.0f;
 
 /* BLE detection streaming interval (0=off) */
-static uint32_t streamDetInterval = 0;
-static uint32_t lastDetTick = 0;
+uint32_t streamDetInterval = 0;
+uint32_t lastDetTick = 0;
 
 /* Detection CSV filename for today */
 static char detCsvFilename[48] = "";
@@ -357,7 +360,7 @@ void printBleStatusBrief(void);
 static void configSetDefaults(device_config_t *c);
 static uint32_t configComputeCrc(const device_config_t *c);
 static void configLoad(void);
-static int configSave(void);
+int configSave(void);
 
 /* Survey-in */
 static void surveyAccumulate(float lat, float lon, float alt);
@@ -1976,18 +1979,20 @@ static void StartBleTask(void *argument)
 
     }
 
-    /* Main loop: read incoming BLE data (transparent mode) */
-    char buf[128];
-    int pos = 0;
-    for (;;) {
-        /* OTA inactivity timeout */
-        if (ota.state == OTA_RECEIVING &&
-            (HAL_GetTick() - ota.lastActivityTick) > OTA_TIMEOUT_MS) {
-            printf("OTA: Timeout -aborting\r\n");
-            ota.state = OTA_IDLE;
-            bleSendLine("$ERR,TIMEOUT");
-        }
+    /* Initialize protobuf protocol */
+    ble_proto_init();
 
+    /* Main loop: read incoming BLE data (transparent mode)
+     * Binary protocol: accumulate bytes until 0x00 COBS delimiter,
+     * then dispatch as a protobuf frame.
+     * Text lines from PB-03F module (URC events like +EVENT:BLE_CONNECTED)
+     * are detected by leading '+' or ASCII printable and handled as text. */
+    uint8_t frameBuf[256];
+    int framePos = 0;
+    char textBuf[128];
+    int textPos = 0;
+
+    for (;;) {
         /* Handle live AT probe requests from CLI task */
         if (bleLiveProbeReq) {
             bleLiveProbeReq = 0;
@@ -1997,25 +2002,31 @@ static void StartBleTask(void *argument)
             continue;
         }
 
-        int c = getCharBle(100);  /* short timeout to check probe requests */
+        int c = getCharBle(10);
         if (c >= 0) {
-            if (c == '\n') {
-                if (pos > 0 && buf[pos - 1] == '\r') pos--;
-                buf[pos] = '\0';
-                if (pos > 0) {
-                    if (buf[0] == '$') {
-                        /* Protocol command from app */
-                        bleHandleCommand(buf);
-                    } else if (strstr(buf, "BLE_CONNECTED") != NULL) {
+            uint8_t b = (uint8_t)c;
+
+            if (b == 0x00) {
+                /* COBS frame delimiter — dispatch if we have data */
+                if (framePos > 0) {
+                    ble_proto_receive(frameBuf, (size_t)framePos);
+                    framePos = 0;
+                }
+            } else if (b == '\n') {
+                /* Newline — check if this is a PB-03F URC text event */
+                if (textPos > 0 && textBuf[textPos - 1] == '\r') textPos--;
+                textBuf[textPos] = '\0';
+                if (textPos > 0) {
+                    if (strstr(textBuf, "BLE_CONNECTED") != NULL) {
                         bleConnected = 1;
+                        ble_proto_reset();  /* clear subscriptions from previous connection */
                         printf("BLE: Connected\r\n");
-                    } else if (strstr(buf, "BLE_DISCONNECTED") != NULL) {
+                    } else if (strstr(textBuf, "BLE_DISCONNECT") != NULL) {
                         bleConnected = 0;
-                        streamAudioInterval = 0;  /* stop streaming on disconnect */
-                        streamRecInterval = 0;
+                        ble_proto_reset();
                         bleLogEnabled = 0;
                         printf("BLE: Disconnected\r\n");
-                        /* Apply deferred BLE name update now that queue is free */
+                        /* Apply deferred BLE name update */
                         if (bleNameUpdatePending) {
                             bleNameUpdatePending = 0;
                             char nameCmd[48];
@@ -2030,28 +2041,26 @@ static void StartBleTask(void *argument)
                             printf("BLE: Name updated to %s\r\n", bleName);
                         }
                     }
-                    /* else: ignore unknown lines */
-                    strncpy(bleLastResponse, buf, sizeof(bleLastResponse) - 1);
-                    bleLastResponse[sizeof(bleLastResponse) - 1] = '\0';
                 }
-                pos = 0;
-            } else if (pos < (int)sizeof(buf) - 1) {
-                buf[pos++] = (char)c;
+                textPos = 0;
+            } else if (b >= 0x20 && b < 0x7F && framePos == 0) {
+                /* Printable ASCII with no binary frame in progress — accumulate as text
+                 * (PB-03F URC events like "+EVENT:BLE_CONNECTED\r\n") */
+                if (textPos < (int)sizeof(textBuf) - 1)
+                    textBuf[textPos++] = (char)b;
+            } else {
+                /* Binary byte — accumulate into COBS frame buffer */
+                if (framePos < (int)sizeof(frameBuf))
+                    frameBuf[framePos++] = b;
+                else
+                    framePos = 0;  /* overflow — discard and resync at next 0x00 */
+                textPos = 0;  /* any binary byte cancels text accumulation */
             }
         }
 
-        /* Push audio level stream (Config tab -fast, ~5 Hz) */
-        if (streamAudioInterval > 0 && bleConnected &&
-            (HAL_GetTick() - lastAudioTick) >= streamAudioInterval) {
-            lastAudioTick = HAL_GetTick();
-            bleHandleStreamAudio();
-        }
-        /* Push recording stats stream (Ops tab -~1 Hz) */
-        if (streamRecInterval > 0 && bleConnected &&
-            (HAL_GetTick() - lastRecTick) >= streamRecInterval) {
-            lastRecTick = HAL_GetTick();
-            bleHandleStreamRec();
-        }
+        /* Poll subscription timers and push due messages */
+        if (bleConnected)
+            ble_proto_poll_subscriptions();
 
         /* Periodic SHT30 temperature/humidity read (~every 5s) */
         if ((HAL_GetTick() - lastSht30Tick) >= SHT30_INTERVAL_MS) {
@@ -2059,9 +2068,9 @@ static void StartBleTask(void *argument)
             sht30Read();
         }
 
-        /* Drain log ring buffer over BLE */
+        /* Drain log ring buffer over BLE as protobuf LogLine messages */
         if (bleLogEnabled && bleConnected) {
-            char logChunk[64];
+            char logChunk[120];
             int n = 0;
             while (n < (int)sizeof(logChunk) - 1) {
                 uint16_t t = bleLogTail;
@@ -2071,7 +2080,13 @@ static void StartBleTask(void *argument)
             }
             if (n > 0) {
                 logChunk[n] = '\0';
-                bleSend(logChunk);
+                /* Send as protobuf LogLine */
+                quailtracker_LogLine log = quailtracker_LogLine_init_zero;
+                strncpy(log.text, logChunk, sizeof(log.text) - 1);
+                uint8_t pb_buf[140];
+                pb_ostream_t stream = pb_ostream_from_buffer(pb_buf, sizeof(pb_buf));
+                if (pb_encode(&stream, quailtracker_LogLine_fields, &log))
+                    ble_proto_send(TOPIC_LOG, pb_buf, stream.bytes_written);
             }
         }
     }
@@ -2189,7 +2204,7 @@ static void configLoad(void)
     strncpy(deviceStationId, cfg.stationId, sizeof(deviceStationId));
 }
 
-static int configSave(void)
+int configSave(void)
 {
     cfg.crc32 = configComputeCrc(&cfg);
 
