@@ -26,75 +26,76 @@ namespace QuailTracker.Shared.Models;
 public record DeviceStatus
 {
     // Device Info
-    public string StationId { get; init; } = "Unknown";
-    public string FirmwareVersion { get; init; } = "0.0.0";
+    public string StationId { get; set; } = "Unknown";
+    public string FirmwareVersion { get; set; } = "0.0.0";
 
     // Battery
-    public float BatteryVoltage { get; init; }
-    public int BatteryPercentage { get; init; }
-    public BatteryLevel BatteryLevel { get; init; }
+    public float BatteryVoltage { get; set; }
+    public int BatteryPercentage { get; set; }
+    public BatteryLevel BatteryLevel { get; set; }
 
     // GPS
-    public bool GpsValid { get; init; }
-    public int GpsFixType { get; init; }
-    public int GpsSatellites { get; init; }
-    public double Latitude { get; init; }
-    public double Longitude { get; init; }
-    public float Altitude { get; init; }
-    public string GpsDate { get; init; } = "";
-    public bool PpsValid { get; init; }
-    public long PpsCount { get; init; }
-    public long PpsAgeMs { get; init; }
-    public DateTime? GpsTime { get; init; }
+    public bool GpsValid { get; set; }
+    public int GpsFixType { get; set; }
+    public int GpsSatellites { get; set; }
+    public double Latitude { get; set; }
+    public double Longitude { get; set; }
+    public float Altitude { get; set; }
+    public string GpsDate { get; set; } = "";
+    public bool PpsValid { get; set; }
+    public long PpsCount { get; set; }
+    public long PpsAgeMs { get; set; }
+    public DateTime? GpsTime { get; set; }
 
     // Environment
-    public float Temperature { get; init; }
-    public float Humidity { get; init; }
+    public float Temperature { get; set; }
+    public float Humidity { get; set; }
 
     // SD Card
-    public bool SdCardMounted { get; init; }
-    public long SdTotalBytes { get; init; }
-    public long SdUsedBytes { get; init; }
-    public long SdFreeBytes { get; init; }
+    public bool SdCardMounted { get; set; }
+    public long SdTotalBytes { get; set; }
+    public long SdUsedBytes { get; set; }
+    public long SdFreeBytes { get; set; }
 
     // Recording
-    public bool IsRecording { get; init; }
-    public string? CurrentFilename { get; init; }
-    public long CurrentFileSize { get; init; }
-    public uint SamplesCaptured { get; init; }
-    public uint BufferOverflows { get; init; }
+    public bool IsRecording { get; set; }
+    public string? CurrentFilename { get; set; }
+    public long CurrentFileSize { get; set; }
+    public uint SamplesCaptured { get; set; }
+    public uint BufferOverflows { get; set; }
 
     // Audio
-    public int PeakLevel { get; init; }
-    public int BufferUsed { get; init; }
-    public int BufferCapacity { get; init; }
-    public uint LimiterClipCount { get; init; }
-    public int ActivityRatio { get; init; }
+    public int PeakLevel { get; set; }
+    public int BufferUsed { get; set; }
+    public int BufferCapacity { get; set; }
+    public uint LimiterClipCount { get; set; }
+    public int ActivityRatio { get; set; }
 
     // BLE Module
-    public bool BleModuleReady { get; init; }
-    public string BleModuleName { get; init; } = "";
-    public string BleModuleAddr { get; init; } = "";
-    public bool BleConnected { get; init; }
+    public bool BleModuleReady { get; set; }
+    public string BleModuleName { get; set; } = "";
+    public string BleModuleAddr { get; set; } = "";
+    public bool BleConnected { get; set; }
 
     // Survey-In
-    public double SurveyLatitude { get; init; }
-    public double SurveyLongitude { get; init; }
-    public float SurveyAltitude { get; init; }
-    public int SurveyCount { get; init; }
-    public bool SurveyActive { get; init; }
+    public double SurveyLatitude { get; set; }
+    public double SurveyLongitude { get; set; }
+    public float SurveyAltitude { get; set; }
+    public int SurveyCount { get; set; }
+    public bool SurveyActive { get; set; }
+    public int SurveySecondsLeft { get; set; }
 
     // Detection / Inference
-    public bool DetectionActive { get; init; }
-    public long DetectionWindows { get; init; }
-    public long DetectionHits { get; init; }
-    public string DetectionLastSpecies { get; init; } = "";
-    public bool ModelLoaded { get; init; }
-    public long ModelSize { get; init; }
-    public int ModelLabels { get; init; }
+    public bool DetectionActive { get; set; }
+    public long DetectionWindows { get; set; }
+    public long DetectionHits { get; set; }
+    public string DetectionLastSpecies { get; set; } = "";
+    public bool ModelLoaded { get; set; }
+    public long ModelSize { get; set; }
+    public int ModelLabels { get; set; }
 
     // Timestamp
-    public DateTime LastUpdated { get; init; } = DateTime.Now;
+    public DateTime LastUpdated { get; set; } = DateTime.Now;
 }
 
 public enum BatteryLevel

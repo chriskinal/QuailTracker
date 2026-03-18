@@ -62,6 +62,13 @@ typedef struct _quailtracker_Status {
     /* Firmware */
     char firmware_version[16];
     char station_id[16];
+    /* Survey-in progress */
+    bool survey_active;
+    uint32_t survey_count;
+    uint32_t survey_seconds_left;
+    int32_t survey_lat_e7;
+    int32_t survey_lon_e7;
+    int32_t survey_alt_mm;
 } quailtracker_Status;
 
 typedef struct _quailtracker_GpsFix {
@@ -290,7 +297,7 @@ extern "C" {
 
 
 /* Initializer values for message structs */
-#define quailtracker_Status_init_default         {0, 0, 0, "", 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, "", ""}
+#define quailtracker_Status_init_default         {0, 0, 0, "", 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, "", "", 0, 0, 0, 0, 0, 0}
 #define quailtracker_GpsFix_init_default         {0, 0, 0, 0, 0, 0, 0, 0, ""}
 #define quailtracker_AudioLevel_init_default     {0, 0, 0, 0, 0}
 #define quailtracker_Detection_init_default      {"", 0, "", 0}
@@ -310,7 +317,7 @@ extern "C" {
 #define quailtracker_OtaAbort_init_default       {0}
 #define quailtracker_OtaRollback_init_default    {0}
 #define quailtracker_OtaStatus_init_default      {0, 0, 0, 0}
-#define quailtracker_Status_init_zero            {0, 0, 0, "", 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, "", ""}
+#define quailtracker_Status_init_zero            {0, 0, 0, "", 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, "", "", 0, 0, 0, 0, 0, 0}
 #define quailtracker_GpsFix_init_zero            {0, 0, 0, 0, 0, 0, 0, 0, ""}
 #define quailtracker_AudioLevel_init_zero        {0, 0, 0, 0, 0}
 #define quailtracker_Detection_init_zero         {"", 0, "", 0}
@@ -356,6 +363,12 @@ extern "C" {
 #define quailtracker_Status_humidity_rh100_tag   51
 #define quailtracker_Status_firmware_version_tag 60
 #define quailtracker_Status_station_id_tag       61
+#define quailtracker_Status_survey_active_tag    70
+#define quailtracker_Status_survey_count_tag     71
+#define quailtracker_Status_survey_seconds_left_tag 72
+#define quailtracker_Status_survey_lat_e7_tag    73
+#define quailtracker_Status_survey_lon_e7_tag    74
+#define quailtracker_Status_survey_alt_mm_tag    75
 #define quailtracker_GpsFix_valid_tag            1
 #define quailtracker_GpsFix_satellites_tag       2
 #define quailtracker_GpsFix_latitude_e7_tag      3
@@ -478,7 +491,13 @@ X(a, STATIC,   SINGULAR, UINT32,   model_labels,     46) \
 X(a, STATIC,   SINGULAR, INT32,    temperature_c100,  50) \
 X(a, STATIC,   SINGULAR, UINT32,   humidity_rh100,   51) \
 X(a, STATIC,   SINGULAR, STRING,   firmware_version,  60) \
-X(a, STATIC,   SINGULAR, STRING,   station_id,       61)
+X(a, STATIC,   SINGULAR, STRING,   station_id,       61) \
+X(a, STATIC,   SINGULAR, BOOL,     survey_active,    70) \
+X(a, STATIC,   SINGULAR, UINT32,   survey_count,     71) \
+X(a, STATIC,   SINGULAR, UINT32,   survey_seconds_left,  72) \
+X(a, STATIC,   SINGULAR, INT32,    survey_lat_e7,    73) \
+X(a, STATIC,   SINGULAR, INT32,    survey_lon_e7,    74) \
+X(a, STATIC,   SINGULAR, INT32,    survey_alt_mm,    75)
 #define quailtracker_Status_CALLBACK NULL
 #define quailtracker_Status_DEFAULT NULL
 
@@ -721,7 +740,7 @@ extern const pb_msgdesc_t quailtracker_OtaStatus_msg;
 #define quailtracker_OtaStatus_size              24
 #define quailtracker_RecordingState_size         67
 #define quailtracker_SetConfig_size              283
-#define quailtracker_Status_size                 244
+#define quailtracker_Status_size                 297
 #define quailtracker_Subscribe_size              12
 #define quailtracker_TimeWindow_size             12
 #define quailtracker_Unsubscribe_size            6

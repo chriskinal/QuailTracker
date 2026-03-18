@@ -1748,6 +1748,8 @@ static void surveyAccumulate(float lat, float lon, float alt)
                 printf("Survey: Complete (%lu fixes)\r\n",
                        (unsigned long)cfg.surveyCount);
             }
+            /* Push config so app sees survey results */
+            ble_proto_push_topic(TOPIC_CONFIG_DUMP);
             return;
         }
 
@@ -1756,6 +1758,18 @@ static void surveyAccumulate(float lat, float lon, float alt)
         cfg.surveyLat += (lat - cfg.surveyLat) / (float)cfg.surveyCount;
         cfg.surveyLon += (lon - cfg.surveyLon) / (float)cfg.surveyCount;
         cfg.surveyAlt += (alt - cfg.surveyAlt) / (float)cfg.surveyCount;
+
+        /* CLI progress every 10 fixes */
+        if ((cfg.surveyCount % 10) == 0) {
+            uint32_t elapsed = (HAL_GetTick() - surveyStartTick) / 1000;
+            uint32_t remain = elapsed < 300 ? 300 - elapsed : 0;
+            printf("Survey: %lu fixes, %lus remaining\r\n",
+                   (unsigned long)cfg.surveyCount, (unsigned long)remain);
+        }
+        /* Push status to app every 5 fixes for live countdown */
+        if ((cfg.surveyCount % 5) == 0) {
+            ble_proto_push_topic(TOPIC_STATUS);
+        }
     } else if (cfg.surveyCount > 0) {
         /* Continuous refinement: keep averaging after initial survey */
         cfg.surveyCount++;
@@ -1967,6 +1981,9 @@ static void StartBleTask(void *argument)
      * are detected by leading '+' or ASCII printable and handled as text. */
     uint8_t frameBuf[256];
     int framePos = 0;
+    int frameExpected = 0;   /* expected frame length after SOF + length bytes */
+    uint8_t frameState = 0;  /* 0=idle, 1=got SOF, 2=got len_hi, 3=receiving data */
+    uint8_t frameLenHi = 0;
     char textBuf[128];
     int textPos = 0;
 
@@ -1984,27 +2001,47 @@ static void StartBleTask(void *argument)
         if (c >= 0) {
             uint8_t b = (uint8_t)c;
 
-            if (b == 0x00) {
-                /* COBS frame delimiter — dispatch if we have data */
-                if (framePos > 0) {
+            if (b == 0x01 && frameState == 0) {
+                /* Start-of-frame marker */
+                frameState = 1;
+                framePos = 0;
+                textPos = 0;
+            } else if (frameState == 1) {
+                /* Length high byte */
+                frameLenHi = b;
+                frameState = 2;
+            } else if (frameState == 2) {
+                /* Length low byte — now we know how many bytes to read */
+                frameExpected = (frameLenHi << 8) | b;
+                if (frameExpected > (int)sizeof(frameBuf) || frameExpected < FRAME_HEADER_SIZE) {
+                    frameState = 0;  /* invalid length — resync */
+                } else {
+                    frameState = 3;
+                    framePos = 0;
+                }
+            } else if (frameState == 3) {
+                /* Accumulate frame data */
+                frameBuf[framePos++] = b;
+                if (framePos >= frameExpected) {
+                    /* Complete frame received */
                     ble_proto_receive(frameBuf, (size_t)framePos);
+                    frameState = 0;
                     framePos = 0;
                 }
             } else if (b == '\n') {
-                /* Newline — check if this is a PB-03F URC text event */
+                /* Text line — check for PB-03F URC events */
                 if (textPos > 0 && textBuf[textPos - 1] == '\r') textPos--;
                 textBuf[textPos] = '\0';
                 if (textPos > 0) {
                     if (strstr(textBuf, "BLE_CONNECTED") != NULL) {
                         bleConnected = 1;
-                        ble_proto_reset();  /* clear subscriptions from previous connection */
+                        ble_proto_reset();
                         printf("BLE: Connected\r\n");
                     } else if (strstr(textBuf, "BLE_DISCONNECT") != NULL) {
                         bleConnected = 0;
                         ble_proto_reset();
                         bleLogEnabled = 0;
                         printf("BLE: Disconnected\r\n");
-                        /* Apply deferred BLE name update */
                         if (bleNameUpdatePending) {
                             bleNameUpdatePending = 0;
                             char nameCmd[48];
@@ -2021,18 +2058,10 @@ static void StartBleTask(void *argument)
                     }
                 }
                 textPos = 0;
-            } else if (b >= 0x20 && b < 0x7F && framePos == 0) {
-                /* Printable ASCII with no binary frame in progress — accumulate as text
-                 * (PB-03F URC events like "+EVENT:BLE_CONNECTED\r\n") */
+            } else {
+                /* Accumulate text (URC events, AT responses) */
                 if (textPos < (int)sizeof(textBuf) - 1)
                     textBuf[textPos++] = (char)b;
-            } else {
-                /* Binary byte — accumulate into COBS frame buffer */
-                if (framePos < (int)sizeof(frameBuf))
-                    frameBuf[framePos++] = b;
-                else
-                    framePos = 0;  /* overflow — discard and resync at next 0x00 */
-                textPos = 0;  /* any binary byte cancels text accumulation */
             }
         }
 

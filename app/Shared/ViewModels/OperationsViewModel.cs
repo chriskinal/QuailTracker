@@ -143,7 +143,9 @@ public partial class OperationsViewModel : ObservableObject
 
         if (status.SurveyActive)
         {
-            SurveyBadge = "Surveying...";
+            var min = status.SurveySecondsLeft / 60;
+            var sec = status.SurveySecondsLeft % 60;
+            SurveyBadge = $"{status.SurveyCount} fixes — {min}:{sec:D2} left";
             SurveyColor = "#FF9800";
         }
         else if (status.SurveyCount > 0)

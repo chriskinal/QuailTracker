@@ -1,6 +1,5 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:svg="using:Avalonia.Svg.Skia"
         xmlns:vm="using:QuailTracker.Shared.ViewModels"
         xmlns:views="using:QuailTracker.Shared.Views"
         x:Class="QuailTracker.Shared.Views.MainWindow"
@@ -18,11 +17,7 @@
         <Border Grid.Row="0"
                 Background="{StaticResource QuailPrimaryBrush}"
                 Padding="16">
-            <StackPanel Orientation="Horizontal" Spacing="12">
-                <svg:Svg Path="avares://QuailTracker.Shared/Assets/logo.svg"
-                         Width="36" Height="36"
-                         VerticalAlignment="Center" />
-                <StackPanel VerticalAlignment="Center">
+            <StackPanel>
                     <TextBlock Text="QuailTracker"
                                FontSize="24"
                                FontWeight="Bold"
@@ -31,7 +26,6 @@
                                FontSize="12"
                                Foreground="White"
                                Opacity="0.8" />
-                </StackPanel>
             </StackPanel>
         </Border>
 

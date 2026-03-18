@@ -86,17 +86,16 @@ public class BleProtoFrame
     public byte[] EncodeRaw(BleProtoTopic topic, ReadOnlySpan<byte> payload)
     {
         // Build raw frame: header + payload
-        var raw = new byte[HeaderSize + payload.Length];
-        raw[0] = (byte)topic;
-        raw[1] = 0; // flags
-        BinaryPrimitives.WriteUInt16LittleEndian(raw.AsSpan(2), _txSeq++);
-        payload.CopyTo(raw.AsSpan(HeaderSize));
-
-        // COBS encode + delimiter
-        var encoded = CobsCodec.Encode(raw);
-        var frame = new byte[encoded.Length + 1];
-        Array.Copy(encoded, frame, encoded.Length);
-        frame[^1] = 0x00; // delimiter
+        int rawLen = HeaderSize + payload.Length;
+        // Wire format: [0x01 SOF] [LEN_HI] [LEN_LO] [header + payload]
+        var frame = new byte[3 + rawLen];
+        frame[0] = 0x01; // start-of-frame marker
+        frame[1] = (byte)((rawLen >> 8) & 0xFF);
+        frame[2] = (byte)(rawLen & 0xFF);
+        frame[3] = (byte)topic;
+        frame[4] = 0; // flags
+        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(5), _txSeq++);
+        payload.CopyTo(frame.AsSpan(3 + HeaderSize));
         return frame;
     }
 
@@ -109,24 +108,23 @@ public class BleProtoFrame
     }
 
     /// <summary>
-    /// Decode a COBS frame (without trailing 0x00) into topic + protobuf payload.
+    /// Decode a raw frame (header + protobuf payload) into topic + payload.
     /// Returns false if the frame is invalid.
     /// </summary>
-    public static bool TryDecode(ReadOnlySpan<byte> cobsFrame, out BleProtoTopic topic,
+    public static bool TryDecode(ReadOnlySpan<byte> rawFrame, out BleProtoTopic topic,
                                   out ushort sequence, out byte[] payload)
     {
         topic = 0;
         sequence = 0;
         payload = Array.Empty<byte>();
 
-        var decoded = CobsCodec.Decode(cobsFrame);
-        if (decoded.Length < HeaderSize)
+        if (rawFrame.Length < HeaderSize)
             return false;
 
-        topic = (BleProtoTopic)decoded[0];
-        sequence = BinaryPrimitives.ReadUInt16LittleEndian(decoded.AsSpan(2));
-        payload = new byte[decoded.Length - HeaderSize];
-        Array.Copy(decoded, HeaderSize, payload, 0, payload.Length);
+        topic = (BleProtoTopic)rawFrame[0];
+        sequence = BinaryPrimitives.ReadUInt16LittleEndian(rawFrame.Slice(2));
+        payload = new byte[rawFrame.Length - HeaderSize];
+        rawFrame.Slice(HeaderSize).CopyTo(payload);
         return true;
     }
 }
@@ -139,28 +137,52 @@ public class BleFrameAssembler
 {
     private readonly byte[] _buffer = new byte[512];
     private int _pos;
+    private int _expected;  // expected frame length (-1 = waiting for SOF)
+    private byte _lenHi;
+    private int _state;     // 0=idle, 1=got SOF, 2=got len_hi, 3=receiving
 
     /// <summary>
-    /// Feed received BLE data. Calls onFrame for each complete frame found.
+    /// Feed received BLE data. Looks for [0x01 SOF] [LEN_HI] [LEN_LO] [data...] frames.
+    /// Calls onFrame with the raw frame data (header + protobuf payload).
     /// </summary>
     public void Feed(ReadOnlySpan<byte> data, Action<ReadOnlySpan<byte>> onFrame)
     {
         foreach (var b in data)
         {
-            if (b == 0x00)
+            switch (_state)
             {
-                if (_pos > 0)
-                {
-                    onFrame(_buffer.AsSpan(0, _pos));
-                    _pos = 0;
-                }
-            }
-            else
-            {
-                if (_pos < _buffer.Length)
+                case 0: // Idle — looking for SOF
+                    if (b == 0x01)
+                        _state = 1;
+                    // else: ignore (text from PB-03F module)
+                    break;
+
+                case 1: // Got SOF — next byte is length high
+                    _lenHi = b;
+                    _state = 2;
+                    break;
+
+                case 2: // Got length high — next byte is length low
+                    _expected = (_lenHi << 8) | b;
+                    if (_expected > _buffer.Length || _expected < 4)
+                    {
+                        _state = 0; // invalid length — resync
+                    }
+                    else
+                    {
+                        _pos = 0;
+                        _state = 3;
+                    }
+                    break;
+
+                case 3: // Receiving frame data
                     _buffer[_pos++] = b;
-                else
-                    _pos = 0; // overflow — discard and resync
+                    if (_pos >= _expected)
+                    {
+                        onFrame(_buffer.AsSpan(0, _pos));
+                        _state = 0;
+                    }
+                    break;
             }
         }
     }
@@ -168,5 +190,10 @@ public class BleFrameAssembler
     /// <summary>
     /// Reset assembler state (call on disconnect).
     /// </summary>
-    public void Reset() => _pos = 0;
+    public void Reset()
+    {
+        _pos = 0;
+        _state = 0;
+        _expected = 0;
+    }
 }

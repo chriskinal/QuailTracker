@@ -45,6 +45,14 @@ message Status {
     // Firmware
     string firmware_version = 60;
     string station_id       = 61;
+
+    // Survey-in progress
+    bool   survey_active         = 70;
+    uint32 survey_count          = 71;
+    uint32 survey_seconds_left   = 72;
+    int32  survey_lat_e7         = 73;
+    int32  survey_lon_e7         = 74;
+    int32  survey_alt_mm         = 75;
 }
 
 message GpsFix {

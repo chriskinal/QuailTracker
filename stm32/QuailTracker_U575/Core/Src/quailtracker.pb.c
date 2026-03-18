@@ -6,7 +6,7 @@
 #error Regenerate this file with the current version of nanopb generator.
 #endif
 
-PB_BIND(quailtracker_Status, quailtracker_Status, AUTO)
+PB_BIND(quailtracker_Status, quailtracker_Status, 2)
 
 
 PB_BIND(quailtracker_GpsFix, quailtracker_GpsFix, AUTO)

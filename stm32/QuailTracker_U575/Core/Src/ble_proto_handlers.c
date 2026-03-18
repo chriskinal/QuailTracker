@@ -280,6 +280,17 @@ static void push_status(void)
     strncpy(msg.firmware_version, FW_VERSION, sizeof(msg.firmware_version) - 1);
     strncpy(msg.station_id, cfg.stationId, sizeof(msg.station_id) - 1);
 
+    /* Survey-in progress */
+    msg.survey_active = surveyActive ? true : false;
+    msg.survey_count = cfg.surveyCount;
+    if (surveyActive) {
+        uint32_t elapsed = (HAL_GetTick() - surveyStartTick) / 1000;
+        msg.survey_seconds_left = elapsed < 300 ? 300 - elapsed : 0;
+    }
+    msg.survey_lat_e7 = (int32_t)(cfg.surveyLat * 10000000.0f);
+    msg.survey_lon_e7 = (int32_t)(cfg.surveyLon * 10000000.0f);
+    msg.survey_alt_mm = (int32_t)(cfg.surveyAlt * 1000.0f);
+
     uint8_t buf[quailtracker_Status_size];
     pb_ostream_t stream = pb_ostream_from_buffer(buf, sizeof(buf));
     if (pb_encode(&stream, quailtracker_Status_fields, &msg)) {
@@ -546,6 +557,7 @@ static void handle_command(const uint8_t *payload, size_t payload_len)
                    (unsigned long)cfg.surveyCount);
         }
         send_ack(cmd.type);
+        push_config_dump();
         break;
 
     case quailtracker_CommandType_CMD_SURVEY_CLEAR:
@@ -557,6 +569,7 @@ static void handle_command(const uint8_t *payload, size_t payload_len)
         configSave();
         printf("BLE PB: Survey cleared\r\n");
         send_ack(cmd.type);
+        push_config_dump();
         break;
 
     case quailtracker_CommandType_CMD_LOGS_TOGGLE:

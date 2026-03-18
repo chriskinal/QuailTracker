@@ -17,9 +17,9 @@
  */
 
 #include "ble_proto.h"
-#include "cobs.h"
 #include "stm32u5xx_hal.h"
 #include <string.h>
+#include <stdio.h>
 
 extern UART_HandleTypeDef husart2;  /* BLE UART */
 
@@ -41,39 +41,38 @@ bool ble_proto_send(uint8_t topic, const uint8_t *pb_buf, size_t pb_len)
 {
     if (pb_len > FRAME_MAX_PAYLOAD) return false;
 
-    /* Build raw frame: 4-byte header + protobuf payload */
-    uint8_t raw[FRAME_MAX_RAW];
-    raw[0] = topic;
-    raw[1] = 0;  /* flags */
-    raw[2] = (uint8_t)(tx_seq & 0xFF);
-    raw[3] = (uint8_t)((tx_seq >> 8) & 0xFF);
-    memcpy(&raw[4], pb_buf, pb_len);
+    /* Build frame: [0x01 SOF] [LEN_HI] [LEN_LO] [header] [protobuf payload]
+     * Length = header + payload (does NOT include SOF or length bytes themselves) */
     size_t raw_len = FRAME_HEADER_SIZE + pb_len;
+    uint8_t frame[3 + FRAME_MAX_RAW];  /* SOF + 2-byte length + header + payload */
+    frame[0] = 0x01;  /* start-of-frame marker */
+    frame[1] = (uint8_t)((raw_len >> 8) & 0xFF);
+    frame[2] = (uint8_t)(raw_len & 0xFF);
+    frame[3] = topic;
+    frame[4] = 0;  /* flags */
+    frame[5] = (uint8_t)(tx_seq & 0xFF);
+    frame[6] = (uint8_t)((tx_seq >> 8) & 0xFF);
+    if (pb_len > 0)
+        memcpy(&frame[7], pb_buf, pb_len);
     tx_seq++;
 
-    /* COBS encode + delimiter */
-    uint8_t encoded[FRAME_MAX_ENCODED];
-    size_t enc_len = cobs_encode(raw, raw_len, encoded);
-    encoded[enc_len] = 0x00;  /* frame delimiter */
-    enc_len++;
-
     /* Transmit over BLE UART */
-    HAL_UART_Transmit(&husart2, encoded, (uint16_t)enc_len, 100);
+    HAL_UART_Transmit(&husart2, frame, (uint16_t)(3 + raw_len), 100);
     return true;
 }
 
 void ble_proto_receive(const uint8_t *frame, size_t len)
 {
-    /* COBS decode */
-    uint8_t decoded[FRAME_MAX_RAW];
-    size_t dec_len = cobs_decode(frame, len, decoded);
-    if (dec_len < FRAME_HEADER_SIZE) return;  /* too short */
+    /* Frame is raw bytes (no COBS): [header 4 bytes] [protobuf payload] */
+    if (len < FRAME_HEADER_SIZE) return;
 
-    uint8_t topic = decoded[0];
-    /* uint8_t flags = decoded[1]; */
-    /* uint16_t seq = decoded[2] | (decoded[3] << 8); */
-    const uint8_t *payload = &decoded[FRAME_HEADER_SIZE];
-    size_t payload_len = dec_len - FRAME_HEADER_SIZE;
+    uint8_t topic = frame[0];
+    /* uint8_t flags = frame[1]; */
+    /* uint16_t seq = frame[2] | (frame[3] << 8); */
+    const uint8_t *payload = &frame[FRAME_HEADER_SIZE];
+    size_t payload_len = len - FRAME_HEADER_SIZE;
+
+    printf("BLE_PROTO: rx topic=0x%02X len=%u\r\n", topic, (unsigned)payload_len);
 
     /* Dispatch by topic — implemented in app_freertos.c */
     extern void ble_proto_dispatch(uint8_t topic, const uint8_t *payload,

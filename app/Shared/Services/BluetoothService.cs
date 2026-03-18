@@ -56,6 +56,7 @@ public class BluetoothService : IBluetoothService
     // COBS frame assembler for incoming BLE data
     private readonly BleFrameAssembler _frameAssembler = new();
     private readonly BleProtoFrame _frameBuilder = new();
+    private DeviceStatus _cachedStatus = new();  // merged status from all push topics
 
     // Command/response serialization
     private readonly SemaphoreSlim _cmdLock = new(1, 1);
@@ -251,8 +252,9 @@ public class BluetoothService : IBluetoothService
 
             await OnConnectedAsync();
         }
-        catch
+        catch (Exception ex)
         {
+            System.Console.WriteLine($"[BLE] ConnectToDeviceAsync error: {ex}");
             await CleanupConnection();
             SetState(ConnectionState.Disconnected);
         }
@@ -353,17 +355,24 @@ public class BluetoothService : IBluetoothService
     /// </summary>
     private async Task OnConnectedAsync()
     {
-        try { await SendFrameAsync(_frameBuilder.EncodeEmpty(BleProtoTopic.Ping)); } catch { }
-
-        // Subscribe to topics the app needs
         try
         {
+            System.Console.WriteLine("[BLE] OnConnectedAsync: sending Ping...");
+            await SendFrameAsync(_frameBuilder.EncodeEmpty(BleProtoTopic.Ping));
+            System.Console.WriteLine("[BLE] Ping sent OK");
+
+            // Subscribe to topics the app needs
+            System.Console.WriteLine("[BLE] Subscribing to topics...");
             await SendSubscribeAsync(BleProtoTopic.Status, 30000);
             await SendSubscribeAsync(BleProtoTopic.GpsFix, 10000);
             await SendSubscribeAsync(BleProtoTopic.RecordingState, 0);  // on-change
             await SendSubscribeAsync(BleProtoTopic.Detection, 0);      // on-change
+            System.Console.WriteLine("[BLE] Subscriptions sent OK");
         }
-        catch { /* non-fatal */ }
+        catch (Exception ex)
+        {
+            System.Console.WriteLine($"[BLE] OnConnectedAsync error: {ex}");
+        }
 
         // Request initial status
         _ = RequestStatusAsync();
@@ -386,8 +395,9 @@ public class BluetoothService : IBluetoothService
             timeoutCts.Token.Register(() => _statusTcs?.TrySetCanceled());
 
             var status = await _statusTcs.Task;
-            var mapped = MapStatus(status);
-            Dispatcher.UIThread.Post(() => StatusReceived?.Invoke(this, mapped));
+            MergeStatusIntoCache(status, _cachedStatus);
+            var snapshot = _cachedStatus;
+            Dispatcher.UIThread.Post(() => StatusReceived?.Invoke(this, snapshot));
         }
         catch
         {
@@ -790,49 +800,58 @@ public class BluetoothService : IBluetoothService
     /// </summary>
     private void OnFrameReceived(ReadOnlySpan<byte> cobsFrame)
     {
-        if (!BleProtoFrame.TryDecode(cobsFrame, out var topic, out var sequence, out var payload))
-            return;
+        try
+        {
+            if (!BleProtoFrame.TryDecode(cobsFrame, out var topic, out var sequence, out var payload))
+                return;
+            OnFrameDecoded(topic, sequence, payload);
+        }
+        catch (Exception ex)
+        {
+            System.Console.WriteLine($"[BLE] Frame decode error: {ex.Message}");
+        }
+    }
+
+    private void OnFrameDecoded(BleProtoTopic topic, ushort sequence, byte[] payload)
+    {
 
         switch (topic)
         {
             case BleProtoTopic.Status:
             {
                 var status = Quailtracker.Status.Parser.ParseFrom(payload);
-                // If a RequestStatusAsync is waiting, deliver via TCS
+                MergeStatusIntoCache(status, _cachedStatus);
                 if (_statusTcs != null)
-                {
                     _statusTcs.TrySetResult(status);
-                }
-                else
-                {
-                    // Unsolicited push (subscription)
-                    var mapped = MapStatus(status);
-                    Dispatcher.UIThread.Post(() => StatusReceived?.Invoke(this, mapped));
-                }
+                var snapshot = _cachedStatus;
+                Dispatcher.UIThread.Post(() => StatusReceived?.Invoke(this, snapshot));
                 break;
             }
 
             case BleProtoTopic.GpsFix:
             {
                 var gps = Quailtracker.GpsFix.Parser.ParseFrom(payload);
-                var mapped = MapGpsToPartialStatus(gps);
-                Dispatcher.UIThread.Post(() => StatusReceived?.Invoke(this, mapped));
+                MergeGpsIntoStatus(gps, _cachedStatus);
+                var snapshot = _cachedStatus;
+                Dispatcher.UIThread.Post(() => StatusReceived?.Invoke(this, snapshot));
                 break;
             }
 
             case BleProtoTopic.AudioLevel:
             {
                 var audio = Quailtracker.AudioLevel.Parser.ParseFrom(payload);
-                var mapped = MapAudioToPartialStatus(audio);
-                Dispatcher.UIThread.Post(() => StatusReceived?.Invoke(this, mapped));
+                MergeAudioIntoStatus(audio, _cachedStatus);
+                var snapshot = _cachedStatus;
+                Dispatcher.UIThread.Post(() => StatusReceived?.Invoke(this, snapshot));
                 break;
             }
 
             case BleProtoTopic.RecordingState:
             {
                 var rec = Quailtracker.RecordingState.Parser.ParseFrom(payload);
-                var mapped = MapRecordingToPartialStatus(rec);
-                Dispatcher.UIThread.Post(() => StatusReceived?.Invoke(this, mapped));
+                MergeRecordingIntoStatus(rec, _cachedStatus);
+                var snapshot = _cachedStatus;
+                Dispatcher.UIThread.Post(() => StatusReceived?.Invoke(this, snapshot));
                 break;
             }
 
@@ -848,14 +867,19 @@ public class BluetoothService : IBluetoothService
             {
                 var config = Quailtracker.Config.Parser.ParseFrom(payload);
                 if (_configTcs != null)
-                {
                     _configTcs.TrySetResult(config);
-                }
-                else
-                {
-                    var mapped = MapConfig(config);
-                    Dispatcher.UIThread.Post(() => ConfigReceived?.Invoke(this, mapped));
-                }
+
+                var mapped = MapConfig(config);
+                Dispatcher.UIThread.Post(() => ConfigReceived?.Invoke(this, mapped));
+
+                // Merge survey fields into cached status so OperationsViewModel sees them
+                _cachedStatus.SurveyLatitude = config.SurveyLatE7 / 1e7;
+                _cachedStatus.SurveyLongitude = config.SurveyLonE7 / 1e7;
+                _cachedStatus.SurveyAltitude = config.SurveyAltMm / 1000f;
+                _cachedStatus.SurveyCount = (int)config.SurveyCount;
+                _cachedStatus.LastUpdated = DateTime.Now;
+                var statusSnapshot = _cachedStatus;
+                Dispatcher.UIThread.Post(() => StatusReceived?.Invoke(this, statusSnapshot));
                 break;
             }
 
@@ -887,6 +911,7 @@ public class BluetoothService : IBluetoothService
             _statusTcs?.TrySetCanceled();
             _configTcs?.TrySetCanceled();
             _frameAssembler.Reset();
+        _cachedStatus = new DeviceStatus();
             _device = null;
             _writeCharacteristic = null;
             _notifyCharacteristic = null;
@@ -901,6 +926,7 @@ public class BluetoothService : IBluetoothService
         _statusTcs?.TrySetCanceled();
         _configTcs?.TrySetCanceled();
         _frameAssembler.Reset();
+        _cachedStatus = new DeviceStatus();
 
         if (_notifyCharacteristic != null)
         {
@@ -932,97 +958,93 @@ public class BluetoothService : IBluetoothService
 
     // ── Protobuf -> App model mapping ─────────────────────────────────────
 
-    private static DeviceStatus MapStatus(Quailtracker.Status s)
+    /// <summary>
+    /// Merge Status fields into cached status. GPS fields are NOT in Status —
+    /// they come from GpsFix topic. Preserve existing GPS/Audio fields.
+    /// </summary>
+    private static void MergeStatusIntoCache(Quailtracker.Status s, DeviceStatus c)
     {
+        c.StationId = s.StationId is { Length: > 0 } ? s.StationId : "Unknown";
+        c.FirmwareVersion = s.FirmwareVersion is { Length: > 0 } ? s.FirmwareVersion : "0.0.0";
+
+        c.BatteryVoltage = s.BatteryMv / 1000f;
+        c.BatteryPercentage = (int)s.BatteryPct;
+
+        c.BleModuleReady = s.BleReady;
+        c.BleModuleName = s.BleName ?? "";
+
+        c.Temperature = s.TemperatureC100 / 100f;
+        c.Humidity = s.HumidityRh100 / 100f;
+
         var sdTotal = (long)s.SdTotalKb * 1024;
         var sdFree = (long)s.SdFreeKb * 1024;
+        c.SdCardMounted = s.SdMounted;
+        c.SdTotalBytes = sdTotal;
+        c.SdFreeBytes = sdFree;
+        c.SdUsedBytes = sdTotal - sdFree;
 
-        return new DeviceStatus
-        {
-            StationId = s.StationId is { Length: > 0 } ? s.StationId : "Unknown",
-            FirmwareVersion = s.FirmwareVersion is { Length: > 0 } ? s.FirmwareVersion : "0.0.0",
+        c.IsRecording = s.Recording;
+        c.CurrentFilename = s.RecFilename is { Length: > 0 } ? s.RecFilename : null;
+        c.CurrentFileSize = s.RecBytes;
+        c.BufferOverflows = s.RecOverruns;
 
-            BatteryVoltage = s.BatteryMv / 1000f,
-            BatteryPercentage = (int)s.BatteryPct,
+        c.DetectionActive = s.DetActive;
+        c.DetectionWindows = s.DetWindows;
+        c.DetectionHits = s.DetHits;
+        c.DetectionLastSpecies = s.DetLastSpecies ?? "";
+        c.ModelLoaded = s.ModelLoaded;
+        c.ModelSize = s.ModelSize;
+        c.ModelLabels = (int)s.ModelLabels;
 
-            BleModuleReady = s.BleReady,
-            BleModuleName = s.BleName ?? "",
+        // Survey-in progress
+        c.SurveyActive = s.SurveyActive;
+        c.SurveyCount = (int)s.SurveyCount;
+        c.SurveySecondsLeft = (int)s.SurveySecondsLeft;
+        if (s.SurveyCount > 0) {
+            c.SurveyLatitude = s.SurveyLatE7 / 1e7;
+            c.SurveyLongitude = s.SurveyLonE7 / 1e7;
+            c.SurveyAltitude = s.SurveyAltMm / 1000f;
+        }
 
-            Temperature = s.TemperatureC100 / 100f,
-            Humidity = s.HumidityRh100 / 100f,
-
-            SdCardMounted = s.SdMounted,
-            SdTotalBytes = sdTotal,
-            SdFreeBytes = sdFree,
-            SdUsedBytes = sdTotal - sdFree,
-
-            IsRecording = s.Recording,
-            CurrentFilename = s.RecFilename is { Length: > 0 } ? s.RecFilename : null,
-            CurrentFileSize = s.RecBytes,
-            BufferOverflows = s.RecOverruns,
-
-            DetectionActive = s.DetActive,
-            DetectionWindows = s.DetWindows,
-            DetectionHits = s.DetHits,
-            DetectionLastSpecies = s.DetLastSpecies ?? "",
-            ModelLoaded = s.ModelLoaded,
-            ModelSize = s.ModelSize,
-            ModelLabels = (int)s.ModelLabels,
-
-            LastUpdated = DateTime.Now,
-        };
+        c.LastUpdated = DateTime.Now;
     }
 
-    private static DeviceStatus MapGpsToPartialStatus(Quailtracker.GpsFix g)
+    private static void MergeGpsIntoStatus(Quailtracker.GpsFix g, DeviceStatus s)
     {
-        DateTime? gpsTime = null;
+        s.GpsValid = g.Valid;
+        s.GpsFixType = (int)g.FixType;
+        s.GpsSatellites = (int)g.Satellites;
+        s.Latitude = g.LatitudeE7 / 1e7;
+        s.Longitude = g.LongitudeE7 / 1e7;
+        s.Altitude = g.AltitudeMm / 1000f;
+        s.PpsValid = g.PpsSynced;
+        s.PpsCount = g.PpsCount;
         if (g.UtcTime is { Length: >= 14 } timeStr &&
             DateTime.TryParseExact(timeStr, "yyyyMMddHHmmss",
                 System.Globalization.CultureInfo.InvariantCulture,
                 System.Globalization.DateTimeStyles.AssumeUniversal, out var t))
-        {
-            gpsTime = t;
-        }
-
-        return new DeviceStatus
-        {
-            GpsValid = g.Valid,
-            GpsFixType = (int)g.FixType,
-            GpsSatellites = (int)g.Satellites,
-            Latitude = g.LatitudeE7 / 1e7,
-            Longitude = g.LongitudeE7 / 1e7,
-            Altitude = g.AltitudeMm / 1000f,
-            PpsValid = g.PpsSynced,
-            PpsCount = g.PpsCount,
-            GpsTime = gpsTime,
-            LastUpdated = DateTime.Now,
-        };
+            s.GpsTime = t;
+        s.LastUpdated = DateTime.Now;
     }
 
-    private static DeviceStatus MapAudioToPartialStatus(Quailtracker.AudioLevel a)
+    private static void MergeAudioIntoStatus(Quailtracker.AudioLevel a, DeviceStatus s)
     {
-        return new DeviceStatus
-        {
-            PeakLevel = (int)a.Peak,
-            ActivityRatio = (int)a.ActivityPct,
-            LimiterClipCount = a.ClipCount,
-            BufferUsed = (int)a.BufUsed,
-            BufferCapacity = (int)a.BufCapacity,
-            LastUpdated = DateTime.Now,
-        };
+        s.PeakLevel = (int)a.Peak;
+        s.ActivityRatio = (int)a.ActivityPct;
+        s.LimiterClipCount = a.ClipCount;
+        s.BufferUsed = (int)a.BufUsed;
+        s.BufferCapacity = (int)a.BufCapacity;
+        s.LastUpdated = DateTime.Now;
     }
 
-    private static DeviceStatus MapRecordingToPartialStatus(Quailtracker.RecordingState r)
+    private static void MergeRecordingIntoStatus(Quailtracker.RecordingState r, DeviceStatus s)
     {
-        return new DeviceStatus
-        {
-            IsRecording = r.Active,
-            CurrentFilename = r.Filename is { Length: > 0 } ? r.Filename : null,
-            CurrentFileSize = r.BytesWritten,
-            BufferOverflows = r.Overruns,
-            SdFreeBytes = (long)r.SdFreeKb * 1024,
-            LastUpdated = DateTime.Now,
-        };
+        s.IsRecording = r.Active;
+        s.CurrentFilename = r.Filename is { Length: > 0 } ? r.Filename : null;
+        s.CurrentFileSize = r.BytesWritten;
+        s.BufferOverflows = r.Overruns;
+        s.SdFreeBytes = (long)r.SdFreeKb * 1024;
+        s.LastUpdated = DateTime.Now;
     }
 
     private static DetectionEvent MapDetection(Quailtracker.Detection d)
