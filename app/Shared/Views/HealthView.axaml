@@ -7,62 +7,49 @@
     <ScrollViewer Padding="16">
         <StackPanel Spacing="16">
 
-            <!-- Device Info Card -->
+            <!-- Device / Battery / SD Card -->
             <Border Classes="CardPanel">
-                <StackPanel Spacing="8">
-                    <TextBlock Text="Device" Classes="SectionHeader" />
-                    <Grid ColumnDefinitions="*,*">
-                        <StackPanel>
-                            <TextBlock Text="Station ID" Classes="DataLabel" />
-                            <TextBlock Text="{Binding StationId}" FontSize="18" FontWeight="Bold" Foreground="White" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="1">
-                            <TextBlock Text="Firmware" Classes="DataLabel" />
-                            <TextBlock Text="{Binding FirmwareVersion}" FontSize="18" Foreground="White" />
-                        </StackPanel>
+                <StackPanel Spacing="6">
+                    <!-- Device: Station ID + Firmware on one line -->
+                    <Grid ColumnDefinitions="Auto,*,Auto">
+                        <TextBlock Text="{Binding StationId}" FontSize="16" FontWeight="Bold"
+                                   Foreground="White" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2" Text="{Binding FirmwareVersion}"
+                                   FontSize="12" Foreground="White" Opacity="0.6"
+                                   VerticalAlignment="Center" />
                     </Grid>
-                </StackPanel>
-            </Border>
 
-            <!-- Battery Card -->
-            <Border Classes="CardPanel">
-                <StackPanel Spacing="8">
-                    <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Text="Battery" Classes="SectionHeader" />
-                        <Border Grid.Column="1" CornerRadius="4" Padding="8,4"
-                                Background="{Binding BatteryColor}">
-                            <TextBlock Text="{Binding BatteryStatus}" Foreground="White" FontSize="12" />
-                        </Border>
+                    <!-- Battery: bar + percentage + voltage on one line -->
+                    <Grid ColumnDefinitions="Auto,*,Auto,Auto">
+                        <TextBlock Text="Bat" FontSize="11" Foreground="White" Opacity="0.5"
+                                   VerticalAlignment="Center" Width="28" />
+                        <ProgressBar Grid.Column="1" Value="{Binding BatteryPercentage}" Maximum="100"
+                                     Height="6" CornerRadius="3"
+                                     Foreground="{Binding BatteryColor}"
+                                     VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2" Text="{Binding BatteryPercentage, StringFormat={}{0}%}"
+                                   Margin="8,0,0,0" FontSize="13" FontWeight="Bold"
+                                   Foreground="White" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="3" Text="{Binding BatteryVoltage}"
+                                   Margin="6,0,0,0" FontSize="11" Foreground="White"
+                                   Opacity="0.5" VerticalAlignment="Center" />
                     </Grid>
-                    <Grid ColumnDefinitions="*,Auto">
-                        <ProgressBar Value="{Binding BatteryPercentage}" Maximum="100"
-                                     Height="8" CornerRadius="4"
-                                     Foreground="{Binding BatteryColor}" />
-                        <TextBlock Grid.Column="1" Text="{Binding BatteryPercentage, StringFormat={}{0}%}"
-                                   Margin="8,0,0,0" FontWeight="Bold" Foreground="White" />
-                    </Grid>
-                    <TextBlock Text="{Binding BatteryVoltage}" Classes="DataLabel" />
-                </StackPanel>
-            </Border>
 
-            <!-- SD Card -->
-            <Border Classes="CardPanel">
-                <StackPanel Spacing="8">
-                    <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Text="SD Card" Classes="SectionHeader" />
-                        <Border Grid.Column="1" CornerRadius="4" Padding="8,4"
-                                Background="{Binding SdColor}">
-                            <TextBlock Text="{Binding SdStatus}" Foreground="White" FontSize="12" />
-                        </Border>
+                    <!-- SD Card: bar + percentage + free space on one line -->
+                    <Grid ColumnDefinitions="Auto,*,Auto,Auto">
+                        <TextBlock Text="SD" FontSize="11" Foreground="White" Opacity="0.5"
+                                   VerticalAlignment="Center" Width="28" />
+                        <ProgressBar Grid.Column="1" Value="{Binding SdFreePercent}" Maximum="100"
+                                     Height="6" CornerRadius="3"
+                                     Foreground="{Binding SdColor}"
+                                     VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2" Text="{Binding SdFreePercent, StringFormat={}{0}%}"
+                                   Margin="8,0,0,0" FontSize="13" FontWeight="Bold"
+                                   Foreground="White" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="3" Text="{Binding SdFree}"
+                                   Margin="6,0,0,0" FontSize="11" Foreground="White"
+                                   Opacity="0.5" VerticalAlignment="Center" />
                     </Grid>
-                    <Grid ColumnDefinitions="*,Auto">
-                        <ProgressBar Value="{Binding SdFreePercent}" Maximum="100"
-                                     Height="8" CornerRadius="4"
-                                     Foreground="{Binding SdColor}" />
-                        <TextBlock Grid.Column="1" Text="{Binding SdFreePercent, StringFormat={}{0}%}"
-                                   Margin="8,0,0,0" FontWeight="Bold" Foreground="White" />
-                    </Grid>
-                    <TextBlock Text="{Binding SdFree}" Classes="DataLabel" />
                 </StackPanel>
             </Border>
 
@@ -94,42 +81,34 @@
                 </StackPanel>
             </Border>
 
-            <!-- Environment Card -->
+            <!-- Environment -->
             <Border Classes="CardPanel">
-                <StackPanel Spacing="8">
-                    <TextBlock Text="Environment" Classes="SectionHeader" />
-                    <Grid ColumnDefinitions="*,*">
-                        <StackPanel>
-                            <TextBlock Text="Temperature" Classes="DataLabel" />
-                            <TextBlock Text="{Binding Temperature}" Classes="LargeValue" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="1">
-                            <TextBlock Text="Humidity" Classes="DataLabel" />
-                            <TextBlock Text="{Binding Humidity}" Classes="LargeValue" />
-                        </StackPanel>
-                    </Grid>
-                </StackPanel>
+                <Grid ColumnDefinitions="Auto,*,Auto,8,Auto,*,Auto">
+                    <TextBlock Text="Temp" FontSize="11" Foreground="White" Opacity="0.5"
+                               VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="2" Text="{Binding Temperature}"
+                               FontSize="15" FontWeight="Bold" Foreground="White"
+                               VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="4" Text="Hum" FontSize="11" Foreground="White" Opacity="0.5"
+                               VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="6" Text="{Binding Humidity}"
+                               FontSize="15" FontWeight="Bold" Foreground="White"
+                               VerticalAlignment="Center" />
+                </Grid>
             </Border>
 
-            <!-- BLE Connection Card -->
+            <!-- BLE Connection -->
             <Border Classes="CardPanel">
-                <StackPanel Spacing="8">
-                    <TextBlock Text="BLE Connection" Classes="SectionHeader" />
-                    <Grid ColumnDefinitions="*,*">
-                        <StackPanel>
-                            <TextBlock Text="Status" Classes="DataLabel" />
-                            <TextBlock Text="{Binding BleStatus}" FontSize="16" Foreground="White" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="1">
-                            <TextBlock Text="Device" Classes="DataLabel" />
-                            <TextBlock Text="{Binding BleDeviceName}" FontSize="16" Foreground="White" />
-                        </StackPanel>
-                    </Grid>
-                    <StackPanel>
-                        <TextBlock Text="Address" Classes="DataLabel" />
-                        <TextBlock Text="{Binding BleAddress}" FontSize="12" Foreground="White" Opacity="0.7" />
-                    </StackPanel>
-                </StackPanel>
+                <Grid ColumnDefinitions="Auto,8,Auto,*,Auto">
+                    <TextBlock Text="BLE" FontSize="11" Foreground="White" Opacity="0.5"
+                               VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="2" Text="{Binding BleStatus}"
+                               FontSize="13" FontWeight="Bold" Foreground="White"
+                               VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="4" Text="{Binding BleAddress}"
+                               FontSize="11" Foreground="White" Opacity="0.5"
+                               VerticalAlignment="Center" />
+                </Grid>
             </Border>
 
             <!-- Refresh Button -->
