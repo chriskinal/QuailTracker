@@ -5,12 +5,12 @@
              x:DataType="vm:HealthViewModel">
 
     <ScrollViewer Padding="16">
-        <StackPanel Spacing="16">
+        <StackPanel Spacing="12">
 
-            <!-- Device / Battery / SD Card -->
+            <!-- Device / Battery / SD / Environment / BLE -->
             <Border Classes="CardPanel">
-                <StackPanel Spacing="6">
-                    <!-- Device: Station ID + Firmware on one line -->
+                <StackPanel Spacing="5">
+                    <!-- Line 1: Station ID + Firmware -->
                     <Grid ColumnDefinitions="Auto,*,Auto">
                         <TextBlock Text="{Binding StationId}" FontSize="16" FontWeight="Bold"
                                    Foreground="White" VerticalAlignment="Center" />
@@ -19,7 +19,7 @@
                                    VerticalAlignment="Center" />
                     </Grid>
 
-                    <!-- Battery: bar + percentage + voltage on one line -->
+                    <!-- Line 2: Battery bar + pct + voltage -->
                     <Grid ColumnDefinitions="Auto,*,Auto,Auto">
                         <TextBlock Text="Bat" FontSize="11" Foreground="White" Opacity="0.5"
                                    VerticalAlignment="Center" Width="28" />
@@ -35,7 +35,7 @@
                                    Opacity="0.5" VerticalAlignment="Center" />
                     </Grid>
 
-                    <!-- SD Card: bar + percentage + free space on one line -->
+                    <!-- Line 3: SD bar + pct + free -->
                     <Grid ColumnDefinitions="Auto,*,Auto,Auto">
                         <TextBlock Text="SD" FontSize="11" Foreground="White" Opacity="0.5"
                                    VerticalAlignment="Center" Width="28" />
@@ -50,85 +50,80 @@
                                    Margin="6,0,0,0" FontSize="11" Foreground="White"
                                    Opacity="0.5" VerticalAlignment="Center" />
                     </Grid>
+
+                    <!-- Line 4: Temp + Humidity -->
+                    <Grid ColumnDefinitions="Auto,6,Auto,*,Auto,6,Auto">
+                        <TextBlock Text="Temp" FontSize="11" Foreground="White" Opacity="0.5"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2" Text="{Binding Temperature}"
+                                   FontSize="13" FontWeight="Bold" Foreground="White"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="4" Text="Hum" FontSize="11" Foreground="White" Opacity="0.5"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="6" Text="{Binding Humidity}"
+                                   FontSize="13" FontWeight="Bold" Foreground="White"
+                                   VerticalAlignment="Center" />
+                    </Grid>
+
+                    <!-- Line 5: BLE status + address -->
+                    <Grid ColumnDefinitions="Auto,6,Auto,*,Auto">
+                        <TextBlock Text="BLE" FontSize="11" Foreground="White" Opacity="0.5"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2" Text="{Binding BleStatus}"
+                                   FontSize="13" FontWeight="Bold" Foreground="White"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="4" Text="{Binding BleAddress}"
+                                   FontSize="11" Foreground="White" Opacity="0.5"
+                                   VerticalAlignment="Center" />
+                    </Grid>
                 </StackPanel>
             </Border>
 
-            <!-- GPS Card -->
+            <!-- GPS -->
             <Border Classes="CardPanel">
-                <StackPanel Spacing="8">
-                    <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Text="GPS" Classes="SectionHeader" />
-                        <Border Grid.Column="1" CornerRadius="4" Padding="8,4"
+                <StackPanel Spacing="5">
+                    <!-- Line 1: Fix status + Sats + PPS -->
+                    <Grid ColumnDefinitions="Auto,8,Auto,*,Auto,8,Auto">
+                        <Border CornerRadius="4" Padding="6,2"
                                 Background="{Binding GpsColor}">
-                            <TextBlock Text="{Binding GpsStatus}" Foreground="White" FontSize="12" />
+                            <TextBlock Text="{Binding GpsStatus}" Foreground="White" FontSize="11" />
                         </Border>
+                        <TextBlock Grid.Column="2" Text="{Binding GpsSatellites, StringFormat={}{0} sats}"
+                                   FontSize="13" FontWeight="Bold" Foreground="White"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="4" Text="PPS" FontSize="11" Foreground="White" Opacity="0.5"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="6" Text="{Binding PpsStatus}"
+                                   FontSize="13" FontWeight="Bold" Foreground="White"
+                                   VerticalAlignment="Center" />
                     </Grid>
-                    <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto">
-                        <StackPanel>
-                            <TextBlock Text="Satellites" Classes="DataLabel" />
-                            <TextBlock Text="{Binding GpsSatellites}" FontSize="16" Foreground="White" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="1">
-                            <TextBlock Text="PPS" Classes="DataLabel" />
-                            <TextBlock Text="{Binding PpsStatus}" FontSize="16" Foreground="White" />
-                        </StackPanel>
-                        <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Margin="0,8,0,0">
-                            <TextBlock Text="Position" Classes="DataLabel" />
-                            <TextBlock Text="{Binding GpsPosition}" FontSize="14" Foreground="White" />
-                        </StackPanel>
+
+                    <!-- Line 2: Position + Time -->
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Text="{Binding GpsPosition}" FontSize="12" Foreground="White"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1" Text="{Binding GpsTime}"
+                                   FontSize="12" Foreground="White" Opacity="0.6"
+                                   VerticalAlignment="Center" />
                     </Grid>
-                    <TextBlock Text="{Binding GpsTime}" Classes="DataLabel" />
                 </StackPanel>
             </Border>
 
-            <!-- Environment -->
-            <Border Classes="CardPanel">
-                <Grid ColumnDefinitions="Auto,*,Auto,8,Auto,*,Auto">
-                    <TextBlock Text="Temp" FontSize="11" Foreground="White" Opacity="0.5"
-                               VerticalAlignment="Center" />
-                    <TextBlock Grid.Column="2" Text="{Binding Temperature}"
-                               FontSize="15" FontWeight="Bold" Foreground="White"
-                               VerticalAlignment="Center" />
-                    <TextBlock Grid.Column="4" Text="Hum" FontSize="11" Foreground="White" Opacity="0.5"
-                               VerticalAlignment="Center" />
-                    <TextBlock Grid.Column="6" Text="{Binding Humidity}"
-                               FontSize="15" FontWeight="Bold" Foreground="White"
-                               VerticalAlignment="Center" />
-                </Grid>
-            </Border>
-
-            <!-- BLE Connection -->
-            <Border Classes="CardPanel">
-                <Grid ColumnDefinitions="Auto,8,Auto,*,Auto">
-                    <TextBlock Text="BLE" FontSize="11" Foreground="White" Opacity="0.5"
-                               VerticalAlignment="Center" />
-                    <TextBlock Grid.Column="2" Text="{Binding BleStatus}"
-                               FontSize="13" FontWeight="Bold" Foreground="White"
-                               VerticalAlignment="Center" />
-                    <TextBlock Grid.Column="4" Text="{Binding BleAddress}"
-                               FontSize="11" Foreground="White" Opacity="0.5"
-                               VerticalAlignment="Center" />
-                </Grid>
-            </Border>
-
-            <!-- Refresh Button -->
-            <Border Classes="CardPanel">
-                <Grid ColumnDefinitions="*,Auto">
-                    <Button Grid.Column="1"
-                            Classes="ToolbarButton"
-                            Command="{Binding RefreshCommand}">
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <PathIcon Data="M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z"
-                                      Width="16" Height="16" />
-                            <TextBlock Text="Refresh" />
-                        </StackPanel>
-                    </Button>
-                </Grid>
-            </Border>
+            <!-- Refresh -->
+            <Button HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Center"
+                    Command="{Binding RefreshCommand}"
+                    Classes="ToolbarButton">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <PathIcon Data="M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z"
+                              Width="14" Height="14" />
+                    <TextBlock Text="Refresh" FontSize="13" />
+                </StackPanel>
+            </Button>
 
             <!-- Last Updated -->
             <TextBlock Text="{Binding LastUpdated, StringFormat=Last updated: {0}}"
-                       HorizontalAlignment="Center"
+                       HorizontalAlignment="Center" FontSize="11"
                        Classes="DataLabel" />
 
         </StackPanel>
