@@ -171,6 +171,8 @@ typedef struct _quailtracker_Config {
     uint32_t mission_mode; /* 0=record, 1=detect, 2=both */
     uint32_t det_threshold; /* 0-100 */
     uint32_t det_step_s; /* 1-3 */
+    /* Recording */
+    uint32_t chunk_minutes; /* 0=no chunking, 1-240 minutes */
     /* Survey-in */
     int32_t survey_lat_e7;
     int32_t survey_lon_e7;
@@ -229,6 +231,8 @@ typedef struct _quailtracker_SetConfig {
     uint32_t det_threshold;
     bool has_det_step_s;
     uint32_t det_step_s;
+    bool has_chunk_minutes;
+    uint32_t chunk_minutes;
 } quailtracker_SetConfig;
 
 typedef struct _quailtracker_OtaBegin {
@@ -309,8 +313,8 @@ extern "C" {
 #define quailtracker_Subscribe_init_default      {0, 0}
 #define quailtracker_Unsubscribe_init_default    {0}
 #define quailtracker_TimeWindow_init_default     {0, 0}
-#define quailtracker_Config_init_default         {0, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default}, 0, 0, 0, 0, 0, 0, 0}
-#define quailtracker_SetConfig_init_default      {false, 0, false, 0, false, 0, false, 0, false, "", false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, 0, {quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default}, false, 0, false, 0, false, 0}
+#define quailtracker_Config_init_default         {0, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default}, 0, 0, 0, 0, 0, 0, 0, 0}
+#define quailtracker_SetConfig_init_default      {false, 0, false, 0, false, 0, false, 0, false, "", false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, 0, {quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default, quailtracker_TimeWindow_init_default}, false, 0, false, 0, false, 0, false, 0}
 #define quailtracker_OtaBegin_init_default       {0, 0}
 #define quailtracker_OtaData_init_default        {{0, {0}}}
 #define quailtracker_OtaEnd_init_default         {0}
@@ -329,8 +333,8 @@ extern "C" {
 #define quailtracker_Subscribe_init_zero         {0, 0}
 #define quailtracker_Unsubscribe_init_zero       {0}
 #define quailtracker_TimeWindow_init_zero        {0, 0}
-#define quailtracker_Config_init_zero            {0, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero}, 0, 0, 0, 0, 0, 0, 0}
-#define quailtracker_SetConfig_init_zero         {false, 0, false, 0, false, 0, false, 0, false, "", false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, 0, {quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero}, false, 0, false, 0, false, 0}
+#define quailtracker_Config_init_zero            {0, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero}, 0, 0, 0, 0, 0, 0, 0, 0}
+#define quailtracker_SetConfig_init_zero         {false, 0, false, 0, false, 0, false, 0, false, "", false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, false, 0, 0, {quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero, quailtracker_TimeWindow_init_zero}, false, 0, false, 0, false, 0, false, 0}
 #define quailtracker_OtaBegin_init_zero          {0, 0}
 #define quailtracker_OtaData_init_zero           {{0, {0}}}
 #define quailtracker_OtaEnd_init_zero            {0}
@@ -431,6 +435,7 @@ extern "C" {
 #define quailtracker_Config_mission_mode_tag     60
 #define quailtracker_Config_det_threshold_tag    61
 #define quailtracker_Config_det_step_s_tag       62
+#define quailtracker_Config_chunk_minutes_tag    65
 #define quailtracker_Config_survey_lat_e7_tag    70
 #define quailtracker_Config_survey_lon_e7_tag    71
 #define quailtracker_Config_survey_alt_mm_tag    72
@@ -460,6 +465,7 @@ extern "C" {
 #define quailtracker_SetConfig_mission_mode_tag  60
 #define quailtracker_SetConfig_det_threshold_tag 61
 #define quailtracker_SetConfig_det_step_s_tag    62
+#define quailtracker_SetConfig_chunk_minutes_tag 65
 #define quailtracker_OtaBegin_size_bytes_tag     1
 #define quailtracker_OtaBegin_crc32_tag          2
 #define quailtracker_OtaData_chunk_tag           1
@@ -605,6 +611,7 @@ X(a, STATIC,   REPEATED, MESSAGE,  windows,          56) \
 X(a, STATIC,   SINGULAR, UINT32,   mission_mode,     60) \
 X(a, STATIC,   SINGULAR, UINT32,   det_threshold,    61) \
 X(a, STATIC,   SINGULAR, UINT32,   det_step_s,       62) \
+X(a, STATIC,   SINGULAR, UINT32,   chunk_minutes,    65) \
 X(a, STATIC,   SINGULAR, INT32,    survey_lat_e7,    70) \
 X(a, STATIC,   SINGULAR, INT32,    survey_lon_e7,    71) \
 X(a, STATIC,   SINGULAR, INT32,    survey_alt_mm,    72) \
@@ -638,7 +645,8 @@ X(a, STATIC,   OPTIONAL, UINT32,   sunset_after,     55) \
 X(a, STATIC,   REPEATED, MESSAGE,  windows,          56) \
 X(a, STATIC,   OPTIONAL, UINT32,   mission_mode,     60) \
 X(a, STATIC,   OPTIONAL, UINT32,   det_threshold,    61) \
-X(a, STATIC,   OPTIONAL, UINT32,   det_step_s,       62)
+X(a, STATIC,   OPTIONAL, UINT32,   det_step_s,       62) \
+X(a, STATIC,   OPTIONAL, UINT32,   chunk_minutes,    65)
 #define quailtracker_SetConfig_CALLBACK NULL
 #define quailtracker_SetConfig_DEFAULT NULL
 #define quailtracker_SetConfig_windows_MSGTYPE quailtracker_TimeWindow
@@ -730,7 +738,7 @@ extern const pb_msgdesc_t quailtracker_OtaStatus_msg;
 #define quailtracker_AudioLevel_size             30
 #define quailtracker_CommandAck_size             37
 #define quailtracker_Command_size                2
-#define quailtracker_Config_size                 332
+#define quailtracker_Config_size                 339
 #define quailtracker_Detection_size              67
 #define quailtracker_GpsFix_size                 72
 #define quailtracker_LogLine_size                130
@@ -742,7 +750,7 @@ extern const pb_msgdesc_t quailtracker_OtaStatus_msg;
 #define quailtracker_OtaRollback_size            0
 #define quailtracker_OtaStatus_size              24
 #define quailtracker_RecordingState_size         67
-#define quailtracker_SetConfig_size              283
+#define quailtracker_SetConfig_size              290
 #define quailtracker_Status_size                 318
 #define quailtracker_Subscribe_size              12
 #define quailtracker_TimeWindow_size             12

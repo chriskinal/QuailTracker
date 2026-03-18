@@ -134,7 +134,8 @@ typedef struct __attribute__((packed, aligned(16))) {
     uint8_t  missionMode;
     uint8_t  detConfThresh;
     uint8_t  detWindowStep;
-    uint8_t  _pad[128 - 99 - 4];
+    uint8_t  chunkMinutes;
+    uint8_t  _pad[128 - 100 - 4];
     uint32_t crc32;
 } device_config_t;
 
@@ -409,6 +410,7 @@ static void push_config_dump(void)
     msg.mission_mode = (uint32_t)cfg.missionMode;
     msg.det_threshold = (uint32_t)cfg.detConfThresh;
     msg.det_step_s = (uint32_t)cfg.detWindowStep;
+    msg.chunk_minutes = (uint32_t)cfg.chunkMinutes;
 
     /* Survey-in */
     msg.survey_lat_e7 = (int32_t)(cfg.surveyLat * 10000000.0f);
@@ -689,6 +691,9 @@ static void handle_set_config(const uint8_t *payload, size_t payload_len)
     }
     if (sc.has_det_step_s) {
         cfg.detWindowStep = (uint8_t)sc.det_step_s;
+    }
+    if (sc.has_chunk_minutes) {
+        cfg.chunkMinutes = (uint8_t)sc.chunk_minutes;
     }
 
     if (configSave()) {

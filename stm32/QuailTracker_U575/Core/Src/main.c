@@ -108,6 +108,7 @@ uint8_t sdMounted = 0;
 uint8_t audioStarted = 0;
 uint32_t totalDataBytes = 0;
 uint32_t fileCounter = 0;
+uint32_t recStartTick = 0;      /* HAL_GetTick() at recording start */
 
 /* PPS time sync state (shared with app_freertos.c GPS task) */
 volatile uint32_t ppsCount = 0;
@@ -697,6 +698,7 @@ void startRecording(void)
     extern uint32_t limiterClipCount;
     limiterClipCount = 0;
     isRecording = 1;
+    recStartTick = HAL_GetTick();
     fileCounter++;
 
     printf("Recording to %s...\r\n", fname);
@@ -773,6 +775,31 @@ void stopRecording(void)
     } else {
         printf("PPS: no edges during recording\r\n");
     }
+}
+
+/* Split recording into a new file (chunk boundary).
+ * Finalizes the current file and starts a new one seamlessly.
+ * The ring buffer keeps filling during the swap so no audio is lost. */
+void chunkRecording(void)
+{
+    if (!isRecording) return;
+
+    uint32_t seconds = 0;
+    if (recFormat == REC_FMT_WAV) {
+        seconds = totalDataBytes / (SAMPLE_RATE * 3);
+    } else {
+        seconds = (uint32_t)(flacEncoder.totalSamples / SAMPLE_RATE);
+    }
+
+    printf("Chunk: closing after %lus, starting new file...\r\n",
+           (unsigned long)seconds);
+
+    /* Temporarily clear isRecording so stopRecording doesn't reset filename
+     * used for logging, but we still need to finalize the file. */
+    stopRecording();
+
+    /* Immediately start a new recording with a fresh timestamp */
+    startRecording();
 }
 
 int formatSD(void)

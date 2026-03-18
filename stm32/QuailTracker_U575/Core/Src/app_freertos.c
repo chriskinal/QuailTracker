@@ -88,7 +88,8 @@ typedef struct __attribute__((packed, aligned(16))) {
     uint8_t  missionMode;     /* 0=record, 1=detect, 2=both */
     uint8_t  detConfThresh;   /* 0-100 confidence % threshold */
     uint8_t  detWindowStep;   /* 1-3 seconds inference window step */
-    uint8_t  _pad[128 - 99 - 4]; /* pad to 128 bytes: 99 pre-pad + 25 pad + 4 crc */
+    uint8_t  chunkMinutes;    /* 0=no chunking, 1-240 = chunk duration in minutes */
+    uint8_t  _pad[128 - 100 - 4]; /* pad to 128 bytes: 100 pre-pad + 24 pad + 4 crc */
     uint32_t crc32;           /* CRC-32 over bytes 0..123 */
 } device_config_t;
 
@@ -676,6 +677,16 @@ void StartAudioTask(void *argument)
             osMutexRelease(fileMtxHandle);
           }
         }
+        /* Step 7: Check chunk duration — split file if elapsed */
+        if (cfg.chunkMinutes > 0 && isRecording) {
+          extern uint32_t recStartTick;
+          uint32_t elapsedMs = HAL_GetTick() - recStartTick;
+          if (elapsedMs >= (uint32_t)cfg.chunkMinutes * 60000u) {
+            extern void chunkRecording(void);
+            chunkRecording();
+          }
+        }
+
 skip_write:
         (void)0; /* label requires a statement */
       }
@@ -2136,6 +2147,7 @@ static void configSetDefaults(device_config_t *c)
     c->missionMode = MISSION_RECORD;
     c->detConfThresh = 50;   /* 50% default threshold */
     c->detWindowStep = 3;    /* 3 seconds */
+    c->chunkMinutes = 30;    /* 30-minute file chunks */
     memset(c->_pad, 0xFF, sizeof(c->_pad));
     c->crc32 = 0;
 }
