@@ -9,45 +9,50 @@
 
             <!-- Recording Card -->
             <Border Classes="CardPanel">
-                <StackPanel Spacing="8">
-                    <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Text="Recording" Classes="SectionHeader" />
-                        <Border Grid.Column="1" CornerRadius="4" Padding="8,4"
-                                Background="{Binding RecordingColor}">
-                            <TextBlock Text="{Binding RecordingStatus}" Foreground="White" FontSize="12" />
-                        </Border>
+                <StackPanel Spacing="5">
+                    <!-- Line 1: Recording label + filename -->
+                    <Grid ColumnDefinitions="Auto,8,*">
+                        <TextBlock Text="Rec" FontSize="13" FontWeight="Bold"
+                                   Foreground="White" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2" Text="{Binding CurrentFile}"
+                                   FontSize="12" Foreground="White" Opacity="0.7"
+                                   TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center" />
                     </Grid>
-                    <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto">
-                        <StackPanel>
-                            <TextBlock Text="File" Classes="DataLabel" />
-                            <TextBlock Text="{Binding CurrentFile}" FontSize="14" TextTrimming="CharacterEllipsis" Foreground="White" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="1">
-                            <TextBlock Text="Size" Classes="DataLabel" />
-                            <TextBlock Text="{Binding FileSize}" FontSize="14" Foreground="White" />
-                        </StackPanel>
-                        <StackPanel Grid.Row="1" Margin="0,8,0,0">
-                            <TextBlock Text="Buffer" Classes="DataLabel" />
-                            <TextBlock Text="{Binding BufferStatus}" FontSize="14" Foreground="White" />
-                        </StackPanel>
-                        <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,8,0,0">
-                            <TextBlock Text="Overflows" Classes="DataLabel" />
-                            <TextBlock Text="{Binding Overflows}" FontSize="14" Foreground="White" />
-                        </StackPanel>
-                        <StackPanel Grid.Row="2" Grid.ColumnSpan="2" Margin="0,8,0,0">
-                            <TextBlock Text="Limiter Clips" Classes="DataLabel" />
-                            <TextBlock Text="{Binding LimiterClips}" FontSize="14" Foreground="White" />
-                        </StackPanel>
+
+                    <!-- Line 2: Size / Buffer / Overflows / Clips -->
+                    <Grid ColumnDefinitions="Auto,6,Auto,*,Auto,6,Auto,*,Auto,6,Auto,*,Auto,6,Auto">
+                        <TextBlock Text="Size" FontSize="10" Foreground="White" Opacity="0.5"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2" Text="{Binding FileSize}"
+                                   FontSize="12" FontWeight="Bold" Foreground="White"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="4" Text="Buf" FontSize="10" Foreground="White" Opacity="0.5"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="6" Text="{Binding BufferStatus}"
+                                   FontSize="12" FontWeight="Bold" Foreground="White"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="8" Text="Ovf" FontSize="10" Foreground="White" Opacity="0.5"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="10" Text="{Binding Overflows}"
+                                   FontSize="12" FontWeight="Bold" Foreground="White"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="12" Text="Clip" FontSize="10" Foreground="White" Opacity="0.5"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="14" Text="{Binding LimiterClips}"
+                                   FontSize="12" FontWeight="Bold" Foreground="White"
+                                   VerticalAlignment="Center" />
                     </Grid>
 
                     <!-- Record Button -->
                     <Button HorizontalAlignment="Stretch"
-                            Margin="0,8,0,0"
-                            Padding="16,12"
+                            Margin="0,4,0,0"
+                            Padding="12,10"
                             Command="{Binding ToggleRecordingCommand}"
                             Background="{Binding RecordingColor}">
                         <TextBlock Text="{Binding RecordButtonText}"
-                                   Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                                   Foreground="White" FontWeight="SemiBold"
+                                   FontSize="13" HorizontalAlignment="Center" />
                     </Button>
                 </StackPanel>
             </Border>
