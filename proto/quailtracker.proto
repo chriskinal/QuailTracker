@@ -15,6 +15,7 @@ message Status {
     // BLE
     bool   ble_ready        = 10;
     string ble_name         = 11;
+    string ble_addr         = 12;
 
     // SD
     bool   sd_mounted       = 20;

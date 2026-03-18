@@ -2,6 +2,7 @@
 # All strings need max_size, all repeated fields need max_count
 
 quailtracker.Status.ble_name            max_size:16
+quailtracker.Status.ble_addr            max_size:20
 quailtracker.Status.rec_filename        max_size:40
 quailtracker.Status.det_last_species    max_size:32
 quailtracker.Status.firmware_version    max_size:16

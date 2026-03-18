@@ -37,6 +37,7 @@ typedef struct _quailtracker_Status {
     /* BLE */
     bool ble_ready;
     char ble_name[16];
+    char ble_addr[20];
     /* SD */
     bool sd_mounted;
     uint32_t sd_total_kb;
@@ -297,7 +298,7 @@ extern "C" {
 
 
 /* Initializer values for message structs */
-#define quailtracker_Status_init_default         {0, 0, 0, "", 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, "", "", 0, 0, 0, 0, 0, 0}
+#define quailtracker_Status_init_default         {0, 0, 0, "", "", 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, "", "", 0, 0, 0, 0, 0, 0}
 #define quailtracker_GpsFix_init_default         {0, 0, 0, 0, 0, 0, 0, 0, ""}
 #define quailtracker_AudioLevel_init_default     {0, 0, 0, 0, 0}
 #define quailtracker_Detection_init_default      {"", 0, "", 0}
@@ -317,7 +318,7 @@ extern "C" {
 #define quailtracker_OtaAbort_init_default       {0}
 #define quailtracker_OtaRollback_init_default    {0}
 #define quailtracker_OtaStatus_init_default      {0, 0, 0, 0}
-#define quailtracker_Status_init_zero            {0, 0, 0, "", 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, "", "", 0, 0, 0, 0, 0, 0}
+#define quailtracker_Status_init_zero            {0, 0, 0, "", "", 0, 0, 0, 0, "", 0, 0, 0, 0, 0, 0, 0, "", 0, 0, 0, 0, 0, "", "", 0, 0, 0, 0, 0, 0}
 #define quailtracker_GpsFix_init_zero            {0, 0, 0, 0, 0, 0, 0, 0, ""}
 #define quailtracker_AudioLevel_init_zero        {0, 0, 0, 0, 0}
 #define quailtracker_Detection_init_zero         {"", 0, "", 0}
@@ -343,6 +344,7 @@ extern "C" {
 #define quailtracker_Status_battery_pct_tag      2
 #define quailtracker_Status_ble_ready_tag        10
 #define quailtracker_Status_ble_name_tag         11
+#define quailtracker_Status_ble_addr_tag         12
 #define quailtracker_Status_sd_mounted_tag       20
 #define quailtracker_Status_sd_total_kb_tag      21
 #define quailtracker_Status_sd_free_kb_tag       22
@@ -472,6 +474,7 @@ X(a, STATIC,   SINGULAR, UINT32,   battery_mv,        1) \
 X(a, STATIC,   SINGULAR, UINT32,   battery_pct,       2) \
 X(a, STATIC,   SINGULAR, BOOL,     ble_ready,        10) \
 X(a, STATIC,   SINGULAR, STRING,   ble_name,         11) \
+X(a, STATIC,   SINGULAR, STRING,   ble_addr,         12) \
 X(a, STATIC,   SINGULAR, BOOL,     sd_mounted,       20) \
 X(a, STATIC,   SINGULAR, UINT32,   sd_total_kb,      21) \
 X(a, STATIC,   SINGULAR, UINT32,   sd_free_kb,       22) \
@@ -740,7 +743,7 @@ extern const pb_msgdesc_t quailtracker_OtaStatus_msg;
 #define quailtracker_OtaStatus_size              24
 #define quailtracker_RecordingState_size         67
 #define quailtracker_SetConfig_size              283
-#define quailtracker_Status_size                 297
+#define quailtracker_Status_size                 318
 #define quailtracker_Subscribe_size              12
 #define quailtracker_TimeWindow_size             12
 #define quailtracker_Unsubscribe_size            6

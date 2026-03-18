@@ -972,6 +972,8 @@ public class BluetoothService : IBluetoothService
 
         c.BleModuleReady = s.BleReady;
         c.BleModuleName = s.BleName ?? "";
+        if (s.BleAddr is { Length: > 0 })
+            c.BleModuleAddr = s.BleAddr;
 
         c.Temperature = s.TemperatureC100 / 100f;
         c.Humidity = s.HumidityRh100 / 100f;

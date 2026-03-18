@@ -154,6 +154,7 @@ extern int formatSD(void);
 /* BLE state */
 extern uint8_t bleReady;
 extern char bleName[];
+extern char bleAddr[];
 
 /* Log forwarding */
 extern volatile uint8_t bleLogEnabled;
@@ -250,6 +251,7 @@ static void push_status(void)
     /* BLE */
     msg.ble_ready = bleReady ? true : false;
     strncpy(msg.ble_name, bleName, sizeof(msg.ble_name) - 1);
+    strncpy(msg.ble_addr, bleAddr, sizeof(msg.ble_addr) - 1);
 
     /* SD card */
     msg.sd_mounted = sdMounted ? true : false;

@@ -188,32 +188,6 @@
                 </StackPanel>
             </Border>
 
-            <!-- BLE Module Detail Card -->
-            <Border Classes="CardPanel">
-                <StackPanel Spacing="8">
-                    <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Text="BLE Module" Classes="SectionHeader" />
-                        <Border Grid.Column="1" CornerRadius="4" Padding="8,4"
-                                Background="{Binding BleColor}">
-                            <TextBlock Text="{Binding BleModule}" Foreground="White" FontSize="12" />
-                        </Border>
-                    </Grid>
-                    <Grid ColumnDefinitions="*,*">
-                        <StackPanel>
-                            <TextBlock Text="Name" Classes="DataLabel" />
-                            <TextBlock Text="{Binding BleName}" FontSize="14" Foreground="White" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="1">
-                            <TextBlock Text="Link" Classes="DataLabel" />
-                            <TextBlock Text="{Binding BleLink}" FontSize="14" Foreground="White" />
-                        </StackPanel>
-                    </Grid>
-                    <StackPanel>
-                        <TextBlock Text="Address" Classes="DataLabel" />
-                        <TextBlock Text="{Binding BleAddr}" FontSize="14" Foreground="White" />
-                    </StackPanel>
-                </StackPanel>
-            </Border>
 
             <!-- Refresh -->
             <Grid ColumnDefinitions="*,Auto">
