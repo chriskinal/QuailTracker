@@ -82,24 +82,26 @@
             <!-- GPS -->
             <Border Classes="CardPanel">
                 <StackPanel Spacing="5">
-                    <!-- Line 1: Fix status + Sats + PPS status + count + age -->
-                    <Grid ColumnDefinitions="Auto,8,Auto,*,Auto,6,Auto,6,Auto,6,Auto">
-                        <Border CornerRadius="4" Padding="6,2"
+                    <!-- Line 1: GPS label + Fix status + Sats + PPS status + count + age -->
+                    <Grid ColumnDefinitions="Auto,6,Auto,6,Auto,*,Auto,6,Auto,6,Auto,6,Auto">
+                        <TextBlock Text="GPS" FontSize="13" FontWeight="Bold"
+                                   Foreground="White" VerticalAlignment="Center" />
+                        <Border Grid.Column="2" CornerRadius="4" Padding="6,2"
                                 Background="{Binding GpsColor}">
                             <TextBlock Text="{Binding GpsStatus}" Foreground="White" FontSize="11" />
                         </Border>
-                        <TextBlock Grid.Column="2" Text="{Binding GpsSatellites}"
+                        <TextBlock Grid.Column="4" Text="{Binding GpsSatellites}"
                                    FontSize="13" FontWeight="Bold" Foreground="White"
                                    VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="4" Text="PPS" FontSize="11" Foreground="White" Opacity="0.5"
+                        <TextBlock Grid.Column="6" Text="PPS" FontSize="11" Foreground="White" Opacity="0.5"
                                    VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="6" Text="{Binding PpsStatus}"
+                        <TextBlock Grid.Column="8" Text="{Binding PpsStatus}"
                                    FontSize="12" FontWeight="Bold" Foreground="White"
                                    VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="8" Text="{Binding PpsCount}"
+                        <TextBlock Grid.Column="10" Text="{Binding PpsCount}"
                                    FontSize="11" Foreground="White" Opacity="0.5"
                                    VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="10" Text="{Binding PpsAge}"
+                        <TextBlock Grid.Column="12" Text="{Binding PpsAge}"
                                    FontSize="11" Foreground="White" Opacity="0.5"
                                    VerticalAlignment="Center" />
                     </Grid>

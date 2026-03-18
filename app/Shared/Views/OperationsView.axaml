@@ -108,24 +108,28 @@
                         </Border>
                     </Grid>
 
-                    <!-- Line 2: GPS position + time (live) -->
-                    <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Text="{Binding GpsPosition}" FontSize="12" Foreground="White"
-                                   Opacity="0.7" VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="1" Text="{Binding GpsTime}"
+                    <!-- Line 2: Current GPS position + time -->
+                    <Grid ColumnDefinitions="Auto,6,*,Auto">
+                        <TextBlock Text="Current" FontSize="11" Foreground="White" Opacity="0.5"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2" Text="{Binding GpsPosition}" FontSize="12"
+                                   Foreground="White" Opacity="0.7" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="3" Text="{Binding GpsTime}"
                                    FontSize="11" Foreground="White" Opacity="0.5"
                                    VerticalAlignment="Center" />
                     </Grid>
 
                     <!-- Line 3: Surveyed position + alt + fixes -->
-                    <Grid ColumnDefinitions="*,Auto,6,Auto">
-                        <TextBlock Text="{Binding SurveyPosition}" FontSize="12"
+                    <Grid ColumnDefinitions="Auto,6,*,Auto,6,Auto">
+                        <TextBlock Text="Survey" FontSize="11" Foreground="White" Opacity="0.5"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2" Text="{Binding SurveyPosition}" FontSize="12"
                                    FontWeight="Bold" Foreground="White"
                                    VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="1" Text="{Binding SurveyAltitude}"
+                        <TextBlock Grid.Column="3" Text="{Binding SurveyAltitude}"
                                    FontSize="11" Foreground="White" Opacity="0.6"
                                    VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="3" Text="{Binding SurveyCount}"
+                        <TextBlock Grid.Column="5" Text="{Binding SurveyCount}"
                                    FontSize="11" Foreground="White" Opacity="0.6"
                                    VerticalAlignment="Center" />
                     </Grid>

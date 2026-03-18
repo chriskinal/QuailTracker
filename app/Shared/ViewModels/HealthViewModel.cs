@@ -123,7 +123,7 @@ public partial class HealthViewModel : ObservableObject
             : "---, ---";
         GpsTime = status.GpsTime?.ToString("HH:mm:ss UTC") ?? "--:--:--";
         PpsStatus = status.PpsValid ? "OK" : "--";
-        PpsCount = status.PpsCount > 0 ? $"#{status.PpsCount}" : "";
+        PpsCount = status.PpsCount > 0 ? $"Count {status.PpsCount}" : "";
         PpsAge = status.PpsAgeMs > 0 ? $"{status.PpsAgeMs}ms" : "";
         GpsColor = status.GpsValid ? "#4CAF50" : "#F44336";
 
