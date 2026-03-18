@@ -136,7 +136,7 @@ public partial class OperationsViewModel : ObservableObject
         // Survey-In
         _gpsSatCount = status.GpsSatellites;
         SurveyActive = status.SurveyActive;
-        SurveyCount = status.SurveyCount.ToString();
+        SurveyCount = status.SurveyCount > 0 ? $"{status.SurveyCount} fixes" : "0";
         SurveyButtonText = status.SurveyActive ? "Stop Survey" : "Start Survey";
         SurveyButtonColor = status.SurveyActive ? "#FF9800" : "#DD34495E";
         CanStartSurvey = status.GpsSatellites >= 4 && !status.IsRecording;

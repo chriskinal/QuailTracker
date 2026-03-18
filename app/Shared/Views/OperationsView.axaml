@@ -95,99 +95,64 @@
                 </StackPanel>
             </Border>
 
-            <!-- GPS Detail Card -->
+            <!-- Location Survey (includes GPS position) -->
             <Border Classes="CardPanel">
-                <StackPanel Spacing="8">
+                <StackPanel Spacing="5">
+                    <!-- Line 1: Survey header + badge -->
                     <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Text="GPS" Classes="SectionHeader" />
-                        <Border Grid.Column="1" CornerRadius="4" Padding="8,4"
-                                Background="{Binding GpsColor}">
-                            <TextBlock Text="{Binding GpsFixType}" Foreground="White" FontSize="12" />
-                        </Border>
-                    </Grid>
-                    <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto">
-                        <StackPanel>
-                            <TextBlock Text="Satellites" Classes="DataLabel" />
-                            <TextBlock Text="{Binding GpsSatellites}" FontSize="16" Foreground="White" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="1">
-                            <TextBlock Text="Date" Classes="DataLabel" />
-                            <TextBlock Text="{Binding GpsDate}" FontSize="16" Foreground="White" />
-                        </StackPanel>
-                        <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Margin="0,8,0,0">
-                            <TextBlock Text="Position" Classes="DataLabel" />
-                            <TextBlock Text="{Binding GpsPosition}" FontSize="14" Foreground="White" />
-                        </StackPanel>
-                        <StackPanel Grid.Row="2" Margin="0,8,0,0">
-                            <TextBlock Text="UTC Time" Classes="DataLabel" />
-                            <TextBlock Text="{Binding GpsTime}" FontSize="14" Foreground="White" />
-                        </StackPanel>
-                    </Grid>
-                    <Grid ColumnDefinitions="*,*,*">
-                        <StackPanel>
-                            <TextBlock Text="PPS" Classes="DataLabel" />
-                            <TextBlock Text="{Binding PpsStatus}" FontSize="14" Foreground="White" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="1">
-                            <TextBlock Text="PPS Count" Classes="DataLabel" />
-                            <TextBlock Text="{Binding PpsCount}" FontSize="14" Foreground="White" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="2">
-                            <TextBlock Text="PPS Age" Classes="DataLabel" />
-                            <TextBlock Text="{Binding PpsAge}" FontSize="14" Foreground="White" />
-                        </StackPanel>
-                    </Grid>
-                </StackPanel>
-            </Border>
-
-            <!-- Location Survey Card -->
-            <Border Classes="CardPanel">
-                <StackPanel Spacing="8">
-                    <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Text="Location Survey" Classes="SectionHeader" />
-                        <Border Grid.Column="1" CornerRadius="4" Padding="8,4"
+                        <TextBlock Text="Location Survey" FontSize="13" FontWeight="Bold"
+                                   Foreground="White" VerticalAlignment="Center" />
+                        <Border Grid.Column="1" CornerRadius="4" Padding="6,2"
                                 Background="{Binding SurveyColor}">
-                            <TextBlock Text="{Binding SurveyBadge}" Foreground="White" FontSize="12" />
+                            <TextBlock Text="{Binding SurveyBadge}" Foreground="White" FontSize="11" />
                         </Border>
                     </Grid>
-                    <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto">
-                        <StackPanel Grid.ColumnSpan="2">
-                            <TextBlock Text="Surveyed Position" Classes="DataLabel" />
-                            <TextBlock Text="{Binding SurveyPosition}" FontSize="14" Foreground="White" />
-                        </StackPanel>
-                        <StackPanel Grid.Row="1" Margin="0,8,0,0">
-                            <TextBlock Text="Altitude" Classes="DataLabel" />
-                            <TextBlock Text="{Binding SurveyAltitude}" FontSize="14" Foreground="White" />
-                        </StackPanel>
-                        <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,8,0,0">
-                            <TextBlock Text="Fix Count" Classes="DataLabel" />
-                            <TextBlock Text="{Binding SurveyCount}" FontSize="14" Foreground="White" />
-                        </StackPanel>
+
+                    <!-- Line 2: GPS position + time (live) -->
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Text="{Binding GpsPosition}" FontSize="12" Foreground="White"
+                                   Opacity="0.7" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1" Text="{Binding GpsTime}"
+                                   FontSize="11" Foreground="White" Opacity="0.5"
+                                   VerticalAlignment="Center" />
                     </Grid>
 
-                    <!-- Warning when not enough satellites -->
+                    <!-- Line 3: Surveyed position + alt + fixes -->
+                    <Grid ColumnDefinitions="*,Auto,6,Auto">
+                        <TextBlock Text="{Binding SurveyPosition}" FontSize="12"
+                                   FontWeight="Bold" Foreground="White"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1" Text="{Binding SurveyAltitude}"
+                                   FontSize="11" Foreground="White" Opacity="0.6"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="3" Text="{Binding SurveyCount}"
+                                   FontSize="11" Foreground="White" Opacity="0.6"
+                                   VerticalAlignment="Center" />
+                    </Grid>
+
+                    <!-- Warning -->
                     <TextBlock Text="Need 4+ satellites to survey"
-                               FontSize="12" Foreground="#FFC107"
+                               FontSize="11" Foreground="#FFC107"
                                IsVisible="{Binding !CanStartSurvey}" />
 
                     <!-- Survey Buttons -->
                     <Grid ColumnDefinitions="*,8,*">
                         <Button Grid.Column="0"
                                 HorizontalAlignment="Stretch"
-                                Padding="16,12"
+                                Padding="12,10"
                                 CornerRadius="6"
                                 BorderThickness="0"
                                 Background="{Binding SurveyButtonColor}"
                                 Command="{Binding ToggleSurveyCommand}">
                             <TextBlock Text="{Binding SurveyButtonText}"
                                        Foreground="White" FontWeight="SemiBold"
-                                       HorizontalAlignment="Center" />
+                                       FontSize="13" HorizontalAlignment="Center" />
                         </Button>
                         <Button Grid.Column="2"
                                 HorizontalAlignment="Stretch"
                                 Classes="DangerButton"
                                 Command="{Binding ClearSurveyCommand}">
-                            <TextBlock Text="Clear" HorizontalAlignment="Center" />
+                            <TextBlock Text="Clear" FontSize="13" HorizontalAlignment="Center" />
                         </Button>
                     </Grid>
                 </StackPanel>

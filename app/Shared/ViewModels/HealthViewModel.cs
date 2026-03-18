@@ -45,6 +45,8 @@ public partial class HealthViewModel : ObservableObject
     [ObservableProperty] private string _gpsPosition = "---, ---";
     [ObservableProperty] private string _gpsTime = "--:--:--";
     [ObservableProperty] private string _ppsStatus = "No Signal";
+    [ObservableProperty] private string _ppsCount = "";
+    [ObservableProperty] private string _ppsAge = "";
     [ObservableProperty] private string _gpsColor = "#808080";
 
     // Environment
@@ -120,7 +122,9 @@ public partial class HealthViewModel : ObservableObject
             ? $"{status.Latitude:F6}, {status.Longitude:F6}"
             : "---, ---";
         GpsTime = status.GpsTime?.ToString("HH:mm:ss UTC") ?? "--:--:--";
-        PpsStatus = status.PpsValid ? "OK" : "No Signal";
+        PpsStatus = status.PpsValid ? "OK" : "--";
+        PpsCount = status.PpsCount > 0 ? $"#{status.PpsCount}" : "";
+        PpsAge = status.PpsAgeMs > 0 ? $"{status.PpsAgeMs}ms" : "";
         GpsColor = status.GpsValid ? "#4CAF50" : "#F44336";
 
         // Environment
