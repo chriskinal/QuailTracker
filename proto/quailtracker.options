@@ -1,0 +1,27 @@
+# Nanopb field size constraints for static allocation on STM32
+# All strings need max_size, all repeated fields need max_count
+
+quailtracker.Status.ble_name            max_size:16
+quailtracker.Status.rec_filename        max_size:40
+quailtracker.Status.det_last_species    max_size:32
+quailtracker.Status.firmware_version    max_size:16
+quailtracker.Status.station_id          max_size:16
+
+quailtracker.GpsFix.utc_time            max_size:16
+
+quailtracker.Detection.species          max_size:32
+quailtracker.Detection.utc_time         max_size:16
+
+quailtracker.LogLine.text               max_size:128
+
+quailtracker.CommandAck.error           max_size:32
+
+quailtracker.Config.station_id          max_size:16
+quailtracker.Config.windows             max_count:8
+
+quailtracker.SetConfig.station_id       max_size:16
+quailtracker.SetConfig.windows          max_count:8
+
+quailtracker.RecordingState.filename    max_size:40
+
+quailtracker.OtaData.chunk              max_size:128

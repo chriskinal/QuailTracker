@@ -1,0 +1,236 @@
+// QuailTracker BLE Protocol — Protobuf Message Definitions
+// This file is the single source of truth for both firmware (nanopb/C)
+// and app (Google.Protobuf/C#) code generation.
+
+syntax = "proto3";
+package quailtracker;
+
+// ===== Device → App: Push Messages =====
+
+message Status {
+    // Battery
+    uint32 battery_mv       = 1;
+    uint32 battery_pct      = 2;   // 0-100
+
+    // BLE
+    bool   ble_ready        = 10;
+    string ble_name         = 11;
+
+    // SD
+    bool   sd_mounted       = 20;
+    uint32 sd_total_kb      = 21;
+    uint32 sd_free_kb       = 22;
+
+    // Recording
+    bool   recording        = 30;
+    string rec_filename     = 31;
+    uint32 rec_bytes        = 32;
+    uint32 rec_duration_s   = 33;
+    uint32 rec_overruns     = 34;
+    uint32 rec_format       = 35;  // 0=FLAC, 1=WAV
+
+    // Detection
+    bool   det_active       = 40;
+    uint32 det_windows      = 41;
+    uint32 det_hits         = 42;
+    string det_last_species = 43;
+    bool   model_loaded     = 44;
+    uint32 model_size       = 45;
+    uint32 model_labels     = 46;
+
+    // Environment
+    int32  temperature_c100 = 50;  // hundredths of °C
+    uint32 humidity_rh100   = 51;  // hundredths of %RH
+
+    // Firmware
+    string firmware_version = 60;
+    string station_id       = 61;
+}
+
+message GpsFix {
+    bool   valid            = 1;
+    uint32 satellites       = 2;
+    int32  latitude_e7      = 3;   // degrees × 10^7
+    int32  longitude_e7     = 4;
+    int32  altitude_mm      = 5;
+    uint32 fix_type         = 6;   // 0=none, 1=2D, 2=3D
+    bool   pps_synced       = 7;
+    uint32 pps_count        = 8;
+    string utc_time         = 9;   // YYYYMMDDHHMMSS
+}
+
+message AudioLevel {
+    uint32 peak             = 1;   // 0-32767
+    uint32 activity_pct     = 2;   // 0-100
+    uint32 clip_count       = 3;
+    uint32 buf_used         = 4;
+    uint32 buf_capacity     = 5;
+}
+
+message Detection {
+    string species          = 1;
+    uint32 confidence       = 2;   // 0-100
+    string utc_time         = 3;
+    uint64 window_sample    = 4;
+}
+
+message RecordingState {
+    bool   active           = 1;
+    string filename         = 2;
+    uint32 bytes_written    = 3;
+    uint32 duration_s       = 4;
+    uint32 overruns         = 5;
+    uint32 sd_free_kb       = 6;
+}
+
+message LogLine {
+    string text             = 1;
+}
+
+// ===== App → Device: Commands =====
+
+enum CommandType {
+    CMD_NONE            = 0;
+    CMD_REC_START       = 1;
+    CMD_REC_STOP        = 2;
+    CMD_REC_TOGGLE      = 3;
+    CMD_SD_MOUNT        = 10;
+    CMD_SD_EJECT        = 11;
+    CMD_SD_FORMAT       = 12;
+    CMD_GET_STATUS      = 20;
+    CMD_GET_CONFIG      = 21;
+    CMD_MODEL_RELOAD    = 30;
+    CMD_MODEL_STATUS    = 31;
+    CMD_DET_STATUS      = 32;
+    CMD_SURVEY_START    = 40;
+    CMD_SURVEY_STOP     = 41;
+    CMD_SURVEY_CLEAR    = 42;
+    CMD_LOGS_TOGGLE     = 50;
+}
+
+message Command {
+    CommandType type     = 1;
+}
+
+message CommandAck {
+    CommandType type     = 1;
+    bool        success  = 2;
+    string      error    = 3;   // empty on success
+}
+
+// ===== App → Device: Subscribe/Unsubscribe =====
+
+message Subscribe {
+    uint32 topic         = 1;   // Topic enum value
+    uint32 interval_ms   = 2;   // 0 = on-change only, >0 = periodic push
+}
+
+message Unsubscribe {
+    uint32 topic         = 1;
+}
+
+// ===== Configuration =====
+
+message TimeWindow {
+    uint32 start_hhmm       = 1;  // e.g., 600 = 06:00
+    uint32 end_hhmm         = 2;  // e.g., 900 = 09:00
+}
+
+message Config {
+    // Audio
+    uint32 gain             = 1;   // 0-24, 3dB steps
+    uint32 bpf_low_hz       = 2;
+    uint32 bpf_high_hz      = 3;
+    uint32 sample_rate      = 4;
+    uint32 rec_format       = 5;   // 0=FLAC, 1=WAV
+
+    // Station
+    string station_id       = 10;
+
+    // Amplitude trigger
+    bool   trig_enabled     = 20;
+    int32  trig_db          = 21;  // -60 to 0
+    uint32 trig_pre_s       = 22;  // 0-30
+    uint32 trig_post_s      = 23;  // 0-60
+
+    // Battery
+    uint32 low_bat_pct      = 30;  // 0-100
+    bool   auto_stop        = 31;
+
+    // Activity filter
+    uint32 act_mode         = 40;  // 0-3
+    uint32 act_min_pct      = 41;
+    uint32 act_max_pct      = 42;
+    uint32 act_hold_s       = 43;
+
+    // Scheduling
+    bool   sunrise_enabled  = 50;
+    uint32 sunrise_before   = 51;
+    uint32 sunrise_after    = 52;
+    bool   sunset_enabled   = 53;
+    uint32 sunset_before    = 54;
+    uint32 sunset_after     = 55;
+    repeated TimeWindow windows = 56;  // max 8
+
+    // Detection
+    uint32 mission_mode     = 60;  // 0=record, 1=detect, 2=both
+    uint32 det_threshold    = 61;  // 0-100
+    uint32 det_step_s       = 62;  // 1-3
+
+    // Survey-in
+    int32  survey_lat_e7    = 70;
+    int32  survey_lon_e7    = 71;
+    int32  survey_alt_mm    = 72;
+    uint32 survey_count     = 73;
+}
+
+message SetConfig {
+    optional uint32 gain             = 1;
+    optional uint32 bpf_low_hz       = 2;
+    optional uint32 bpf_high_hz      = 3;
+    optional uint32 rec_format       = 5;
+    optional string station_id       = 10;
+    optional bool   trig_enabled     = 20;
+    optional int32  trig_db          = 21;
+    optional uint32 trig_pre_s       = 22;
+    optional uint32 trig_post_s      = 23;
+    optional uint32 low_bat_pct      = 30;
+    optional bool   auto_stop        = 31;
+    optional uint32 act_mode         = 40;
+    optional uint32 act_min_pct      = 41;
+    optional uint32 act_max_pct      = 42;
+    optional uint32 act_hold_s       = 43;
+    optional bool   sunrise_enabled  = 50;
+    optional uint32 sunrise_before   = 51;
+    optional uint32 sunrise_after    = 52;
+    optional bool   sunset_enabled   = 53;
+    optional uint32 sunset_before    = 54;
+    optional uint32 sunset_after     = 55;
+    repeated TimeWindow windows      = 56;
+    optional uint32 mission_mode     = 60;
+    optional uint32 det_threshold    = 61;
+    optional uint32 det_step_s       = 62;
+}
+
+// ===== OTA =====
+
+message OtaBegin {
+    uint32 size_bytes       = 1;
+    uint32 crc32            = 2;
+}
+
+message OtaData {
+    bytes  chunk            = 1;   // raw firmware bytes, up to 128 per frame
+}
+
+message OtaEnd {}
+message OtaCommit {}
+message OtaAbort {}
+message OtaRollback {}
+
+message OtaStatus {
+    uint32 state            = 1;   // 0=idle, 1=receiving, 2=complete
+    uint32 bytes_received   = 2;
+    uint32 pages_written    = 3;
+    uint32 pages_total      = 4;
+}

@@ -13,6 +13,11 @@
     <PackageReference Include="Avalonia.Svg.Skia" Version="11.2.*" />
     <PackageReference Include="Avalonia.ReactiveUI" Version="11.2.*" />
     <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.1.1" />
+    <PackageReference Include="Google.Protobuf" Version="3.34.0" />
+    <PackageReference Include="Grpc.Tools" Version="2.78.0">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
     <!--BLE-->
     <PackageReference Include="Plugin.BLE" Version="3.1.*" />
     <!--MVVM-->
@@ -21,5 +26,9 @@
 
   <ItemGroup>
     <AvaloniaResource Include="Assets\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="..\..\proto\quailtracker.proto" GrpcServices="None" />
   </ItemGroup>
 </Project>
