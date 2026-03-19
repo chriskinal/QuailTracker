@@ -11,6 +11,7 @@
     <CodesignKey>Apple Development</CodesignKey>
     <CodesignProvision>Automatic</CodesignProvision>
     <DevTeamId>7LRC55SQS3</DevTeamId>
+    <XSAppIconAssets>Assets.xcassets/AppIcon.appiconset</XSAppIconAssets>
   </PropertyGroup>
 
   <ItemGroup>
