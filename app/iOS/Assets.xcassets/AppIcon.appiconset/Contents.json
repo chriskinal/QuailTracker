@@ -1,9 +1,33 @@
 {
   "images": [
     {
+      "filename": "appicon-76.png",
+      "idiom": "ipad",
+      "scale": "1x",
+      "size": "76x76"
+    },
+    {
+      "filename": "appicon-152.png",
+      "idiom": "ipad",
+      "scale": "2x",
+      "size": "76x76"
+    },
+    {
+      "filename": "appicon-120.png",
+      "idiom": "iphone",
+      "scale": "2x",
+      "size": "60x60"
+    },
+    {
+      "filename": "appicon-180.png",
+      "idiom": "iphone",
+      "scale": "3x",
+      "size": "60x60"
+    },
+    {
       "filename": "appicon-1024.png",
-      "idiom": "universal",
-      "platform": "ios",
+      "idiom": "ios-marketing",
+      "scale": "1x",
       "size": "1024x1024"
     }
   ],
