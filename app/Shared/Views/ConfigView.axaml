@@ -5,287 +5,256 @@
              x:DataType="vm:ConfigViewModel">
 
     <ScrollViewer Padding="16">
-        <StackPanel Spacing="16">
+        <StackPanel Spacing="12">
 
-            <!-- Station Identity -->
+            <!-- Station + Audio -->
             <Border Classes="CardPanel">
-                <StackPanel Spacing="12">
-                    <TextBlock Text="Station Identity" Classes="SectionHeader" />
-                    <StackPanel Spacing="4">
-                        <TextBlock Text="Station ID" Classes="DataLabel" />
-                        <TextBox Text="{Binding StationId}"
+                <StackPanel Spacing="8">
+                    <!-- Station ID -->
+                    <Grid ColumnDefinitions="Auto,8,*">
+                        <TextBlock Text="Station" FontSize="13" FontWeight="Bold"
+                                   Foreground="White" VerticalAlignment="Center" />
+                        <TextBox Grid.Column="2" Text="{Binding StationId}"
                                  Watermark="e.g., QT001" />
-                    </StackPanel>
-                </StackPanel>
-            </Border>
+                    </Grid>
 
-            <!-- Audio Settings -->
-            <Border Classes="CardPanel">
-                <StackPanel Spacing="12">
-                    <TextBlock Text="Audio Settings" Classes="SectionHeader" />
-
-                    <StackPanel Spacing="4">
-                        <TextBlock Text="Microphone Gain" Classes="DataLabel" />
-                        <ComboBox ItemsSource="{Binding GainOptions}"
-                                  SelectedIndex="{Binding SelectedGainIndex}"
-                                  HorizontalAlignment="Stretch" />
-                    </StackPanel>
-
-                    <StackPanel Spacing="4">
-                        <Grid ColumnDefinitions="*,Auto">
-                            <TextBlock Text="Low Cutoff (HPF)" Classes="DataLabel" />
-                            <TextBlock Grid.Column="1"
-                                       Text="{Binding BandPassLowHz, StringFormat={}{0} Hz}"
-                                       Classes="DataLabel" />
-                        </Grid>
-                        <Slider Value="{Binding BandPassLowHz}"
-                                Minimum="0" Maximum="1500"
-                                TickFrequency="10" IsSnapToTickEnabled="True" />
-                        <TextBlock Text="0 = disabled" Classes="DataLabel"
-                                   FontSize="11" Opacity="0.6" />
-                    </StackPanel>
-
-                    <StackPanel Spacing="4">
-                        <Grid ColumnDefinitions="*,Auto">
-                            <TextBlock Text="High Cutoff (LPF)" Classes="DataLabel" />
-                            <TextBlock Grid.Column="1"
-                                       Text="{Binding BandPassHighHz, StringFormat={}{0} Hz}"
-                                       Classes="DataLabel" />
-                        </Grid>
-                        <Slider Value="{Binding BandPassHighHz}"
-                                Minimum="1000" Maximum="24000"
-                                TickFrequency="500" IsSnapToTickEnabled="True" />
-                        <TextBlock Text="0 = disabled" Classes="DataLabel"
-                                   FontSize="11" Opacity="0.6" />
-                    </StackPanel>
-
-                    <Grid ColumnDefinitions="*,12,*">
-                        <StackPanel Spacing="4">
-                            <TextBlock Text="Sample Rate" Classes="DataLabel" />
-                            <ComboBox ItemsSource="{Binding SampleRateOptions}"
-                                      SelectedIndex="{Binding SelectedSampleRateIndex}"
+                    <!-- Gain + Format + Sample Rate on one row -->
+                    <Grid ColumnDefinitions="*,8,*,8,*">
+                        <StackPanel Spacing="2">
+                            <TextBlock Text="Gain" FontSize="11" Foreground="White" Opacity="0.5" />
+                            <ComboBox ItemsSource="{Binding GainOptions}"
+                                      SelectedIndex="{Binding SelectedGainIndex}"
                                       HorizontalAlignment="Stretch" />
                         </StackPanel>
-                        <StackPanel Grid.Column="2" Spacing="4">
-                            <TextBlock Text="Format" Classes="DataLabel" />
+                        <StackPanel Grid.Column="2" Spacing="2">
+                            <TextBlock Text="Format" FontSize="11" Foreground="White" Opacity="0.5" />
                             <ComboBox ItemsSource="{Binding FormatOptions}"
                                       SelectedIndex="{Binding SelectedFormatIndex}"
                                       HorizontalAlignment="Stretch" />
                         </StackPanel>
+                        <StackPanel Grid.Column="4" Spacing="2">
+                            <TextBlock Text="Rate" FontSize="11" Foreground="White" Opacity="0.5" />
+                            <ComboBox ItemsSource="{Binding SampleRateOptions}"
+                                      SelectedIndex="{Binding SelectedSampleRateIndex}"
+                                      HorizontalAlignment="Stretch" />
+                        </StackPanel>
                     </Grid>
 
-                    <!-- Chunk Duration -->
-                    <StackPanel Spacing="4">
-                        <Grid ColumnDefinitions="*,Auto">
-                            <TextBlock Text="File Chunk Duration" Classes="DataLabel" />
-                            <TextBlock Grid.Column="1"
-                                       Text="{Binding ChunkMinutesLabel}"
-                                       Foreground="White" FontSize="12" />
-                        </Grid>
-                        <Slider Minimum="0" Maximum="120"
+                    <!-- HPF slider -->
+                    <Grid ColumnDefinitions="Auto,*,Auto">
+                        <TextBlock Text="HPF" FontSize="11" Foreground="White" Opacity="0.5"
+                                   VerticalAlignment="Center" Width="30" />
+                        <Slider Grid.Column="1" Value="{Binding BandPassLowHz}"
+                                Minimum="0" Maximum="1500"
+                                TickFrequency="10" IsSnapToTickEnabled="True" />
+                        <TextBlock Grid.Column="2" Text="{Binding BandPassLowHz, StringFormat={}{0} Hz}"
+                                   FontSize="11" Foreground="White" Opacity="0.6"
+                                   VerticalAlignment="Center" Width="55" TextAlignment="Right" />
+                    </Grid>
+
+                    <!-- LPF slider -->
+                    <Grid ColumnDefinitions="Auto,*,Auto">
+                        <TextBlock Text="LPF" FontSize="11" Foreground="White" Opacity="0.5"
+                                   VerticalAlignment="Center" Width="30" />
+                        <Slider Grid.Column="1" Value="{Binding BandPassHighHz}"
+                                Minimum="1000" Maximum="24000"
+                                TickFrequency="500" IsSnapToTickEnabled="True" />
+                        <TextBlock Grid.Column="2" Text="{Binding BandPassHighHz, StringFormat={}{0} Hz}"
+                                   FontSize="11" Foreground="White" Opacity="0.6"
+                                   VerticalAlignment="Center" Width="55" TextAlignment="Right" />
+                    </Grid>
+
+                    <!-- Chunk duration slider -->
+                    <Grid ColumnDefinitions="Auto,*,Auto">
+                        <TextBlock Text="Chunk" FontSize="11" Foreground="White" Opacity="0.5"
+                                   VerticalAlignment="Center" Width="30" />
+                        <Slider Grid.Column="1" Minimum="0" Maximum="120"
                                 Value="{Binding ChunkMinutes}"
                                 TickFrequency="15" IsSnapToTickEnabled="True" />
-                    </StackPanel>
+                        <TextBlock Grid.Column="2" Text="{Binding ChunkMinutesLabel}"
+                                   FontSize="11" Foreground="White" Opacity="0.6"
+                                   VerticalAlignment="Center" Width="55" TextAlignment="Right" />
+                    </Grid>
                 </StackPanel>
             </Border>
 
             <!-- Activity Filter -->
             <Border Classes="CardPanel">
-                <StackPanel Spacing="12">
-                    <TextBlock Text="Activity Filter" Classes="SectionHeader" />
-
-                    <StackPanel Spacing="4">
-                        <TextBlock Text="Mode" Classes="DataLabel" />
-                        <ComboBox ItemsSource="{Binding ActivityModeOptions}"
+                <StackPanel Spacing="8">
+                    <Grid ColumnDefinitions="Auto,8,*">
+                        <TextBlock Text="Activity Filter" FontSize="13" FontWeight="Bold"
+                                   Foreground="White" VerticalAlignment="Center" />
+                        <ComboBox Grid.Column="2" ItemsSource="{Binding ActivityModeOptions}"
                                   SelectedIndex="{Binding SelectedActivityModeIndex}"
                                   HorizontalAlignment="Stretch" />
-                    </StackPanel>
+                    </Grid>
 
-                    <!-- Live activity ratio (visible when mode > Off) -->
-                    <StackPanel Spacing="4"
-                                IsVisible="{Binding IsActivityFilterEnabled}">
-                        <Grid ColumnDefinitions="*,Auto">
-                            <TextBlock Text="Activity Ratio" Classes="DataLabel" />
-                            <TextBlock Grid.Column="1"
-                                       Text="{Binding ActivityRatio, StringFormat={}{0}%}"
-                                       Classes="DataLabel" />
-                        </Grid>
-                        <ProgressBar Value="{Binding ActivityRatio}" Maximum="100"
-                                     Height="16" CornerRadius="4"
-                                     Foreground="#FF9800" />
-                    </StackPanel>
+                    <!-- Activity ratio bar (visible when enabled) -->
+                    <Grid ColumnDefinitions="Auto,*,Auto"
+                          IsVisible="{Binding IsActivityFilterEnabled}">
+                        <TextBlock Text="Act" FontSize="11" Foreground="White" Opacity="0.5"
+                                   VerticalAlignment="Center" Width="30" />
+                        <ProgressBar Grid.Column="1" Value="{Binding ActivityRatio}" Maximum="100"
+                                     Height="10" CornerRadius="4"
+                                     Foreground="#FF9800" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2" Text="{Binding ActivityRatio, StringFormat={}{0}%}"
+                                   FontSize="11" Foreground="White" Opacity="0.6"
+                                   VerticalAlignment="Center" Width="35" TextAlignment="Right" />
+                    </Grid>
 
-                    <StackPanel Spacing="12"
-                                IsEnabled="{Binding IsActivityFilterEnabled}">
-                        <StackPanel Spacing="4">
-                            <Grid ColumnDefinitions="*,Auto">
-                                <TextBlock Text="Min Activity %" Classes="DataLabel" />
-                                <TextBlock Grid.Column="1"
-                                           Text="{Binding ActivityMinPercent, StringFormat={}{0}%}"
-                                           Classes="DataLabel" />
-                            </Grid>
-                            <Slider Value="{Binding ActivityMinPercent}"
+                    <StackPanel Spacing="6" IsEnabled="{Binding IsActivityFilterEnabled}">
+                        <!-- Min slider -->
+                        <Grid ColumnDefinitions="Auto,*,Auto">
+                            <TextBlock Text="Min" FontSize="11" Foreground="White" Opacity="0.5"
+                                       VerticalAlignment="Center" Width="30" />
+                            <Slider Grid.Column="1" Value="{Binding ActivityMinPercent}"
                                     Minimum="1" Maximum="50"
                                     TickFrequency="1" IsSnapToTickEnabled="True" />
-                            <TextBlock Text="Below = silence, skip" Classes="DataLabel"
-                                       FontSize="11" Opacity="0.6" />
-                        </StackPanel>
+                            <TextBlock Grid.Column="2" Text="{Binding ActivityMinPercent, StringFormat={}{0}%}"
+                                       FontSize="11" Foreground="White" Opacity="0.6"
+                                       VerticalAlignment="Center" Width="35" TextAlignment="Right" />
+                        </Grid>
 
-                        <StackPanel Spacing="4">
-                            <Grid ColumnDefinitions="*,Auto">
-                                <TextBlock Text="Max Activity %" Classes="DataLabel" />
-                                <TextBlock Grid.Column="1"
-                                           Text="{Binding ActivityMaxPercent, StringFormat={}{0}%}"
-                                           Classes="DataLabel" />
-                            </Grid>
-                            <Slider Value="{Binding ActivityMaxPercent}"
+                        <!-- Max slider -->
+                        <Grid ColumnDefinitions="Auto,*,Auto">
+                            <TextBlock Text="Max" FontSize="11" Foreground="White" Opacity="0.5"
+                                       VerticalAlignment="Center" Width="30" />
+                            <Slider Grid.Column="1" Value="{Binding ActivityMaxPercent}"
                                     Minimum="50" Maximum="99"
                                     TickFrequency="1" IsSnapToTickEnabled="True" />
-                            <TextBlock Text="Above = broadband noise, skip" Classes="DataLabel"
-                                       FontSize="11" Opacity="0.6" />
-                        </StackPanel>
+                            <TextBlock Grid.Column="2" Text="{Binding ActivityMaxPercent, StringFormat={}{0}%}"
+                                       FontSize="11" Foreground="White" Opacity="0.6"
+                                       VerticalAlignment="Center" Width="35" TextAlignment="Right" />
+                        </Grid>
 
-                        <StackPanel Spacing="4"
-                                    IsVisible="{Binding IsGateMode}">
-                            <TextBlock Text="Hold Time (sec)" Classes="DataLabel" />
-                            <NumericUpDown Value="{Binding ActivityHoldSeconds}"
-                                           Minimum="1" Maximum="30"
-                                           Increment="1" />
-                            <TextBlock Text="Delay before stopping in gate mode" Classes="DataLabel"
-                                       FontSize="11" Opacity="0.6" />
-                        </StackPanel>
+                        <!-- Hold time (gate mode only) -->
+                        <Grid ColumnDefinitions="Auto,8,Auto,*"
+                              IsVisible="{Binding IsGateMode}">
+                            <TextBlock Text="Hold" FontSize="11" Foreground="White" Opacity="0.5"
+                                       VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Column="2" Value="{Binding ActivityHoldSeconds}"
+                                           Minimum="1" Maximum="30" Increment="1"
+                                           Width="100" />
+                            <TextBlock Grid.Column="3" Text="sec" FontSize="11" Foreground="White"
+                                       Opacity="0.5" VerticalAlignment="Center" Margin="6,0,0,0" />
+                        </Grid>
                     </StackPanel>
                 </StackPanel>
             </Border>
 
-            <!-- Amplitude Triggering -->
+            <!-- Amplitude Trigger -->
             <Border Classes="CardPanel">
-                <StackPanel Spacing="12">
+                <StackPanel Spacing="8">
                     <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Text="Amplitude Trigger" Classes="SectionHeader" />
+                        <TextBlock Text="Amplitude Trigger" FontSize="13" FontWeight="Bold"
+                                   Foreground="White" VerticalAlignment="Center" />
                         <ToggleSwitch Grid.Column="1"
                                       IsChecked="{Binding AmplitudeTriggerEnabled}"
                                       OnContent="On" OffContent="Off" />
                     </Grid>
 
-                    <!-- Live Audio Stream Toggle -->
-                    <Grid ColumnDefinitions="*,Auto">
-                        <TextBlock Text="Live Audio" Classes="DataLabel"
+                    <!-- Live Audio toggle + level -->
+                    <Grid ColumnDefinitions="Auto,8,*,Auto">
+                        <TextBlock Text="Live" FontSize="11" Foreground="White" Opacity="0.5"
                                    VerticalAlignment="Center" />
-                        <ToggleSwitch Grid.Column="1"
+                        <ProgressBar Grid.Column="2" Value="{Binding AudioLevel}" Maximum="100"
+                                     Height="8" CornerRadius="4" Foreground="#4CAF50"
+                                     VerticalAlignment="Center"
+                                     IsVisible="{Binding AudioStreamEnabled}" />
+                        <ToggleSwitch Grid.Column="3"
                                       IsChecked="{Binding AudioStreamEnabled}"
                                       IsEnabled="{Binding AmplitudeTriggerEnabled}"
                                       OnContent="On" OffContent="Off" />
                     </Grid>
 
-                    <!-- Live Audio Level -->
-                    <StackPanel Spacing="4"
-                                IsVisible="{Binding AudioStreamEnabled}">
-                        <Grid ColumnDefinitions="*,Auto">
-                            <TextBlock Text="Audio Level" Classes="DataLabel" />
-                            <TextBlock Grid.Column="1" Text="{Binding PeakLevel}" Classes="DataLabel" />
-                        </Grid>
-                        <ProgressBar Value="{Binding AudioLevel}" Maximum="100"
-                                     Height="16" CornerRadius="4"
-                                     Foreground="#4CAF50" />
-                    </StackPanel>
-
-                    <StackPanel Spacing="12" IsEnabled="{Binding AmplitudeTriggerEnabled}">
-                        <StackPanel Spacing="4">
-                            <Grid ColumnDefinitions="*,Auto">
-                                <TextBlock Text="Threshold" Classes="DataLabel" />
-                                <TextBlock Grid.Column="1" Text="{Binding AmplitudeThreshold, StringFormat={}{0} dB}"
-                                           Classes="DataLabel" />
-                            </Grid>
-                            <Slider Value="{Binding AmplitudeThreshold}"
+                    <StackPanel Spacing="6" IsEnabled="{Binding AmplitudeTriggerEnabled}">
+                        <!-- Threshold slider -->
+                        <Grid ColumnDefinitions="Auto,*,Auto">
+                            <TextBlock Text="Thr" FontSize="11" Foreground="White" Opacity="0.5"
+                                       VerticalAlignment="Center" Width="30" />
+                            <Slider Grid.Column="1" Value="{Binding AmplitudeThreshold}"
                                     Minimum="-60" Maximum="-10"
                                     TickFrequency="5" IsSnapToTickEnabled="True" />
-                        </StackPanel>
+                            <TextBlock Grid.Column="2" Text="{Binding AmplitudeThreshold, StringFormat={}{0} dB}"
+                                       FontSize="11" Foreground="White" Opacity="0.6"
+                                       VerticalAlignment="Center" Width="45" TextAlignment="Right" />
+                        </Grid>
 
-                        <Grid ColumnDefinitions="*,12,*">
-                            <StackPanel Spacing="4">
-                                <TextBlock Text="Pre-trigger (sec)" Classes="DataLabel" />
-                                <NumericUpDown Value="{Binding PreTriggerSeconds}"
-                                               Minimum="0" Maximum="10"
-                                               Increment="1" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="2" Spacing="4">
-                                <TextBlock Text="Post-trigger (sec)" Classes="DataLabel" />
-                                <NumericUpDown Value="{Binding PostTriggerSeconds}"
-                                               Minimum="1" Maximum="30"
-                                               Increment="1" />
-                            </StackPanel>
+                        <!-- Pre/Post trigger on one row -->
+                        <Grid ColumnDefinitions="Auto,8,Auto,*,Auto,8,Auto">
+                            <TextBlock Text="Pre" FontSize="11" Foreground="White" Opacity="0.5"
+                                       VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Column="2" Value="{Binding PreTriggerSeconds}"
+                                           Minimum="0" Maximum="10" Increment="1" Width="80" />
+                            <TextBlock Grid.Column="4" Text="Post" FontSize="11" Foreground="White" Opacity="0.5"
+                                       VerticalAlignment="Center" />
+                            <NumericUpDown Grid.Column="6" Value="{Binding PostTriggerSeconds}"
+                                           Minimum="1" Maximum="30" Increment="1" Width="80" />
                         </Grid>
                     </StackPanel>
                 </StackPanel>
             </Border>
 
-            <!-- Power Management -->
+            <!-- Power -->
             <Border Classes="CardPanel">
-                <StackPanel Spacing="12">
-                    <TextBlock Text="Power Management" Classes="SectionHeader" />
-
-                    <StackPanel Spacing="4">
-                        <Grid ColumnDefinitions="*,Auto">
-                            <TextBlock Text="Low Battery Threshold" Classes="DataLabel" />
-                            <TextBlock Grid.Column="1" Text="{Binding LowBatteryThreshold, StringFormat={}{0}%}"
-                                       Classes="DataLabel" />
-                        </Grid>
-                        <Slider Value="{Binding LowBatteryThreshold}"
-                                Minimum="5" Maximum="30"
-                                TickFrequency="5" IsSnapToTickEnabled="True" />
-                    </StackPanel>
-
-                    <CheckBox IsChecked="{Binding AutoStopOnLowBattery}"
-                              Content="Auto-stop recording on low battery"
-                              Foreground="White" />
-                </StackPanel>
+                <Grid ColumnDefinitions="Auto,*,Auto,8,Auto">
+                    <TextBlock Text="Low Bat" FontSize="11" Foreground="White" Opacity="0.5"
+                               VerticalAlignment="Center" />
+                    <Slider Grid.Column="1" Value="{Binding LowBatteryThreshold}"
+                            Minimum="5" Maximum="30"
+                            TickFrequency="5" IsSnapToTickEnabled="True"
+                            Margin="8,0" />
+                    <TextBlock Grid.Column="2" Text="{Binding LowBatteryThreshold, StringFormat={}{0}%}"
+                               FontSize="12" Foreground="White"
+                               VerticalAlignment="Center" />
+                    <CheckBox Grid.Column="4" IsChecked="{Binding AutoStopOnLowBattery}"
+                              Content="Auto-stop" Foreground="White" FontSize="12"
+                              VerticalAlignment="Center" />
+                </Grid>
             </Border>
 
-            <!-- Action Buttons -->
-            <Grid ColumnDefinitions="*,12,*">
+            <!-- Save / Reset / Load -->
+            <Grid ColumnDefinitions="*,8,*">
                 <Button Grid.Column="0"
                         HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Center"
                         Classes="ToolbarButton"
                         Command="{Binding ResetToDefaultsCommand}">
-                    <TextBlock Text="Reset Defaults" HorizontalAlignment="Center" />
+                    <TextBlock Text="Reset Defaults" FontSize="13" />
                 </Button>
                 <Button Grid.Column="2"
                         HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Center"
                         Classes="PrimaryButton"
                         Command="{Binding SaveConfigCommand}"
                         IsEnabled="{Binding HasChanges}">
-                    <TextBlock Text="Save Config" HorizontalAlignment="Center" />
+                    <TextBlock Text="Save Config" FontSize="13" />
                 </Button>
             </Grid>
 
-            <!-- Status Message -->
+            <!-- Status -->
             <TextBlock Text="{Binding StatusMessage}"
-                       HorizontalAlignment="Center"
+                       HorizontalAlignment="Center" FontSize="11"
                        Classes="DataLabel"
                        IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 
-            <!-- Load Button -->
-            <Button HorizontalAlignment="Stretch"
-                    Classes="SecondaryButton"
-                    Command="{Binding LoadConfigCommand}">
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8">
-                    <PathIcon Data="M5,20H19V18H5M19,9H15V3H9V9H5L12,16L19,9Z"
-                              Width="16" Height="16" />
-                    <TextBlock Text="Load from Device" />
-                </StackPanel>
-            </Button>
-
-            <!-- Apply & Next (batch config workflow) -->
-            <Button HorizontalAlignment="Stretch"
-                    Classes="ToolbarButton"
-                    Command="{Binding ApplyAndNextCommand}">
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8">
-                    <PathIcon Data="M4,11V13H16L10.5,18.5L11.92,19.92L19.84,12L11.92,4.08L10.5,5.5L16,11H4Z"
-                              Width="16" Height="16" />
-                    <TextBlock Text="Apply &amp; Next Device" />
-                </StackPanel>
-            </Button>
+            <!-- Load + Apply & Next -->
+            <Grid ColumnDefinitions="*,8,*">
+                <Button Grid.Column="0"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Center"
+                        Classes="ToolbarButton"
+                        Command="{Binding LoadConfigCommand}">
+                    <TextBlock Text="Load from Device" FontSize="13" />
+                </Button>
+                <Button Grid.Column="2"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Center"
+                        Classes="ToolbarButton"
+                        Command="{Binding ApplyAndNextCommand}">
+                    <TextBlock Text="Apply &amp; Next" FontSize="13" />
+                </Button>
+            </Grid>
 
         </StackPanel>
     </ScrollViewer>
