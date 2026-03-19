@@ -117,15 +117,15 @@
                         </Grid>
 
                         <!-- Pre/Post trigger on one row -->
-                        <Grid ColumnDefinitions="Auto,8,Auto,*,Auto,8,Auto">
+                        <Grid ColumnDefinitions="Auto,8,*,8,Auto,8,*">
                             <TextBlock Text="Pre" FontSize="11" Foreground="White" Opacity="0.5"
                                        VerticalAlignment="Center" />
                             <NumericUpDown Grid.Column="2" Value="{Binding PreTriggerSeconds}"
-                                           Minimum="0" Maximum="10" Increment="1" Width="80" />
+                                           Minimum="0" Maximum="10" Increment="1" />
                             <TextBlock Grid.Column="4" Text="Post" FontSize="11" Foreground="White" Opacity="0.5"
                                        VerticalAlignment="Center" />
                             <NumericUpDown Grid.Column="6" Value="{Binding PostTriggerSeconds}"
-                                           Minimum="1" Maximum="30" Increment="1" Width="80" />
+                                           Minimum="1" Maximum="30" Increment="1" />
                         </Grid>
                     </StackPanel>
                 </StackPanel>
