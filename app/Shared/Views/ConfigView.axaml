@@ -149,48 +149,38 @@
                 </Grid>
             </Border>
 
-            <!-- Save / Reset / Load -->
-            <Grid ColumnDefinitions="*,8,*">
+            <!-- Load / Reset / Save -->
+            <Grid ColumnDefinitions="*,8,*,8,*">
                 <Button Grid.Column="0"
                         HorizontalAlignment="Stretch"
                         HorizontalContentAlignment="Center"
                         Classes="ToolbarButton"
-                        Command="{Binding ResetToDefaultsCommand}">
-                    <TextBlock Text="Reset Defaults" FontSize="13" />
+                        Command="{Binding LoadConfigCommand}">
+                    <TextBlock Text="Load" FontSize="13" />
                 </Button>
                 <Button Grid.Column="2"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Center"
+                        Classes="ToolbarButton"
+                        Command="{Binding ResetToDefaultsCommand}">
+                    <TextBlock Text="Reset" FontSize="13" />
+                </Button>
+                <Button Grid.Column="4"
                         HorizontalAlignment="Stretch"
                         HorizontalContentAlignment="Center"
                         Classes="PrimaryButton"
                         Command="{Binding SaveConfigCommand}"
                         IsEnabled="{Binding HasChanges}">
-                    <TextBlock Text="Save Config" FontSize="13" />
+                    <TextBlock Text="Save" FontSize="13" />
                 </Button>
             </Grid>
 
             <!-- Status -->
             <TextBlock Text="{Binding StatusMessage}"
                        HorizontalAlignment="Center" FontSize="11"
+                       Margin="0,0,0,8"
                        Classes="DataLabel"
                        IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-
-            <!-- Load + Apply & Next -->
-            <Grid ColumnDefinitions="*,8,*">
-                <Button Grid.Column="0"
-                        HorizontalAlignment="Stretch"
-                        HorizontalContentAlignment="Center"
-                        Classes="ToolbarButton"
-                        Command="{Binding LoadConfigCommand}">
-                    <TextBlock Text="Load from Device" FontSize="13" />
-                </Button>
-                <Button Grid.Column="2"
-                        HorizontalAlignment="Stretch"
-                        HorizontalContentAlignment="Center"
-                        Classes="ToolbarButton"
-                        Command="{Binding ApplyAndNextCommand}">
-                    <TextBlock Text="Apply &amp; Next" FontSize="13" />
-                </Button>
-            </Grid>
 
         </StackPanel>
     </ScrollViewer>
