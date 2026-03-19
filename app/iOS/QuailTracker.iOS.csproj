@@ -27,6 +27,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <BundleResource Include="Resources/AppIcon76x76.png" />
+    <BundleResource Include="Resources/AppIcon120x120.png" />
+    <BundleResource Include="Resources/AppIcon152x152.png" />
+    <BundleResource Include="Resources/AppIcon180x180.png" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Avalonia.iOS" Version="11.2.*" />
   </ItemGroup>
 </Project>
