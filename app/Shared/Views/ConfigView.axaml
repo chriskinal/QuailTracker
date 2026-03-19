@@ -43,7 +43,7 @@
                     <!-- HPF slider -->
                     <Grid ColumnDefinitions="Auto,*,Auto">
                         <TextBlock Text="HPF" FontSize="11" Foreground="White" Opacity="0.5"
-                                   VerticalAlignment="Center" Width="30" />
+                                   VerticalAlignment="Center" Width="38" />
                         <Slider Grid.Column="1" Value="{Binding BandPassLowHz}"
                                 Minimum="0" Maximum="1500"
                                 TickFrequency="10" IsSnapToTickEnabled="True" />
@@ -55,7 +55,7 @@
                     <!-- LPF slider -->
                     <Grid ColumnDefinitions="Auto,*,Auto">
                         <TextBlock Text="LPF" FontSize="11" Foreground="White" Opacity="0.5"
-                                   VerticalAlignment="Center" Width="30" />
+                                   VerticalAlignment="Center" Width="38" />
                         <Slider Grid.Column="1" Value="{Binding BandPassHighHz}"
                                 Minimum="1000" Maximum="24000"
                                 TickFrequency="500" IsSnapToTickEnabled="True" />
@@ -67,7 +67,7 @@
                     <!-- Chunk duration slider -->
                     <Grid ColumnDefinitions="Auto,*,Auto">
                         <TextBlock Text="Chunk" FontSize="11" Foreground="White" Opacity="0.5"
-                                   VerticalAlignment="Center" Width="30" />
+                                   VerticalAlignment="Center" Width="38" />
                         <Slider Grid.Column="1" Minimum="0" Maximum="120"
                                 Value="{Binding ChunkMinutes}"
                                 TickFrequency="15" IsSnapToTickEnabled="True" />
@@ -107,7 +107,7 @@
                         <!-- Threshold slider -->
                         <Grid ColumnDefinitions="Auto,*,Auto">
                             <TextBlock Text="Thr" FontSize="11" Foreground="White" Opacity="0.5"
-                                       VerticalAlignment="Center" Width="30" />
+                                       VerticalAlignment="Center" Width="38" />
                             <Slider Grid.Column="1" Value="{Binding AmplitudeThreshold}"
                                     Minimum="-60" Maximum="-10"
                                     TickFrequency="5" IsSnapToTickEnabled="True" />
