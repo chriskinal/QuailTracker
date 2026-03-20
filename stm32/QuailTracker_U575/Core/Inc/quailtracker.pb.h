@@ -112,6 +112,31 @@ typedef struct _quailtracker_LogLine {
     char text[128];
 } quailtracker_LogLine;
 
+typedef struct _quailtracker_HealthReport {
+    /* Recording */
+    uint32_t files_written;
+    uint64_t total_bytes;
+    uint32_t recording_secs;
+    char last_filename[40];
+    uint32_t last_file_bytes;
+    uint32_t last_file_secs;
+    uint32_t write_errors;
+    /* Detection */
+    uint32_t detections;
+    char last_species[32];
+    uint32_t last_confidence;
+    char last_det_time[16];
+    /* System */
+    uint32_t battery_min_mv;
+    uint32_t battery_max_mv;
+    int32_t temp_min_c100;
+    int32_t temp_max_c100;
+    uint32_t boot_count;
+    uint32_t sd_errors;
+    uint32_t gps_fix_losses;
+    uint32_t uptime_secs;
+} quailtracker_HealthReport;
+
 typedef struct _quailtracker_Command {
     quailtracker_CommandType type;
 } quailtracker_Command;
@@ -308,6 +333,7 @@ extern "C" {
 #define quailtracker_Detection_init_default      {"", 0, "", 0}
 #define quailtracker_RecordingState_init_default {0, "", 0, 0, 0, 0}
 #define quailtracker_LogLine_init_default        {""}
+#define quailtracker_HealthReport_init_default   {0, 0, 0, "", 0, 0, 0, 0, "", 0, "", 0, 0, 0, 0, 0, 0, 0, 0}
 #define quailtracker_Command_init_default        {_quailtracker_CommandType_MIN}
 #define quailtracker_CommandAck_init_default     {_quailtracker_CommandType_MIN, 0, ""}
 #define quailtracker_Subscribe_init_default      {0, 0}
@@ -328,6 +354,7 @@ extern "C" {
 #define quailtracker_Detection_init_zero         {"", 0, "", 0}
 #define quailtracker_RecordingState_init_zero    {0, "", 0, 0, 0, 0}
 #define quailtracker_LogLine_init_zero           {""}
+#define quailtracker_HealthReport_init_zero      {0, 0, 0, "", 0, 0, 0, 0, "", 0, "", 0, 0, 0, 0, 0, 0, 0, 0}
 #define quailtracker_Command_init_zero           {_quailtracker_CommandType_MIN}
 #define quailtracker_CommandAck_init_zero        {_quailtracker_CommandType_MIN, 0, ""}
 #define quailtracker_Subscribe_init_zero         {0, 0}
@@ -400,6 +427,25 @@ extern "C" {
 #define quailtracker_RecordingState_overruns_tag 5
 #define quailtracker_RecordingState_sd_free_kb_tag 6
 #define quailtracker_LogLine_text_tag            1
+#define quailtracker_HealthReport_files_written_tag  1
+#define quailtracker_HealthReport_total_bytes_tag    2
+#define quailtracker_HealthReport_recording_secs_tag 3
+#define quailtracker_HealthReport_last_filename_tag  4
+#define quailtracker_HealthReport_last_file_bytes_tag 5
+#define quailtracker_HealthReport_last_file_secs_tag 6
+#define quailtracker_HealthReport_write_errors_tag   7
+#define quailtracker_HealthReport_detections_tag     10
+#define quailtracker_HealthReport_last_species_tag   11
+#define quailtracker_HealthReport_last_confidence_tag 12
+#define quailtracker_HealthReport_last_det_time_tag  13
+#define quailtracker_HealthReport_battery_min_mv_tag 20
+#define quailtracker_HealthReport_battery_max_mv_tag 21
+#define quailtracker_HealthReport_temp_min_c100_tag  22
+#define quailtracker_HealthReport_temp_max_c100_tag  23
+#define quailtracker_HealthReport_boot_count_tag     24
+#define quailtracker_HealthReport_sd_errors_tag      25
+#define quailtracker_HealthReport_gps_fix_losses_tag 26
+#define quailtracker_HealthReport_uptime_secs_tag    27
 #define quailtracker_Command_type_tag            1
 #define quailtracker_CommandAck_type_tag         1
 #define quailtracker_CommandAck_success_tag      2
@@ -555,6 +601,29 @@ X(a, STATIC,   SINGULAR, STRING,   text,              1)
 #define quailtracker_LogLine_CALLBACK NULL
 #define quailtracker_LogLine_DEFAULT NULL
 
+#define quailtracker_HealthReport_FIELDLIST(X, a) \
+X(a, STATIC,   SINGULAR, UINT32,   files_written,     1) \
+X(a, STATIC,   SINGULAR, UINT64,   total_bytes,       2) \
+X(a, STATIC,   SINGULAR, UINT32,   recording_secs,    3) \
+X(a, STATIC,   SINGULAR, STRING,   last_filename,     4) \
+X(a, STATIC,   SINGULAR, UINT32,   last_file_bytes,   5) \
+X(a, STATIC,   SINGULAR, UINT32,   last_file_secs,    6) \
+X(a, STATIC,   SINGULAR, UINT32,   write_errors,      7) \
+X(a, STATIC,   SINGULAR, UINT32,   detections,       10) \
+X(a, STATIC,   SINGULAR, STRING,   last_species,     11) \
+X(a, STATIC,   SINGULAR, UINT32,   last_confidence,  12) \
+X(a, STATIC,   SINGULAR, STRING,   last_det_time,    13) \
+X(a, STATIC,   SINGULAR, UINT32,   battery_min_mv,   20) \
+X(a, STATIC,   SINGULAR, UINT32,   battery_max_mv,   21) \
+X(a, STATIC,   SINGULAR, INT32,    temp_min_c100,    22) \
+X(a, STATIC,   SINGULAR, INT32,    temp_max_c100,    23) \
+X(a, STATIC,   SINGULAR, UINT32,   boot_count,       24) \
+X(a, STATIC,   SINGULAR, UINT32,   sd_errors,        25) \
+X(a, STATIC,   SINGULAR, UINT32,   gps_fix_losses,   26) \
+X(a, STATIC,   SINGULAR, UINT32,   uptime_secs,      27)
+#define quailtracker_HealthReport_CALLBACK NULL
+#define quailtracker_HealthReport_DEFAULT NULL
+
 #define quailtracker_Command_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, UENUM,    type,              1)
 #define quailtracker_Command_CALLBACK NULL
@@ -696,6 +765,7 @@ extern const pb_msgdesc_t quailtracker_AudioLevel_msg;
 extern const pb_msgdesc_t quailtracker_Detection_msg;
 extern const pb_msgdesc_t quailtracker_RecordingState_msg;
 extern const pb_msgdesc_t quailtracker_LogLine_msg;
+extern const pb_msgdesc_t quailtracker_HealthReport_msg;
 extern const pb_msgdesc_t quailtracker_Command_msg;
 extern const pb_msgdesc_t quailtracker_CommandAck_msg;
 extern const pb_msgdesc_t quailtracker_Subscribe_msg;
@@ -718,6 +788,7 @@ extern const pb_msgdesc_t quailtracker_OtaStatus_msg;
 #define quailtracker_Detection_fields &quailtracker_Detection_msg
 #define quailtracker_RecordingState_fields &quailtracker_RecordingState_msg
 #define quailtracker_LogLine_fields &quailtracker_LogLine_msg
+#define quailtracker_HealthReport_fields &quailtracker_HealthReport_msg
 #define quailtracker_Command_fields &quailtracker_Command_msg
 #define quailtracker_CommandAck_fields &quailtracker_CommandAck_msg
 #define quailtracker_Subscribe_fields &quailtracker_Subscribe_msg
@@ -741,6 +812,7 @@ extern const pb_msgdesc_t quailtracker_OtaStatus_msg;
 #define quailtracker_Config_size                 339
 #define quailtracker_Detection_size              67
 #define quailtracker_GpsFix_size                 72
+#define quailtracker_HealthReport_size           206
 #define quailtracker_LogLine_size                130
 #define quailtracker_OtaAbort_size               0
 #define quailtracker_OtaBegin_size               12

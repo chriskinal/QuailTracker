@@ -164,6 +164,34 @@ extern volatile uint16_t bleLogHead, bleLogTail;
 /* ADF gain */
 extern MDF_HandleTypeDef AdfHandle0;
 
+/* Health statistics (defined in app_freertos.c) */
+typedef struct __attribute__((packed, aligned(16))) {
+    uint32_t magic;
+    uint8_t  version;
+    uint32_t filesWritten;
+    uint64_t totalBytes;
+    uint32_t recordingSecs;
+    char     lastFilename[40];
+    uint32_t lastFileBytes;
+    uint32_t lastFileSecs;
+    uint32_t writeErrors;
+    uint32_t detections;
+    char     lastSpecies[32];
+    uint8_t  lastConfidence;
+    char     lastDetTime[16];
+    uint32_t battMinMv;
+    uint32_t battMaxMv;
+    int32_t  tempMinC100;
+    int32_t  tempMaxC100;
+    uint32_t bootCount;
+    uint32_t sdErrors;
+    uint32_t gpsFixLosses;
+    uint32_t uptimeStartTick;
+    uint8_t  _pad[256 - 158 - 4];
+    uint32_t crc32;
+} health_stats_t;
+extern health_stats_t health;
+
 /* Subscription management (defined in ble_proto.c) */
 extern void ble_proto_add_subscription(uint8_t topic, uint32_t interval_ms);
 extern void ble_proto_remove_subscription(uint8_t topic);
@@ -422,6 +450,42 @@ static void push_config_dump(void)
     pb_ostream_t stream = pb_ostream_from_buffer(buf, sizeof(buf));
     if (pb_encode(&stream, quailtracker_Config_fields, &msg)) {
         ble_proto_send(TOPIC_CONFIG_DUMP, buf, stream.bytes_written);
+    }
+}
+
+static void push_health_report(void)
+{
+    quailtracker_HealthReport msg = quailtracker_HealthReport_init_zero;
+
+    /* Recording */
+    msg.files_written = health.filesWritten;
+    msg.total_bytes = health.totalBytes;
+    msg.recording_secs = health.recordingSecs;
+    strncpy(msg.last_filename, health.lastFilename, sizeof(msg.last_filename) - 1);
+    msg.last_file_bytes = health.lastFileBytes;
+    msg.last_file_secs = health.lastFileSecs;
+    msg.write_errors = health.writeErrors;
+
+    /* Detection */
+    msg.detections = health.detections;
+    strncpy(msg.last_species, health.lastSpecies, sizeof(msg.last_species) - 1);
+    msg.last_confidence = (uint32_t)health.lastConfidence;
+    strncpy(msg.last_det_time, health.lastDetTime, sizeof(msg.last_det_time) - 1);
+
+    /* System */
+    msg.battery_min_mv = (health.battMinMv == 0xFFFFFFFF) ? 0 : health.battMinMv;
+    msg.battery_max_mv = health.battMaxMv;
+    msg.temp_min_c100 = (health.tempMinC100 == 32767) ? 0 : health.tempMinC100;
+    msg.temp_max_c100 = (health.tempMaxC100 == -32768) ? 0 : health.tempMaxC100;
+    msg.boot_count = health.bootCount;
+    msg.sd_errors = health.sdErrors;
+    msg.gps_fix_losses = health.gpsFixLosses;
+    msg.uptime_secs = HAL_GetTick() / 1000;
+
+    uint8_t buf[quailtracker_HealthReport_size];
+    pb_ostream_t stream = pb_ostream_from_buffer(buf, sizeof(buf));
+    if (pb_encode(&stream, quailtracker_HealthReport_fields, &msg)) {
+        ble_proto_send(TOPIC_HEALTH_REPORT, buf, stream.bytes_written);
     }
 }
 
@@ -783,6 +847,9 @@ void ble_proto_push_topic(uint8_t topic)
         break;
     case TOPIC_CONFIG_DUMP:
         push_config_dump();
+        break;
+    case TOPIC_HEALTH_REPORT:
+        push_health_report();
         break;
     default:
         break;

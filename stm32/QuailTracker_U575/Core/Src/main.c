@@ -701,6 +701,10 @@ void startRecording(void)
     recStartTick = HAL_GetTick();
     fileCounter++;
 
+    /* Update health stats */
+    extern void healthUpdateRecStart(const char *filename);
+    healthUpdateRecStart(fname);
+
     printf("Recording to %s...\r\n", fname);
 }
 
@@ -759,6 +763,15 @@ void stopRecording(void)
         printf("Recording stopped: %lu bytes (%lus, %lu%% of raw)\r\n",
             (unsigned long)totalDataBytes, (unsigned long)seconds,
             (unsigned long)ratio);
+    }
+
+    /* Update health stats with completed recording */
+    {
+        uint32_t secs = (recFormat == REC_FMT_WAV)
+            ? totalDataBytes / (SAMPLE_RATE * 3)
+            : (uint32_t)(flacEncoder.totalSamples / SAMPLE_RATE);
+        extern void healthUpdateRecStop(uint32_t bytes, uint32_t durationSecs);
+        healthUpdateRecStop(totalDataBytes, secs);
     }
 
     /* Report PPS-sample correlation */

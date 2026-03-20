@@ -95,6 +95,42 @@ typedef struct __attribute__((packed, aligned(16))) {
 
 _Static_assert(sizeof(device_config_t) == 128, "device_config_t must be 128 bytes");
 
+/* ---- Flash-persisted health statistics ---- */
+#define HEALTH_MAGIC       0x51544853   /* "QTHS" */
+#define HEALTH_VERSION     1
+#define HEALTH_FLASH_ADDR  0x080FC000   /* One page before config page */
+
+typedef struct __attribute__((packed, aligned(16))) {
+    uint32_t magic;
+    uint8_t  version;
+    /* Recording */
+    uint32_t filesWritten;
+    uint64_t totalBytes;
+    uint32_t recordingSecs;
+    char     lastFilename[40];
+    uint32_t lastFileBytes;
+    uint32_t lastFileSecs;
+    uint32_t writeErrors;
+    /* Detection */
+    uint32_t detections;
+    char     lastSpecies[32];
+    uint8_t  lastConfidence;
+    char     lastDetTime[16];
+    /* System */
+    uint32_t battMinMv;
+    uint32_t battMaxMv;
+    int32_t  tempMinC100;
+    int32_t  tempMaxC100;
+    uint32_t bootCount;
+    uint32_t sdErrors;
+    uint32_t gpsFixLosses;
+    uint32_t uptimeStartTick;  /* HAL_GetTick() at boot (always 0, stored for reference) */
+    uint8_t  _pad[256 - 158 - 4];  /* pad to 256 bytes: 158 packed data + 94 pad + 4 crc */
+    uint32_t crc32;
+} health_stats_t;
+
+_Static_assert(sizeof(health_stats_t) == 256, "health_stats_t must be 256 bytes");
+
 /* ---- OTA firmware update state ---- */
 typedef enum { OTA_IDLE, OTA_RECEIVING, OTA_COMPLETE } ota_state_t;
 
@@ -238,6 +274,21 @@ static char bleLiveProbeResp[64];
 
 /* Flash-persisted device config (loaded at BLE task start) */
 device_config_t cfg __attribute__((aligned(16)));
+
+/* Flash-persisted health statistics */
+health_stats_t health __attribute__((aligned(16)));
+static uint32_t lastHealthSaveTick = 0;
+#define HEALTH_SAVE_INTERVAL_MS 300000  /* 5 minutes */
+static uint8_t prevGpsValid = 0;  /* for GPS fix loss detection */
+static uint32_t healthPushTick = 0;  /* non-zero = deferred health push pending */
+
+/* Forward declarations for health functions */
+static void healthLoad(void);
+int healthSave(void);
+void healthReset(void);
+void healthUpdateEnvironment(uint32_t battMv, int32_t tempC100);
+void healthUpdateRecStart(const char *filename);
+void healthUpdateRecStop(uint32_t bytes, uint32_t durationSecs);
 
 /* ---- BPF filter state (reset on recording start) ---- */
 static int32_t  hpfPrevIn  = 0;
@@ -1466,6 +1517,14 @@ static void StartInferenceTask(void *argument)
                 }
                 detHits++;
 
+                /* Update health stats */
+                health.detections++;
+                strncpy(health.lastSpecies, species, sizeof(health.lastSpecies) - 1);
+                health.lastSpecies[sizeof(health.lastSpecies) - 1] = '\0';
+                health.lastConfidence = confPct;
+                strncpy(health.lastDetTime, detLastTime, sizeof(health.lastDetTime) - 1);
+                health.lastDetTime[sizeof(health.lastDetTime) - 1] = '\0';
+
                 /* Log to CSV */
                 detLogCsv(species, results[i].confidence, windowStart);
 
@@ -1874,6 +1933,11 @@ static void StartBleTask(void *argument)
 {
     char resp[64];
 
+    /* Load health stats from flash, increment boot count */
+    healthLoad();
+    health.bootCount++;
+    healthSave();
+
     /* Load config from flash (or set defaults) */
     configLoad();
 
@@ -2048,23 +2112,36 @@ static void StartBleTask(void *argument)
                         bleConnected = 1;
                         ble_proto_reset();
                         printf("BLE: Connected\r\n");
+                        /* Defer health report push — app needs ~2s for service discovery */
+                        healthPushTick = HAL_GetTick() | 1;  /* ensure non-zero */
                     } else if (strstr(textBuf, "BLE_DISCONNECT") != NULL) {
                         bleConnected = 0;
                         ble_proto_reset();
                         bleLogEnabled = 0;
+                        healthPushTick = 0;
                         printf("BLE: Disconnected\r\n");
-                        if (bleNameUpdatePending) {
-                            bleNameUpdatePending = 0;
+                        /* Reset health counters (keep boot count) and save */
+                        healthReset();
+                        healthSave();
+                        /* Always restart advertising after disconnect.
+                         * PB-03F can stop advertising after unclean disconnect
+                         * (app killed, out of range). Cycle off/on to ensure
+                         * the device is discoverable again. */
+                        {
                             char nameCmd[48];
                             char nameResp[32];
                             bleSendCmd("AT+BLEADVEN=0", nameResp, sizeof(nameResp), 1000);
                             osDelay(100);
-                            snprintf(nameCmd, sizeof(nameCmd), "AT+BLENAME=%s", cfg.stationId);
-                            bleSendCmd(nameCmd, nameResp, sizeof(nameResp), 1000);
+                            if (bleNameUpdatePending) {
+                                bleNameUpdatePending = 0;
+                                snprintf(nameCmd, sizeof(nameCmd), "AT+BLENAME=%s", cfg.stationId);
+                                bleSendCmd(nameCmd, nameResp, sizeof(nameResp), 1000);
+                                strncpy(bleName, cfg.stationId, sizeof(bleName) - 1);
+                                bleName[sizeof(bleName) - 1] = '\0';
+                                printf("BLE: Name updated to %s\r\n", bleName);
+                            }
                             bleSendCmd("AT+BLEADVEN=1", nameResp, sizeof(nameResp), 1000);
-                            strncpy(bleName, cfg.stationId, sizeof(bleName) - 1);
-                            bleName[sizeof(bleName) - 1] = '\0';
-                            printf("BLE: Name updated to %s\r\n", bleName);
+                            printf("BLE: Advertising restarted\r\n");
                         }
                     }
                 }
@@ -2080,10 +2157,32 @@ static void StartBleTask(void *argument)
         if (bleConnected)
             ble_proto_poll_subscriptions();
 
+        /* Deferred health report push (2s after connect for app service discovery) */
+        if (healthPushTick && bleConnected &&
+            (HAL_GetTick() - healthPushTick) >= 2000) {
+            healthPushTick = 0;
+            ble_proto_push_topic(TOPIC_HEALTH_REPORT);
+            printf("BLE: Health report pushed\r\n");
+        }
+
         /* Periodic SHT30 temperature/humidity read (~every 5s) */
         if ((HAL_GetTick() - lastSht30Tick) >= SHT30_INTERVAL_MS) {
             lastSht30Tick = HAL_GetTick();
             sht30Read();
+            /* Update health min/max from latest readings */
+            uint32_t mv = battReadMv();
+            healthUpdateEnvironment(mv, (int32_t)sht30TempC100);
+            /* Track GPS fix losses */
+            uint8_t curGpsValid = gpsData.valid;
+            if (prevGpsValid && !curGpsValid)
+                health.gpsFixLosses++;
+            prevGpsValid = curGpsValid;
+        }
+
+        /* Periodic health save to flash (~every 5 min) */
+        if ((HAL_GetTick() - lastHealthSaveTick) >= HEALTH_SAVE_INTERVAL_MS) {
+            lastHealthSaveTick = HAL_GetTick();
+            healthSave();
         }
 
         /* Drain log ring buffer over BLE as protobuf LogLine messages */
@@ -2280,6 +2379,125 @@ int configSave(void)
     }
 
     return 1;
+}
+
+/* ========================= Health Statistics Persistence ========================= */
+
+static uint32_t healthComputeCrc(const health_stats_t *h)
+{
+    return crc32_compute((const uint8_t *)h, sizeof(health_stats_t) - 4);
+}
+
+static void healthLoad(void)
+{
+    const health_stats_t *flash = (const health_stats_t *)HEALTH_FLASH_ADDR;
+
+    memcpy(&health, flash, sizeof(health));
+
+    if (health.magic == HEALTH_MAGIC &&
+        health.version == HEALTH_VERSION &&
+        health.crc32 == healthComputeCrc(&health)) {
+        printf("Health: Loaded from flash (boots=%lu, files=%lu)\r\n",
+               (unsigned long)health.bootCount, (unsigned long)health.filesWritten);
+        return;
+    }
+
+    printf("Health: Invalid/empty — initializing\r\n");
+    memset(&health, 0, sizeof(health));
+    health.magic = HEALTH_MAGIC;
+    health.version = HEALTH_VERSION;
+    health.battMinMv = 0xFFFFFFFF;  /* will be replaced by first reading */
+    health.tempMinC100 = 32767;     /* will be replaced by first reading */
+    health.tempMaxC100 = -32768;
+}
+
+int healthSave(void)
+{
+    health.crc32 = healthComputeCrc(&health);
+
+    HAL_ICACHE_Disable();
+    HAL_FLASH_Unlock();
+    __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_ALL_ERRORS);
+
+    FLASH_EraseInitTypeDef erase = {0};
+    erase.TypeErase = FLASH_TYPEERASE_PAGES;
+    if (HEALTH_FLASH_ADDR < FLASH_BASE + FLASH_BANK_SIZE) {
+        erase.Banks = FLASH_BANK_1;
+        erase.Page = (HEALTH_FLASH_ADDR - FLASH_BASE) / FLASH_PAGE_SIZE;
+    } else {
+        erase.Banks = FLASH_BANK_2;
+        erase.Page = (HEALTH_FLASH_ADDR - FLASH_BASE - FLASH_BANK_SIZE) / FLASH_PAGE_SIZE;
+    }
+    erase.NbPages = 1;
+    uint32_t pageError = 0;
+
+    if (HAL_FLASHEx_Erase(&erase, &pageError) != HAL_OK) {
+        printf("Health: Flash erase FAILED\r\n");
+        HAL_FLASH_Lock();
+        HAL_ICACHE_Enable();
+        return 0;
+    }
+
+    /* Program 16 quadwords (256 bytes = 16 × 16 bytes) */
+    const uint8_t *src = (const uint8_t *)&health;
+    for (int i = 0; i < 16; i++) {
+        uint32_t addr = HEALTH_FLASH_ADDR + (uint32_t)(i * 16);
+        if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_QUADWORD, addr,
+                              (uint32_t)(src + i * 16)) != HAL_OK) {
+            printf("Health: Flash program FAILED at offset %d\r\n", i * 16);
+            HAL_FLASH_Lock();
+            HAL_ICACHE_Enable();
+            return 0;
+        }
+    }
+
+    HAL_FLASH_Lock();
+    HAL_ICACHE_Enable();
+
+    if (memcmp((const void *)HEALTH_FLASH_ADDR, &health, sizeof(health)) != 0) {
+        printf("Health: Flash verify FAILED\r\n");
+        return 0;
+    }
+
+    return 1;
+}
+
+void healthReset(void)
+{
+    uint32_t boots = health.bootCount;  /* preserve boot count across resets */
+    memset(&health, 0, sizeof(health));
+    health.magic = HEALTH_MAGIC;
+    health.version = HEALTH_VERSION;
+    health.bootCount = boots;
+    health.battMinMv = 0xFFFFFFFF;
+    health.tempMinC100 = 32767;
+    health.tempMaxC100 = -32768;
+}
+
+/* Update battery/temp min/max — called from SHT30 periodic read */
+void healthUpdateEnvironment(uint32_t battMv, int32_t tempC100)
+{
+    if (battMv < health.battMinMv) health.battMinMv = battMv;
+    if (battMv > health.battMaxMv) health.battMaxMv = battMv;
+    if (tempC100 < health.tempMinC100) health.tempMinC100 = tempC100;
+    if (tempC100 > health.tempMaxC100) health.tempMaxC100 = tempC100;
+}
+
+/* Called from startRecording() in main.c */
+void healthUpdateRecStart(const char *filename)
+{
+    health.filesWritten++;
+    strncpy(health.lastFilename, filename, sizeof(health.lastFilename) - 1);
+    health.lastFilename[sizeof(health.lastFilename) - 1] = '\0';
+}
+
+/* Called from stopRecording() in main.c */
+void healthUpdateRecStop(uint32_t bytes, uint32_t durationSecs)
+{
+    health.totalBytes += bytes;
+    health.recordingSecs += durationSecs;
+    health.lastFileBytes = bytes;
+    health.lastFileSecs = durationSecs;
 }
 
 /* ========================= BLE Protocol (legacy text handlers removed — see ble_proto_handlers.c) ========================= */

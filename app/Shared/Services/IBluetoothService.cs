@@ -123,6 +123,11 @@ public interface IBluetoothService
     Task SendSurveyCommandAsync(string operation);
 
     /// <summary>
+    /// Fired when a health report is received on connect.
+    /// </summary>
+    event EventHandler<HealthReport>? HealthReportReceived;
+
+    /// <summary>
     /// Fired when a detection is received via $DETECTION push.
     /// </summary>
     event EventHandler<DetectionEvent>? DetectionReceived;

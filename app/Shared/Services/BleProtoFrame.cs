@@ -34,6 +34,7 @@ public enum BleProtoTopic : byte
     RecordingState  = 0x04,
     GpsFix          = 0x05,
     Log             = 0x06,
+    HealthReport    = 0x07,
 
     // App → Device (command)
     Command         = 0x10,

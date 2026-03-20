@@ -65,7 +65,7 @@ void sht30Read(void);
 #define SD_CD_GPIO_Port GPIOC
 
 /* USER CODE BEGIN Private defines */
-#define FW_VERSION "0.9.1"
+#define FW_VERSION "0.9.2"
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

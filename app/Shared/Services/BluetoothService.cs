@@ -76,6 +76,7 @@ public class BluetoothService : IBluetoothService
     public event EventHandler<DeviceStatus>? StatusReceived;
     public event EventHandler<DeviceConfig>? ConfigReceived;
     public event EventHandler<DetectionEvent>? DetectionReceived;
+    public event EventHandler<HealthReport>? HealthReportReceived;
     public event EventHandler<DiscoveredDevice>? DeviceDiscovered;
 
     public BluetoothService()
@@ -861,6 +862,35 @@ public class BluetoothService : IBluetoothService
                 var det = Quailtracker.Detection.Parser.ParseFrom(payload);
                 var mapped = MapDetection(det);
                 Dispatcher.UIThread.Post(() => DetectionReceived?.Invoke(this, mapped));
+                break;
+            }
+
+            case BleProtoTopic.HealthReport:
+            {
+                var hr = Quailtracker.HealthReport.Parser.ParseFrom(payload);
+                var mapped = new Models.HealthReport
+                {
+                    FilesWritten = hr.FilesWritten,
+                    TotalBytes = hr.TotalBytes,
+                    RecordingSecs = hr.RecordingSecs,
+                    LastFilename = hr.LastFilename,
+                    LastFileBytes = hr.LastFileBytes,
+                    LastFileSecs = hr.LastFileSecs,
+                    WriteErrors = hr.WriteErrors,
+                    Detections = hr.Detections,
+                    LastSpecies = hr.LastSpecies,
+                    LastConfidence = hr.LastConfidence,
+                    LastDetTime = hr.LastDetTime,
+                    BatteryMinMv = hr.BatteryMinMv,
+                    BatteryMaxMv = hr.BatteryMaxMv,
+                    TempMinC100 = hr.TempMinC100,
+                    TempMaxC100 = hr.TempMaxC100,
+                    BootCount = hr.BootCount,
+                    SdErrors = hr.SdErrors,
+                    GpsFixLosses = hr.GpsFixLosses,
+                    UptimeSecs = hr.UptimeSecs,
+                };
+                Dispatcher.UIThread.Post(() => HealthReportReceived?.Invoke(this, mapped));
                 break;
             }
 

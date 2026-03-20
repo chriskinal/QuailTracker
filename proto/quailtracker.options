@@ -26,3 +26,7 @@ quailtracker.SetConfig.windows          max_count:8
 quailtracker.RecordingState.filename    max_size:40
 
 quailtracker.OtaData.chunk              max_size:128
+
+quailtracker.HealthReport.last_filename max_size:40
+quailtracker.HealthReport.last_species  max_size:32
+quailtracker.HealthReport.last_det_time max_size:16

@@ -24,6 +24,9 @@ PB_BIND(quailtracker_RecordingState, quailtracker_RecordingState, AUTO)
 PB_BIND(quailtracker_LogLine, quailtracker_LogLine, AUTO)
 
 
+PB_BIND(quailtracker_HealthReport, quailtracker_HealthReport, 2)
+
+
 PB_BIND(quailtracker_Command, quailtracker_Command, AUTO)
 
 

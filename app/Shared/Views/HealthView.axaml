@@ -117,6 +117,44 @@
                 </StackPanel>
             </Border>
 
+            <!-- Since Last Visit -->
+            <Border Classes="CardPanel" IsVisible="{Binding HasHealthReport}">
+                <StackPanel Spacing="4">
+                    <Grid ColumnDefinitions="Auto,8,Auto,*">
+                        <TextBlock Text="Since Last Visit" FontSize="13" FontWeight="Bold"
+                                   Foreground="White" VerticalAlignment="Center" />
+                        <Border Grid.Column="2" CornerRadius="4" Padding="6,2"
+                                Background="{Binding HealthOverallColor}">
+                            <TextBlock Text="{Binding HealthOverallText}" Foreground="White" FontSize="11" />
+                        </Border>
+                    </Grid>
+                    <Grid ColumnDefinitions="Auto,8,*">
+                        <TextBlock Text="Rec" FontSize="11" Foreground="White" Opacity="0.5"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2" Text="{Binding HealthRec}"
+                                   FontSize="12" Foreground="{Binding HealthRecColor}" VerticalAlignment="Center" />
+                    </Grid>
+                    <Grid ColumnDefinitions="Auto,8,*">
+                        <TextBlock Text="Det" FontSize="11" Foreground="White" Opacity="0.5"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2" Text="{Binding HealthDet}"
+                                   FontSize="12" Foreground="White" VerticalAlignment="Center" />
+                    </Grid>
+                    <Grid ColumnDefinitions="Auto,8,*">
+                        <TextBlock Text="Bat" FontSize="11" Foreground="White" Opacity="0.5"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2" Text="{Binding HealthBat}"
+                                   FontSize="12" Foreground="{Binding HealthBatColor}" VerticalAlignment="Center" />
+                    </Grid>
+                    <Grid ColumnDefinitions="Auto,8,*">
+                        <TextBlock Text="Sys" FontSize="11" Foreground="White" Opacity="0.5"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2" Text="{Binding HealthSys}"
+                                   FontSize="12" Foreground="{Binding HealthSysColor}" VerticalAlignment="Center" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
             <!-- Refresh -->
             <Button HorizontalAlignment="Stretch"
                     HorizontalContentAlignment="Center"

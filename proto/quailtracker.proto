@@ -96,6 +96,33 @@ message LogLine {
     string text             = 1;
 }
 
+message HealthReport {
+    // Recording
+    uint32 files_written    = 1;
+    uint64 total_bytes      = 2;
+    uint32 recording_secs   = 3;
+    string last_filename    = 4;
+    uint32 last_file_bytes  = 5;
+    uint32 last_file_secs   = 6;
+    uint32 write_errors     = 7;
+
+    // Detection
+    uint32 detections       = 10;
+    string last_species     = 11;
+    uint32 last_confidence  = 12;
+    string last_det_time    = 13;
+
+    // System
+    uint32 battery_min_mv   = 20;
+    uint32 battery_max_mv   = 21;
+    int32  temp_min_c100    = 22;
+    int32  temp_max_c100    = 23;
+    uint32 boot_count       = 24;
+    uint32 sd_errors        = 25;
+    uint32 gps_fix_losses   = 26;
+    uint32 uptime_secs      = 27;
+}
+
 // ===== App → Device: Commands =====
 
 enum CommandType {

@@ -67,11 +67,24 @@ public partial class HealthViewModel : ObservableObject
     // Last Update
     [ObservableProperty] private string _lastUpdated = "Never";
 
+    // Since Last Visit
+    [ObservableProperty] private bool _hasHealthReport = false;
+    [ObservableProperty] private string _healthRec = "No data";
+    [ObservableProperty] private string _healthDet = "No data";
+    [ObservableProperty] private string _healthBat = "No data";
+    [ObservableProperty] private string _healthSys = "No data";
+    [ObservableProperty] private string _healthOverallColor = "#808080";
+    [ObservableProperty] private string _healthOverallText = "Unknown";
+    [ObservableProperty] private string _healthRecColor = "White";
+    [ObservableProperty] private string _healthBatColor = "White";
+    [ObservableProperty] private string _healthSysColor = "White";
+
     public HealthViewModel(IBluetoothService bluetoothService)
     {
         _bluetoothService = bluetoothService;
         _bluetoothService.StatusReceived += OnStatusReceived;
         _bluetoothService.ConnectionStateChanged += OnConnectionStateChanged;
+        _bluetoothService.HealthReportReceived += OnHealthReportReceived;
     }
 
     private void OnConnectionStateChanged(object? sender, ConnectionState state)
@@ -89,6 +102,67 @@ public partial class HealthViewModel : ObservableObject
             : "--";
         if (state != ConnectionState.Connected)
             BleAddress = "--";
+    }
+
+    private void OnHealthReportReceived(object? sender, Models.HealthReport hr)
+    {
+        HasHealthReport = true;
+
+        // Recording line
+        var totalGb = hr.TotalBytes / (1024.0 * 1024.0 * 1024.0);
+        var recHours = hr.RecordingSecs / 3600;
+        var recMins = (hr.RecordingSecs % 3600) / 60;
+        HealthRec = $"{hr.FilesWritten} files   {totalGb:F1} GB   {recHours}h {recMins:D2}m   {hr.WriteErrors} errors";
+
+        // Detection line
+        if (hr.Detections > 0 && hr.LastSpecies.Length > 0)
+            HealthDet = $"{hr.Detections} detections   {hr.LastSpecies} ({hr.LastConfidence}%)";
+        else if (hr.Detections > 0)
+            HealthDet = $"{hr.Detections} detections";
+        else
+            HealthDet = "0 detections";
+
+        // Battery/temp line
+        var batMin = hr.BatteryMinMv / 1000.0;
+        var batMax = hr.BatteryMaxMv / 1000.0;
+        var tempMin = hr.TempMinC100 / 100.0;
+        var tempMax = hr.TempMaxC100 / 100.0;
+        if (hr.BatteryMaxMv > 0)
+            HealthBat = $"{batMin:F2} - {batMax:F2} V      Temp  {tempMin:F1} - {tempMax:F1} C";
+        else
+            HealthBat = "No data";
+
+        // Overall status — collect reasons, color problem lines red
+        var reasons = new System.Collections.Generic.List<string>();
+        bool recIssue = hr.WriteErrors > 0;
+        bool batIssue = hr.BatteryMinMv > 0 && hr.BatteryMinMv < 3300;
+        bool sysIssue = hr.SdErrors > 0 || hr.BootCount > 1;
+
+        if (recIssue) reasons.Add($"{hr.WriteErrors} write err");
+        if (batIssue) reasons.Add("low bat");
+        if (hr.SdErrors > 0) reasons.Add($"{hr.SdErrors} SD err");
+        if (hr.BootCount > 1) reasons.Add($"{hr.BootCount} reboots");
+
+        HealthRecColor = recIssue ? "#F44336" : "White";
+        HealthBatColor = batIssue ? "#F44336" : "White";
+        HealthSysColor = sysIssue ? "#F44336" : "White";
+
+        if (reasons.Count > 0)
+        {
+            HealthOverallColor = "#F44336";
+            HealthOverallText = string.Join(", ", reasons);
+        }
+        else
+        {
+            HealthOverallColor = "#4CAF50";
+            HealthOverallText = "All Good";
+        }
+
+        // System line
+        var days = hr.UptimeSecs / 86400;
+        var hours = (hr.UptimeSecs % 86400) / 3600;
+        var uptimeStr = days > 0 ? $"{days}d {hours}h" : $"{hours}h";
+        HealthSys = $"{hr.BootCount} boot   {hr.SdErrors} SD err   {hr.GpsFixLosses} GPS loss   {uptimeStr} up";
     }
 
     private void OnStatusReceived(object? sender, DeviceStatus status)

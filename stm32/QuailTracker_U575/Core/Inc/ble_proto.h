@@ -42,6 +42,7 @@ enum {
     TOPIC_RECORDING_STATE = 0x04,
     TOPIC_GPS_FIX         = 0x05,
     TOPIC_LOG             = 0x06,
+    TOPIC_HEALTH_REPORT   = 0x07,
 
     /* App → Device (command) */
     TOPIC_COMMAND         = 0x10,
