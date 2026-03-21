@@ -57,6 +57,7 @@ public class BluetoothService : IBluetoothService
     private readonly BleFrameAssembler _frameAssembler = new();
     private readonly BleProtoFrame _frameBuilder = new();
     private DeviceStatus _cachedStatus = new();  // merged status from all push topics
+    private HealthReport? _cachedHealthReport;    // last health report this connection
 
     // Command/response serialization
     private readonly SemaphoreSlim _cmdLock = new(1, 1);
@@ -68,6 +69,7 @@ public class BluetoothService : IBluetoothService
 
     public ConnectionState CurrentState { get; private set; } = ConnectionState.Disconnected;
     public string? ConnectedDeviceName { get; private set; }
+    public HealthReport? LastHealthReport => _cachedHealthReport;
 
     // Discovered devices during scan (for device picker)
     private readonly Dictionary<Guid, (DiscoveredDevice Info, IDevice Device)> _discoveredDevices = new();
@@ -890,6 +892,7 @@ public class BluetoothService : IBluetoothService
                     GpsFixLosses = hr.GpsFixLosses,
                     UptimeSecs = hr.UptimeSecs,
                 };
+                _cachedHealthReport = mapped;
                 Dispatcher.UIThread.Post(() => HealthReportReceived?.Invoke(this, mapped));
                 break;
             }
@@ -943,6 +946,7 @@ public class BluetoothService : IBluetoothService
             _configTcs?.TrySetCanceled();
             _frameAssembler.Reset();
         _cachedStatus = new DeviceStatus();
+            _cachedHealthReport = null;
             _device = null;
             _writeCharacteristic = null;
             _notifyCharacteristic = null;

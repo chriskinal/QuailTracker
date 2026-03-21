@@ -35,6 +35,7 @@ public class MockBluetoothService : IBluetoothService
 
     public ConnectionState CurrentState { get; private set; } = ConnectionState.Disconnected;
     public string? ConnectedDeviceName { get; private set; }
+    public HealthReport? LastHealthReport => null;
 
     public event EventHandler<ConnectionState>? ConnectionStateChanged;
     public event EventHandler<DeviceStatus>? StatusReceived;

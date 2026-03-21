@@ -167,6 +167,10 @@ public partial class HealthViewModel : ObservableObject
 
     private void OnStatusReceived(object? sender, DeviceStatus status)
     {
+        // Pick up cached health report if we missed the event
+        if (!HasHealthReport && _bluetoothService.LastHealthReport is { } cached)
+            OnHealthReportReceived(this, cached);
+
         // Device Info
         StationId = status.StationId;
         FirmwareVersion = $"v{status.FirmwareVersion}";

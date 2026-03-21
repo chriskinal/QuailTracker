@@ -128,6 +128,11 @@ public interface IBluetoothService
     event EventHandler<HealthReport>? HealthReportReceived;
 
     /// <summary>
+    /// Last received health report for this connection (null if none yet).
+    /// </summary>
+    HealthReport? LastHealthReport { get; }
+
+    /// <summary>
     /// Fired when a detection is received via $DETECTION push.
     /// </summary>
     event EventHandler<DetectionEvent>? DetectionReceived;
