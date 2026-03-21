@@ -117,6 +117,12 @@ public partial class MainWindowViewModel : ObservableObject
     {
         IsConnected = state == ConnectionState.Connected;
 
+        if (state == ConnectionState.Disconnected)
+        {
+            _deviceIsRecording = false;
+            LastRefreshed = "--:--:--";
+        }
+
         if (state == ConnectionState.Connected)
             ShowDevicePicker = false;
         // Don't hide picker on Disconnected — scan completion is expected.

@@ -722,6 +722,10 @@ static void handle_ping(void)
 
 void ble_proto_dispatch(uint8_t topic, const uint8_t *payload, size_t payload_len)
 {
+    /* Update stale-connection detector timestamp */
+    extern volatile uint32_t lastBleRxTick;
+    lastBleRxTick = HAL_GetTick();
+
     switch (topic) {
     case TOPIC_COMMAND:
         handle_command(payload, payload_len);

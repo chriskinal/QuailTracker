@@ -66,6 +66,8 @@ public class BluetoothService : IBluetoothService
     private TaskCompletionSource<Quailtracker.Status>? _statusTcs;
 
     private CancellationTokenSource? _scanCts;
+    private DateTime _lastDataReceived = DateTime.MinValue;
+    private CancellationTokenSource? _watchdogCts;
 
     public ConnectionState CurrentState { get; private set; } = ConnectionState.Disconnected;
     public string? ConnectedDeviceName { get; private set; }
@@ -129,6 +131,7 @@ public class BluetoothService : IBluetoothService
             _device = found;
 
             _mtu = await _device.RequestMtuAsync(185);
+            _device.UpdateConnectionInterval(ConnectionInterval.High);
             await DiscoverUartCharacteristicsAsync(CancellationToken.None);
 
             ConnectedDeviceName = _device.Name ?? "QuailTracker";
@@ -248,6 +251,7 @@ public class BluetoothService : IBluetoothService
 
             timeoutCts.Token.ThrowIfCancellationRequested();
             _mtu = await _device.RequestMtuAsync(185);
+            _device.UpdateConnectionInterval(ConnectionInterval.High);
 
             await DiscoverUartCharacteristicsAsync(timeoutCts.Token);
 
@@ -371,16 +375,17 @@ public class BluetoothService : IBluetoothService
             await Task.Delay(1500);
 
             // Subscribe to periodic topics at configured interval.
-            // HealthReport is NOT subscribed periodically — it's large and
-            // cumulative.  The immediate push from each Subscribe already
-            // floods the BLE UART; adding HealthReport caused RX overflow
-            // that lost the remaining subscribe frames.  HealthReport is
-            // delivered once via CMD_GET_STATUS below.
+            // Space out sends — each subscribe triggers an immediate push from
+            // the firmware.  Back-to-back pushes overflow the PB-03F's BLE TX
+            // buffer and can drop the connection.
             var ms = (uint)(RefreshIntervalSeconds * 1000);
             System.Console.WriteLine($"[BLE] Subscribing to topics (interval={ms}ms)...");
             await SendSubscribeAsync(BleProtoTopic.Status, ms);
+            await Task.Delay(300);
             await SendSubscribeAsync(BleProtoTopic.GpsFix, ms);
+            await Task.Delay(300);
             await SendSubscribeAsync(BleProtoTopic.RecordingState, 0);  // on-change
+            await Task.Delay(300);
             await SendSubscribeAsync(BleProtoTopic.Detection, 0);      // on-change
             System.Console.WriteLine("[BLE] Subscriptions sent OK");
         }
@@ -389,8 +394,42 @@ public class BluetoothService : IBluetoothService
             System.Console.WriteLine($"[BLE] OnConnectedAsync error: {ex}");
         }
 
-        // Request initial status
-        _ = RequestStatusAsync();
+        // Request initial status (await to ensure it completes before returning)
+        await RequestStatusAsync();
+
+        // Start connection watchdog
+        StartWatchdog();
+    }
+
+    /// <summary>
+    /// Background watchdog that detects stale connections.  If no BLE data
+    /// arrives for 3× the refresh interval, the link is dead — disconnect
+    /// so the user can reconnect cleanly instead of staring at a frozen UI.
+    /// </summary>
+    private void StartWatchdog()
+    {
+        _watchdogCts?.Cancel();
+        _watchdogCts = new CancellationTokenSource();
+        var ct = _watchdogCts.Token;
+
+        _ = Task.Run(async () =>
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(5000, ct).ConfigureAwait(false);
+                if (ct.IsCancellationRequested) break;
+                if (CurrentState != ConnectionState.Connected) break;
+
+                var silence = DateTime.UtcNow - _lastDataReceived;
+                var threshold = TimeSpan.FromSeconds(RefreshIntervalSeconds * 3);
+                if (silence > threshold)
+                {
+                    System.Console.WriteLine($"[BLE] Watchdog: no data for {silence.TotalSeconds:F0}s, disconnecting stale connection");
+                    await DisconnectAsync();
+                    break;
+                }
+            }
+        }, ct);
     }
 
     public async Task ResubscribePeriodicAsync()
@@ -796,6 +835,7 @@ public class BluetoothService : IBluetoothService
 
     /// <summary>
     /// Write a COBS-framed byte array to the BLE characteristic, chunked to fit MTU.
+    /// Each write has a 3s timeout to prevent hanging on a stale connection.
     /// </summary>
     private async Task SendFrameAsync(byte[] frame)
     {
@@ -809,7 +849,10 @@ public class BluetoothService : IBluetoothService
             var len = Math.Min(chunkSize, frame.Length - offset);
             var chunk = new byte[len];
             Array.Copy(frame, offset, chunk, 0, len);
-            await _writeCharacteristic.WriteAsync(chunk);
+
+            var writeTask = _writeCharacteristic.WriteAsync(chunk);
+            if (await Task.WhenAny(writeTask, Task.Delay(3000)) != writeTask)
+                throw new TimeoutException("BLE write timed out");
         }
     }
 
@@ -824,6 +867,7 @@ public class BluetoothService : IBluetoothService
         var data = e.Characteristic.Value;
         if (data == null || data.Length == 0) return;
 
+        _lastDataReceived = DateTime.UtcNow;
         _frameAssembler.Feed(data, OnFrameReceived);
     }
 
@@ -970,6 +1014,7 @@ public class BluetoothService : IBluetoothService
         if (_device != null && e.Device.Id == _device.Id)
         {
             // Unexpected disconnect
+            _watchdogCts?.Cancel();
             _ackTcs?.TrySetCanceled();
             _statusTcs?.TrySetCanceled();
             _configTcs?.TrySetCanceled();
@@ -986,6 +1031,7 @@ public class BluetoothService : IBluetoothService
 
     private async Task CleanupConnection()
     {
+        _watchdogCts?.Cancel();
         _ackTcs?.TrySetCanceled();
         _statusTcs?.TrySetCanceled();
         _configTcs?.TrySetCanceled();

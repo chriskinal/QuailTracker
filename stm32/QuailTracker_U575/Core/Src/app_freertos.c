@@ -162,6 +162,8 @@ void device_state_snapshot(device_state_t *out)
 
 /* BLE status streaming: independent audio-level and recording streams */
 static uint32_t lastSht30Tick = 0;
+static uint32_t lastDisconnectTick = 0;
+volatile uint32_t lastBleRxTick = 0;  /* updated by ble_proto_dispatch */
 #define SHT30_INTERVAL_MS 5000
 
 /* BLE log forwarding — ring buffer fed by _write(), drained by BLE task */
@@ -1889,7 +1891,28 @@ static void StartBleTask(void *argument)
     /* Disable echo (PB-03F has echo ON by default) */
     bleSendCmd("ATE0", resp, sizeof(resp), 1000);
 
-    /* Probe with AT */
+    /* Probe with AT — if no response, module may be stuck in transparent
+     * mode from a previous MCU session (J-Link doesn't reset PB-03F). */
+    if (bleSendCmd("AT", resp, sizeof(resp), 1000) == 0) {
+        printf("BLE: No response, trying ++ escape...\r\n");
+        /* Recovery loop: module may be in transparent mode, or phone may
+         * auto-reconnect after AT+BLEDISCON putting module back in
+         * transparent mode.  Try up to 3 times. */
+        /* Recovery: exit transparent mode, disconnect, full module restart */
+        bleSend("++");
+        osDelay(1000);
+        while (getCharBle(10) >= 0) {}
+        bleSendCmd("AT+BLEADVEN=0", resp, sizeof(resp), 500);
+        bleSendCmd("AT+BLEDISCON", resp, sizeof(resp), 500);
+        osDelay(500);
+        while (getCharBle(10) >= 0) {}
+        bleSendCmd("AT+RST", resp, sizeof(resp), 500);
+        osDelay(1500);  /* wait for module reboot */
+        while (getCharBle(10) >= 0) {}  /* flush boot banner */
+        bleSendCmd("ATE0", resp, sizeof(resp), 500);
+    }
+
+    /* Final probe */
     if (bleSendCmd("AT", resp, sizeof(resp), 1000) > 0) {
         printf("BLE: AT -> %s\r\n", resp);
         bleReady = 1;
@@ -2027,6 +2050,8 @@ static void StartBleTask(void *argument)
                 if (textPos > 0) {
                     if (strstr(textBuf, "BLE_CONNECTED") != NULL) {
                         bleConnected = 1;
+                        lastDisconnectTick = 0;
+                        lastBleRxTick = HAL_GetTick();
                         ble_proto_reset();
                         printf("BLE: Connected\r\n");
                         /* Reset health-report-sent flag so first CMD_GET_STATUS pushes it */
@@ -2034,6 +2059,7 @@ static void StartBleTask(void *argument)
                         healthReportSent = 0;
                     } else if (strstr(textBuf, "BLE_DISCONNECT") != NULL) {
                         bleConnected = 0;
+                        lastDisconnectTick = HAL_GetTick();
                         ble_proto_reset();
                         bleLogEnabled = 0;
                         printf("BLE: Disconnected\r\n");
@@ -2096,6 +2122,77 @@ static void StartBleTask(void *argument)
         if ((HAL_GetTick() - lastHealthSaveTick) >= HEALTH_SAVE_INTERVAL_MS) {
             lastHealthSaveTick = HAL_GetTick();
             healthSave();
+        }
+
+        /* Stale connection detector: if bleConnected=1 but no BLE frames
+         * received for 60s, the app was killed without a clean disconnect.
+         * The PB-03F still thinks it's connected (transparent mode).
+         * Send "++" to exit transparent mode, then disconnect and restart
+         * advertising. */
+        if (bleConnected && lastBleRxTick != 0 &&
+            (HAL_GetTick() - lastBleRxTick) >= 60000)
+        {
+            printf("BLE: Stale connection detected (no data for 60s)\r\n");
+
+            /* Exit transparent mode with raw "++" (no \r\n) */
+            char resp[32];
+            bleSend("++");
+            osDelay(1000);
+            while (getCharBle(10) >= 0) {}  /* flush "OK" */
+
+            /* Stop advertising so phone can't auto-reconnect */
+            bleSendCmd("AT+BLEADVEN=0", resp, sizeof(resp), 500);
+
+            /* Disconnect the BLE link */
+            bleSendCmd("AT+BLEDISCON", resp, sizeof(resp), 1000);
+            osDelay(500);
+            while (getCharBle(10) >= 0) {}  /* flush URC */
+
+            /* Full module restart to clear corrupted BLE stack state */
+            bleSendCmd("AT+RST", resp, sizeof(resp), 500);
+            printf("BLE: RST -> %s\r\n", resp[0] ? resp : "(none)");
+            osDelay(1500);  /* wait for module reboot */
+            while (getCharBle(10) >= 0) {}  /* flush boot banner */
+
+            /* Re-init after reset */
+            bleSendCmd("ATE0", resp, sizeof(resp), 500);
+            bleSendCmd("AT+BLEADVEN=0", resp, sizeof(resp), 500);
+            osDelay(100);
+            {
+                char nameCmd[48];
+                snprintf(nameCmd, sizeof(nameCmd), "AT+BLENAME=%s", cfg.stationId);
+                bleSendCmd(nameCmd, resp, sizeof(resp), 500);
+            }
+            bleSendCmd("AT+BLEADVEN=1", resp, sizeof(resp), 500);
+            printf("BLE: BLEADVEN=1 -> %s\r\n", resp[0] ? resp : "(none)");
+
+            bleConnected = 0;
+            lastDisconnectTick = 0;
+            ble_proto_reset();
+            bleLogEnabled = 0;
+            printf("BLE: Module reset and advertising restarted\r\n");
+        }
+
+        /* Advertising safety net: if not connected, retry every 10s.
+         * Probe with AT first — if the module is still in transparent mode
+         * (PB-03F hasn't timed out the BLE link yet), AT won't respond and
+         * we just retry later.  Once the module exits transparent mode
+         * (supervision timeout fired), AT responds and we can restart adv. */
+        if (!bleConnected && bleReady &&
+            lastDisconnectTick != 0 &&
+            (HAL_GetTick() - lastDisconnectTick) >= 10000)
+        {
+            char advResp[32];
+            if (bleSendCmd("AT", advResp, sizeof(advResp), 500) > 0) {
+                bleSendCmd("AT+BLEADVEN=0", advResp, sizeof(advResp), 500);
+                osDelay(100);
+                bleSendCmd("AT+BLEADVEN=1", advResp, sizeof(advResp), 500);
+                printf("BLE: Advertising restarted (safety net)\r\n");
+                lastDisconnectTick = 0;  /* success — stop retrying */
+            } else {
+                printf("BLE: Module unresponsive (transparent mode?), retry in 10s\r\n");
+                lastDisconnectTick = HAL_GetTick();  /* retry */
+            }
         }
 
         /* Drain log ring buffer over BLE as protobuf LogLine messages */
