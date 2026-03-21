@@ -29,6 +29,7 @@
 #include "fatfs.h"
 #include "user_diskio.h"
 #include "mel_spectrogram.h"
+#include "device_state.h"
 
 #include <pb_encode.h>
 #include <pb_decode.h>
@@ -51,146 +52,36 @@
 #define PCM_RING_SIZE   16384
 #define SAMPLE_RATE     48000
 
-/* ---- GPS data type ---- */
-typedef struct {
-    uint8_t  fix;
-    uint8_t  satellites;
-    float    latitude;
-    float    longitude;
-    float    altitude;
-    uint32_t utc_time;
-    uint32_t utc_date;
-    uint8_t  valid;
-} gps_data_t;
+/* No #define aliases — push functions use snapshot (snap.xxx),
+ * command handlers use dev.xxx directly. */
 
-/* ---- Extern variables from app_freertos.c / main.c ---- */
-extern uint8_t sdMounted, isRecording, audioStarted, recFormat;
-extern uint32_t totalDataBytes, ringOverruns;
-extern volatile int32_t audioPeakLevel;
-extern volatile uint8_t actRatio;
-extern uint32_t limiterClipCount;
+/* ---- Extern handles/functions (not in dev) ---- */
 extern volatile uint32_t ringHead;
 extern uint32_t ringTail;
-extern char recFilename[];
 
 extern osMutexId_t fileMtxHandle;
 extern osMessageQueueId_t audioCmdQueueHandle;
 extern osThreadId_t inferenceTaskHandle;
 
-extern int16_t  sht30TempC100;
-extern uint16_t sht30HumRH100;
-extern void sht30Read(void);
-
 extern uint32_t battReadMv(void);
-
-/* GPS */
-extern gps_data_t gpsData;
-extern volatile uint8_t ppsSynced;
-extern volatile uint32_t ppsCount, ppsTick;
-extern uint32_t ppsUtcDate, ppsUtcTime;
-
-/* Detection */
-extern uint32_t detWindowsProcessed, detHits;
-extern char detLastSpecies[];
-extern uint8_t detLastConf;
-extern char detLastTime[];
-
-/* Model */
-extern uint8_t modelLoaded;
-extern uint32_t modelBufSize;
-extern int modelNumLabels;
-
-/* Config */
-typedef struct __attribute__((packed, aligned(16))) {
-    uint32_t magic;
-    uint8_t  version;
-    char     stationId[16];
-    uint8_t  gain;
-    uint16_t bpfLow;
-    uint16_t bpfHigh;
-    uint8_t  recFormat;
-    uint8_t  sunriseEnabled;
-    uint16_t sunriseBefore;
-    uint16_t sunriseAfter;
-    uint8_t  sunsetEnabled;
-    uint16_t sunsetBefore;
-    uint16_t sunsetAfter;
-    uint8_t  numWindows;
-    uint16_t windows[16];
-    uint8_t  trigEnabled;
-    int8_t   trigDb;
-    uint8_t  trigPre;
-    uint8_t  trigPost;
-    uint8_t  lowBatPct;
-    uint8_t  autoStop;
-    uint8_t  activityMode;
-    uint8_t  activityMinPct;
-    uint8_t  activityMaxPct;
-    uint8_t  activityHoldSec;
-    float    surveyLat;
-    float    surveyLon;
-    float    surveyAlt;
-    uint32_t surveyCount;
-    uint8_t  missionMode;
-    uint8_t  detConfThresh;
-    uint8_t  detWindowStep;
-    uint8_t  chunkMinutes;
-    uint8_t  _pad[128 - 100 - 4];
-    uint32_t crc32;
-} device_config_t;
 
 extern device_config_t cfg;
 extern int configSave(void);
 
-/* Survey */
-extern uint8_t surveyActive;
-extern uint32_t surveyStartTick;
-
-/* FatFS */
 extern FATFS USERFatFS;
 extern char USERPath[];
 extern void USER_disk_deinit(void);
 extern int formatSD(void);
 
-/* BLE state */
-extern uint8_t bleReady;
-extern char bleName[];
-extern char bleAddr[];
-
-/* Log forwarding */
 extern volatile uint8_t bleLogEnabled;
 extern volatile uint16_t bleLogHead, bleLogTail;
 
-/* ADF gain */
 extern MDF_HandleTypeDef AdfHandle0;
 
-/* Health statistics (defined in app_freertos.c) */
-typedef struct __attribute__((packed, aligned(16))) {
-    uint32_t magic;
-    uint8_t  version;
-    uint32_t filesWritten;
-    uint64_t totalBytes;
-    uint32_t recordingSecs;
-    char     lastFilename[40];
-    uint32_t lastFileBytes;
-    uint32_t lastFileSecs;
-    uint32_t writeErrors;
-    uint32_t detections;
-    char     lastSpecies[32];
-    uint8_t  lastConfidence;
-    char     lastDetTime[16];
-    uint32_t battMinMv;
-    uint32_t battMaxMv;
-    int32_t  tempMinC100;
-    int32_t  tempMaxC100;
-    uint32_t bootCount;
-    uint32_t sdErrors;
-    uint32_t gpsFixLosses;
-    uint32_t uptimeStartTick;
-    uint8_t  _pad[256 - 158 - 4];
-    uint32_t crc32;
-} health_stats_t;
 extern health_stats_t health;
+
+/* Health report sent flag — send once per connection on first CMD_GET_STATUS */
+uint8_t healthReportSent = 0;
 
 /* Subscription management (defined in ble_proto.c) */
 extern void ble_proto_add_subscription(uint8_t topic, uint32_t interval_ms);
@@ -230,7 +121,7 @@ static void get_sd_space(uint32_t *total_kb, uint32_t *free_kb)
 {
     *total_kb = 0;
     *free_kb = 0;
-    if (!sdMounted) return;
+    if (!dev.rec.sdMounted) return;
 
     FATFS *fs;
     DWORD fre_clust;
@@ -245,16 +136,17 @@ static void get_sd_space(uint32_t *total_kb, uint32_t *free_kb)
     }
 }
 
-/* Format GPS UTC time string: "YYYYMMDDHHmmss" from PPS date/time */
-static void format_utc_string(char *out, size_t out_size)
+/* Format GPS UTC time string: "YYYYMMDDHHmmss" from snapshot PPS date/time */
+static void format_utc_string_from(char *out, size_t out_size,
+                                   uint8_t synced, uint32_t date, uint32_t time)
 {
-    if (ppsSynced && ppsUtcDate != 0) {
-        uint32_t dd = ppsUtcDate / 10000;
-        uint32_t mm = (ppsUtcDate / 100) % 100;
-        uint32_t yy = ppsUtcDate % 100;
-        uint32_t hh = ppsUtcTime / 10000;
-        uint32_t mn = (ppsUtcTime / 100) % 100;
-        uint32_t ss = ppsUtcTime % 100;
+    if (synced && date != 0) {
+        uint32_t dd = date / 10000;
+        uint32_t mm = (date / 100) % 100;
+        uint32_t yy = date % 100;
+        uint32_t hh = time / 10000;
+        uint32_t mn = (time / 100) % 100;
+        uint32_t ss = time % 100;
         snprintf(out, out_size, "20%02lu%02lu%02lu%02lu%02lu%02lu",
                  (unsigned long)yy, (unsigned long)mm, (unsigned long)dd,
                  (unsigned long)hh, (unsigned long)mn, (unsigned long)ss);
@@ -267,9 +159,12 @@ static void format_utc_string(char *out, size_t out_size)
 
 static void push_status(void)
 {
+    device_state_t snap;
+    device_state_snapshot(&snap);
+
     quailtracker_Status msg = quailtracker_Status_init_zero;
 
-    /* Battery */
+    /* Battery — fresh ADC read */
     uint32_t mv = battReadMv();
     msg.battery_mv = mv;
     int pct = (int)(mv - 3000) * 100 / 1200;
@@ -278,44 +173,44 @@ static void push_status(void)
     msg.battery_pct = (uint32_t)pct;
 
     /* BLE */
-    msg.ble_ready = bleReady ? true : false;
-    strncpy(msg.ble_name, bleName, sizeof(msg.ble_name) - 1);
-    strncpy(msg.ble_addr, bleAddr, sizeof(msg.ble_addr) - 1);
+    msg.ble_ready = snap.ble.ready ? true : false;
+    strncpy(msg.ble_name, snap.ble.name, sizeof(msg.ble_name) - 1);
+    strncpy(msg.ble_addr, snap.ble.addr, sizeof(msg.ble_addr) - 1);
 
     /* SD card */
-    msg.sd_mounted = sdMounted ? true : false;
+    msg.sd_mounted = snap.rec.sdMounted ? true : false;
     get_sd_space(&msg.sd_total_kb, &msg.sd_free_kb);
 
     /* Recording */
-    msg.recording = isRecording ? true : false;
-    strncpy(msg.rec_filename, recFilename, sizeof(msg.rec_filename) - 1);
-    msg.rec_bytes = totalDataBytes;
-    msg.rec_duration_s = isRecording ? totalDataBytes / (SAMPLE_RATE * 3) : 0;
-    msg.rec_overruns = ringOverruns;
-    msg.rec_format = (uint32_t)recFormat;
+    msg.recording = snap.rec.active ? true : false;
+    strncpy(msg.rec_filename, snap.rec.filename, sizeof(msg.rec_filename) - 1);
+    msg.rec_bytes = snap.rec.dataBytes;
+    msg.rec_duration_s = snap.rec.active ? snap.rec.dataBytes / (SAMPLE_RATE * 3) : 0;
+    msg.rec_overruns = snap.rec.overruns;
+    msg.rec_format = (uint32_t)snap.rec.format;
 
     /* Detection */
-    msg.det_active = (cfg.missionMode != MISSION_RECORD && modelLoaded) ? true : false;
-    msg.det_windows = detWindowsProcessed;
-    msg.det_hits = detHits;
-    strncpy(msg.det_last_species, detLastSpecies, sizeof(msg.det_last_species) - 1);
-    msg.model_loaded = modelLoaded ? true : false;
-    msg.model_size = modelBufSize;
-    msg.model_labels = (uint32_t)modelNumLabels;
+    msg.det_active = (cfg.missionMode != MISSION_RECORD && snap.det.modelLoaded) ? true : false;
+    msg.det_windows = snap.det.windowsProcessed;
+    msg.det_hits = snap.det.hits;
+    strncpy(msg.det_last_species, snap.det.lastSpecies, sizeof(msg.det_last_species) - 1);
+    msg.model_loaded = snap.det.modelLoaded ? true : false;
+    msg.model_size = snap.det.modelBufSize;
+    msg.model_labels = (uint32_t)snap.det.modelNumLabels;
 
     /* Environment */
-    msg.temperature_c100 = (int32_t)sht30TempC100;
-    msg.humidity_rh100 = (uint32_t)sht30HumRH100;
+    msg.temperature_c100 = (int32_t)snap.env.tempC100;
+    msg.humidity_rh100 = (uint32_t)snap.env.humRH100;
 
     /* Firmware */
     strncpy(msg.firmware_version, FW_VERSION, sizeof(msg.firmware_version) - 1);
     strncpy(msg.station_id, cfg.stationId, sizeof(msg.station_id) - 1);
 
     /* Survey-in progress */
-    msg.survey_active = surveyActive ? true : false;
+    msg.survey_active = snap.gps.surveyActive ? true : false;
     msg.survey_count = cfg.surveyCount;
-    if (surveyActive) {
-        uint32_t elapsed = (HAL_GetTick() - surveyStartTick) / 1000;
+    if (snap.gps.surveyActive) {
+        uint32_t elapsed = (HAL_GetTick() - snap.gps.surveyStartTick) / 1000;
         msg.survey_seconds_left = elapsed < 300 ? 300 - elapsed : 0;
     }
     msg.survey_lat_e7 = (int32_t)(cfg.surveyLat * 10000000.0f);
@@ -331,17 +226,21 @@ static void push_status(void)
 
 static void push_gps_fix(void)
 {
+    device_state_t snap;
+    device_state_snapshot(&snap);
+
     quailtracker_GpsFix msg = quailtracker_GpsFix_init_zero;
 
-    msg.valid = gpsData.valid ? true : false;
-    msg.satellites = (uint32_t)gpsData.satellites;
-    msg.latitude_e7 = (int32_t)(gpsData.latitude * 10000000.0f);
-    msg.longitude_e7 = (int32_t)(gpsData.longitude * 10000000.0f);
-    msg.altitude_mm = (int32_t)(gpsData.altitude * 1000.0f);
-    msg.fix_type = (uint32_t)gpsData.fix;
-    msg.pps_synced = ppsSynced ? true : false;
-    msg.pps_count = ppsCount;
-    format_utc_string(msg.utc_time, sizeof(msg.utc_time));
+    msg.valid = snap.gps.fix.valid ? true : false;
+    msg.satellites = (uint32_t)snap.gps.fix.satellites;
+    msg.latitude_e7 = (int32_t)(snap.gps.fix.latitude * 10000000.0f);
+    msg.longitude_e7 = (int32_t)(snap.gps.fix.longitude * 10000000.0f);
+    msg.altitude_mm = (int32_t)(snap.gps.fix.altitude * 1000.0f);
+    msg.fix_type = (uint32_t)snap.gps.fix.fix;
+    msg.pps_synced = snap.gps.ppsSynced ? true : false;
+    msg.pps_count = snap.gps.ppsCount;
+    format_utc_string_from(msg.utc_time, sizeof(msg.utc_time),
+                           snap.gps.ppsSynced, snap.gps.ppsUtcDate, snap.gps.ppsUtcTime);
 
     uint8_t buf[quailtracker_GpsFix_size];
     pb_ostream_t stream = pb_ostream_from_buffer(buf, sizeof(buf));
@@ -352,15 +251,16 @@ static void push_gps_fix(void)
 
 static void push_audio_level(void)
 {
+    device_state_t snap;
+    device_state_snapshot(&snap);
+    dev.audio.peakLevel = 0;  /* reset after snapshot */
+
     quailtracker_AudioLevel msg = quailtracker_AudioLevel_init_zero;
 
-    /* Read and reset peak */
-    int32_t peak = audioPeakLevel;
-    audioPeakLevel = 0;
-
+    int32_t peak = snap.audio.peakLevel;
     msg.peak = (uint32_t)(peak < 0 ? 0 : peak);
-    msg.activity_pct = (uint32_t)actRatio;
-    msg.clip_count = limiterClipCount;
+    msg.activity_pct = (uint32_t)snap.audio.actRatio;
+    msg.clip_count = snap.audio.clipCount;
     msg.buf_used = (uint32_t)(ringHead - ringTail);
     msg.buf_capacity = PCM_RING_SIZE;
 
@@ -373,13 +273,16 @@ static void push_audio_level(void)
 
 static void push_recording_state(void)
 {
+    device_state_t snap;
+    device_state_snapshot(&snap);
+
     quailtracker_RecordingState msg = quailtracker_RecordingState_init_zero;
 
-    msg.active = isRecording ? true : false;
-    strncpy(msg.filename, recFilename, sizeof(msg.filename) - 1);
-    msg.bytes_written = totalDataBytes;
-    msg.duration_s = isRecording ? totalDataBytes / (SAMPLE_RATE * 3) : 0;
-    msg.overruns = ringOverruns;
+    msg.active = snap.rec.active ? true : false;
+    strncpy(msg.filename, snap.rec.filename, sizeof(msg.filename) - 1);
+    msg.bytes_written = snap.rec.dataBytes;
+    msg.duration_s = snap.rec.active ? snap.rec.dataBytes / (SAMPLE_RATE * 3) : 0;
+    msg.overruns = snap.rec.overruns;
 
     uint32_t total_kb, free_kb;
     get_sd_space(&total_kb, &free_kb);
@@ -504,8 +407,8 @@ static void handle_command(const uint8_t *payload, size_t payload_len)
 
     switch (cmd.type) {
     case quailtracker_CommandType_CMD_REC_START:
-        if (isRecording) { send_nack(cmd.type, "ALREADY"); return; }
-        if (!sdMounted)  { send_nack(cmd.type, "NOSD"); return; }
+        if (dev.rec.active) { send_nack(cmd.type, "ALREADY"); return; }
+        if (!dev.rec.sdMounted)  { send_nack(cmd.type, "NOSD"); return; }
         {
             uint8_t c = CMD_START_REC;
             osMessageQueuePut(audioCmdQueueHandle, &c, 0, 0);
@@ -514,7 +417,7 @@ static void handle_command(const uint8_t *payload, size_t payload_len)
         break;
 
     case quailtracker_CommandType_CMD_REC_STOP:
-        if (!isRecording) { send_nack(cmd.type, "ALREADY"); return; }
+        if (!dev.rec.active) { send_nack(cmd.type, "ALREADY"); return; }
         {
             uint8_t c = CMD_STOP_REC;
             osMessageQueuePut(audioCmdQueueHandle, &c, 0, 0);
@@ -523,19 +426,19 @@ static void handle_command(const uint8_t *payload, size_t payload_len)
         break;
 
     case quailtracker_CommandType_CMD_REC_TOGGLE:
-        if (!isRecording && !sdMounted) { send_nack(cmd.type, "NOSD"); return; }
+        if (!dev.rec.active && !dev.rec.sdMounted) { send_nack(cmd.type, "NOSD"); return; }
         {
-            uint8_t c = isRecording ? CMD_STOP_REC : CMD_START_REC;
+            uint8_t c = dev.rec.active ? CMD_STOP_REC : CMD_START_REC;
             osMessageQueuePut(audioCmdQueueHandle, &c, 0, 0);
         }
         send_ack(cmd.type);
         break;
 
     case quailtracker_CommandType_CMD_SD_MOUNT:
-        if (sdMounted) { send_nack(cmd.type, "ALREADY"); return; }
+        if (dev.rec.sdMounted) { send_nack(cmd.type, "ALREADY"); return; }
         osMutexAcquire(fileMtxHandle, osWaitForever);
         if (f_mount(&USERFatFS, USERPath, 1) == FR_OK) {
-            sdMounted = 1;
+            dev.rec.sdMounted = 1;
             osMutexRelease(fileMtxHandle);
             printf("BLE PB: SD mounted\r\n");
             send_ack(cmd.type);
@@ -546,19 +449,19 @@ static void handle_command(const uint8_t *payload, size_t payload_len)
         break;
 
     case quailtracker_CommandType_CMD_SD_EJECT:
-        if (isRecording) { send_nack(cmd.type, "BUSY"); return; }
-        if (!sdMounted)  { send_nack(cmd.type, "ALREADY"); return; }
+        if (dev.rec.active) { send_nack(cmd.type, "BUSY"); return; }
+        if (!dev.rec.sdMounted)  { send_nack(cmd.type, "ALREADY"); return; }
         osMutexAcquire(fileMtxHandle, osWaitForever);
         f_mount(NULL, USERPath, 0);
         USER_disk_deinit();
-        sdMounted = 0;
+        dev.rec.sdMounted = 0;
         osMutexRelease(fileMtxHandle);
         printf("BLE PB: SD ejected\r\n");
         send_ack(cmd.type);
         break;
 
     case quailtracker_CommandType_CMD_SD_FORMAT:
-        if (isRecording) { send_nack(cmd.type, "BUSY"); return; }
+        if (dev.rec.active) { send_nack(cmd.type, "BUSY"); return; }
         osMutexAcquire(fileMtxHandle, osWaitForever);
         {
             int ok = formatSD();
@@ -575,6 +478,11 @@ static void handle_command(const uint8_t *payload, size_t payload_len)
     case quailtracker_CommandType_CMD_GET_STATUS:
         push_status();
         send_ack(cmd.type);
+        /* Push health report once per connection on first status request */
+        if (!healthReportSent) {
+            healthReportSent = 1;
+            push_health_report();
+        }
         break;
 
     case quailtracker_CommandType_CMD_GET_CONFIG:
@@ -603,7 +511,7 @@ static void handle_command(const uint8_t *payload, size_t payload_len)
         break;
 
     case quailtracker_CommandType_CMD_SURVEY_START:
-        if (gpsData.satellites < SURVEY_MIN_SATS || gpsData.fix < 1) {
+        if (dev.gps.fix.satellites < SURVEY_MIN_SATS || dev.gps.fix.fix < 1) {
             send_nack(cmd.type, "NOSATS");
             return;
         }
@@ -611,15 +519,15 @@ static void handle_command(const uint8_t *payload, size_t payload_len)
         cfg.surveyLon = 0.0f;
         cfg.surveyAlt = 0.0f;
         cfg.surveyCount = 0;
-        surveyActive = 1;
-        surveyStartTick = HAL_GetTick();
+        dev.gps.surveyActive = 1;
+        dev.gps.surveyStartTick = HAL_GetTick();
         printf("BLE PB: Survey started\r\n");
         send_ack(cmd.type);
         break;
 
     case quailtracker_CommandType_CMD_SURVEY_STOP:
-        if (surveyActive) {
-            surveyActive = 0;
+        if (dev.gps.surveyActive) {
+            dev.gps.surveyActive = 0;
             configSave();
             printf("BLE PB: Survey stopped (%lu fixes)\r\n",
                    (unsigned long)cfg.surveyCount);
@@ -629,7 +537,7 @@ static void handle_command(const uint8_t *payload, size_t payload_len)
         break;
 
     case quailtracker_CommandType_CMD_SURVEY_CLEAR:
-        surveyActive = 0;
+        dev.gps.surveyActive = 0;
         cfg.surveyLat = 0.0f;
         cfg.surveyLon = 0.0f;
         cfg.surveyAlt = 0.0f;
@@ -681,9 +589,9 @@ static void handle_set_config(const uint8_t *payload, size_t payload_len)
         cfg.bpfHigh = (uint16_t)sc.bpf_high_hz;
     }
     if (sc.has_rec_format) {
-        if (!isRecording) {
+        if (!dev.rec.active) {
             cfg.recFormat = (uint8_t)sc.rec_format;
-            recFormat = (uint8_t)sc.rec_format;
+            dev.rec.format = (uint8_t)sc.rec_format;
         }
     }
     if (sc.has_station_id) {

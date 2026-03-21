@@ -35,101 +35,20 @@
 #include "ble_proto.h"
 #include "quailtracker.pb.h"
 #include <pb_encode.h>
+#include "device_state.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-typedef struct {
-    uint8_t  fix;        /* 0=no fix, 1=GPS, 2=DGPS */
-    uint8_t  satellites;
-    float    latitude;   /* decimal degrees, + = N */
-    float    longitude;  /* decimal degrees, + = E */
-    float    altitude;   /* meters above MSL (from GGA) */
-    uint32_t utc_time;   /* HHMMSS as integer */
-    uint32_t utc_date;   /* DDMMYY as integer */
-    uint8_t  valid;      /* RMC status: 1=A, 0=V */
-} gps_data_t;
 
-/* ---- Flash-persisted device configuration ---- */
+/* ---- Flash config/health constants (types now in device_state.h) ---- */
 #define CONFIG_MAGIC      0x51544346   /* "QTCF" */
 #define CONFIG_VERSION    7
 #define CONFIG_FLASH_ADDR 0x080FE000   /* Last page of Bank 1 on 2MB (Nucleo ZI), Bank 2 page 63 on 1MB (VGT6) */
 
-typedef struct __attribute__((packed, aligned(16))) {
-    uint32_t magic;
-    uint8_t  version;
-    char     stationId[16];   /* null-terminated */
-    uint8_t  gain;            /* 0-24 dB in 3dB steps */
-    uint16_t bpfLow;          /* HPF cutoff Hz, 0=off, default 150 */
-    uint16_t bpfHigh;         /* LPF cutoff Hz, 0=off, default 8000 */
-    uint8_t  recFormat;       /* 0=FLAC, 1=WAV */
-    uint8_t  sunriseEnabled;  /* 0/1 */
-    uint16_t sunriseBefore;   /* minutes before sunrise */
-    uint16_t sunriseAfter;    /* minutes after sunrise */
-    uint8_t  sunsetEnabled;   /* 0/1 */
-    uint16_t sunsetBefore;    /* minutes before sunset */
-    uint16_t sunsetAfter;     /* minutes after sunset */
-    uint8_t  numWindows;      /* 0-8 freeform windows */
-    uint16_t windows[16];     /* pairs of HHMM start,end (max 8 windows) */
-    uint8_t  trigEnabled;     /* 0/1 */
-    int8_t   trigDb;          /* -60..0 */
-    uint8_t  trigPre;         /* 0-30 seconds */
-    uint8_t  trigPost;        /* 0-60 seconds */
-    uint8_t  lowBatPct;       /* 0-100 */
-    uint8_t  autoStop;        /* 0/1 */
-    uint8_t  activityMode;    /* 0=off, 1=monitor, 2=squelch, 3=gate */
-    uint8_t  activityMinPct;  /* 1-50, default 5 */
-    uint8_t  activityMaxPct;  /* 50-99, default 80 */
-    uint8_t  activityHoldSec; /* 1-30, gate mode holdoff, default 3 */
-    float    surveyLat;       /* averaged latitude (decimal degrees) */
-    float    surveyLon;       /* averaged longitude (decimal degrees) */
-    float    surveyAlt;       /* averaged altitude (meters) */
-    uint32_t surveyCount;     /* number of GPS fixes averaged */
-    uint8_t  missionMode;     /* 0=record, 1=detect, 2=both */
-    uint8_t  detConfThresh;   /* 0-100 confidence % threshold */
-    uint8_t  detWindowStep;   /* 1-3 seconds inference window step */
-    uint8_t  chunkMinutes;    /* 0=no chunking, 1-240 = chunk duration in minutes */
-    uint8_t  _pad[128 - 100 - 4]; /* pad to 128 bytes: 100 pre-pad + 24 pad + 4 crc */
-    uint32_t crc32;           /* CRC-32 over bytes 0..123 */
-} device_config_t;
-
-_Static_assert(sizeof(device_config_t) == 128, "device_config_t must be 128 bytes");
-
-/* ---- Flash-persisted health statistics ---- */
 #define HEALTH_MAGIC       0x51544853   /* "QTHS" */
 #define HEALTH_VERSION     1
 #define HEALTH_FLASH_ADDR  0x080FC000   /* One page before config page */
-
-typedef struct __attribute__((packed, aligned(16))) {
-    uint32_t magic;
-    uint8_t  version;
-    /* Recording */
-    uint32_t filesWritten;
-    uint64_t totalBytes;
-    uint32_t recordingSecs;
-    char     lastFilename[40];
-    uint32_t lastFileBytes;
-    uint32_t lastFileSecs;
-    uint32_t writeErrors;
-    /* Detection */
-    uint32_t detections;
-    char     lastSpecies[32];
-    uint8_t  lastConfidence;
-    char     lastDetTime[16];
-    /* System */
-    uint32_t battMinMv;
-    uint32_t battMaxMv;
-    int32_t  tempMinC100;
-    int32_t  tempMaxC100;
-    uint32_t bootCount;
-    uint32_t sdErrors;
-    uint32_t gpsFixLosses;
-    uint32_t uptimeStartTick;  /* HAL_GetTick() at boot (always 0, stored for reference) */
-    uint8_t  _pad[256 - 158 - 4];  /* pad to 256 bytes: 158 packed data + 94 pad + 4 crc */
-    uint32_t crc32;
-} health_stats_t;
-
-_Static_assert(sizeof(health_stats_t) == 256, "health_stats_t must be 256 bytes");
 
 /* ---- OTA firmware update state ---- */
 typedef enum { OTA_IDLE, OTA_RECEIVING, OTA_COMPLETE } ota_state_t;
@@ -172,40 +91,80 @@ typedef struct {
 
 extern int32_t pcmBuffer[];
 
-/* PCM ring buffer -defined in main.c, written by DMA ISR callbacks */
+/* PCM ring buffer — defined in main.c, written by DMA ISR callbacks */
 #define PCM_RING_SIZE  16384
 #define PCM_RING_MASK  (PCM_RING_SIZE - 1)
 extern int32_t pcmRing[];
 extern volatile uint32_t ringHead;
 extern uint32_t ringTail;
-extern uint32_t ringOverruns;
 
 extern FIL wavFile;
-extern uint8_t isRecording;
-extern uint8_t sdMounted;
-extern uint8_t audioStarted;
-extern uint32_t totalDataBytes;
-extern uint32_t fileCounter;
-extern uint8_t recFormat;
 #define REC_FMT_FLAC 0
 #define REC_FMT_WAV  1
 extern flac_enc_t flacEncoder;
 extern char deviceStationId[16];
 
-/* Live audio peak level (updated by audioTask, read by bleTask for $STATUS) */
-volatile int32_t audioPeakLevel = 0;
+/* ---- Consolidated device state (single instance) ---- */
+device_state_t dev;
+
+/* Snapshot: copy dev under critical section for consistent BLE encoding */
+void device_state_snapshot(device_state_t *out)
+{
+    taskENTER_CRITICAL();
+    memcpy(out, &dev, sizeof(dev));
+    taskEXIT_CRITICAL();
+}
+
+/* ---- Aliases: old variable names → dev struct fields ---- */
+#define isRecording         dev.rec.active
+#define sdMounted           dev.rec.sdMounted
+#define audioStarted        dev.rec.audioStarted
+#define totalDataBytes      dev.rec.dataBytes
+#define ringOverruns        dev.rec.overruns
+#define recStartTick        dev.rec.startTick
+#define fileCounter         dev.rec.fileCounter
+#define recFilename         dev.rec.filename
+#define gpsData             dev.gps.fix
+#define ppsSynced           dev.gps.ppsSynced
+#define ppsCount            dev.gps.ppsCount
+#define ppsTick             dev.gps.ppsTick
+#define ppsUtcTime          dev.gps.ppsUtcTime
+#define ppsUtcDate          dev.gps.ppsUtcDate
+#define ppsLatitude         dev.gps.ppsLatitude
+#define ppsLongitude        dev.gps.ppsLongitude
+#define ppsAltitude         dev.gps.ppsAltitude
+#define surveyActive        dev.gps.surveyActive
+#define surveyStartTick     dev.gps.surveyStartTick
+#define batteryMv           dev.env.batteryMv
+#define sht30TempC100       dev.env.tempC100
+#define sht30HumRH100       dev.env.humRH100
+#define bleConnected        dev.ble.connected
+#define bleReady            dev.ble.ready
+#define bleName             dev.ble.name
+#define bleAddr             dev.ble.addr
+#define bleNameUpdatePending dev.ble.nameUpdatePending
+#define audioPeakLevel      dev.audio.peakLevel
+#define actRatio            dev.audio.actRatio
+#define limiterClipCount    dev.audio.clipCount
+#define modelLoaded         dev.det.modelLoaded
+#define modelBufSize        dev.det.modelBufSize
+#define modelNumLabels      dev.det.modelNumLabels
+#define detWindowsProcessed dev.det.windowsProcessed
+#define detHits             dev.det.hits
+#define detLastSpecies      dev.det.lastSpecies
+#define detLastConf         dev.det.lastConf
+#define detLastTime         dev.det.lastTime
 
 /* Peak limiter: hard-clip samples above this threshold.
  * Prevents ADF Sinc4 saturation artifacts on loud close-range calls.
  * Set to ~85% of int16 max to leave headroom while preserving dynamics. */
 #define PEAK_LIMITER_THRESHOLD  7168000
-uint32_t limiterClipCount = 0;  /* total clipped samples this recording */
 
 /* BLE status streaming: independent audio-level and recording streams */
 static uint32_t lastSht30Tick = 0;
 #define SHT30_INTERVAL_MS 5000
 
-/* BLE log forwarding -ring buffer fed by _write(), drained by BLE task */
+/* BLE log forwarding — ring buffer fed by _write(), drained by BLE task */
 #define BLE_LOG_RING_SIZE 512
 volatile uint8_t bleLogEnabled = 0;
 volatile uint8_t bleLogRing[BLE_LOG_RING_SIZE];
@@ -227,47 +186,17 @@ extern void startRecording(void);
 extern void stopRecording(void);
 extern int formatSD(void);
 
-/* PPS time sync state from main.c */
-extern volatile uint32_t ppsCount;
-extern volatile uint32_t ppsTick;
-extern uint32_t ppsUtcTime;
-extern uint32_t ppsUtcDate;
-extern volatile uint8_t ppsSynced;
-extern float ppsLatitude;
-extern float ppsLongitude;
-extern float ppsAltitude;
-
-/* Battery from main.c */
-extern uint32_t batteryMv;
+/* Battery/SHT30 functions from main.c */
 extern uint32_t battReadMv(void);
-
-/* SHT30 from main.c */
-extern int16_t  sht30TempC100;
-extern uint16_t sht30HumRH100;
 extern void sht30Read(void);
 
-/* GPS state */
-gps_data_t gpsData;
-static volatile uint8_t gpsRawOutput;
-static uint8_t gpsPowered = 1;
-
-/* Survey-in state */
-uint8_t surveyActive = 0;       /* 1 = survey in progress */
-uint32_t surveyStartTick = 0;   /* HAL tick when survey started */
 #define SURVEY_DURATION_MS  300000      /* 5 minutes */
 #define SURVEY_MIN_SATS     4           /* minimum satellites for valid fix */
 
-/* BLE state */
-char bleName[32];
-char bleAddr[20];
-uint8_t bleReady;
-volatile uint8_t bleConnected;
-volatile uint8_t bleNameUpdatePending;  /* apply BLE name change on disconnect */
+static volatile uint8_t gpsRawOutput;
+static uint8_t gpsPowered = 1;
 
-/* Recording filename from main.c (for BLE $STATUS) */
-extern char recFilename[];
-
-/* BLE live probe -CLI task sets request, BLE task executes and stores result */
+/* BLE live probe — CLI task sets request, BLE task executes and stores result */
 static volatile uint8_t bleLiveProbeReq;
 static volatile uint8_t bleLiveProbeReady;
 static char bleLiveProbeResp[64];
@@ -280,7 +209,6 @@ health_stats_t health __attribute__((aligned(16)));
 static uint32_t lastHealthSaveTick = 0;
 #define HEALTH_SAVE_INTERVAL_MS 300000  /* 5 minutes */
 static uint8_t prevGpsValid = 0;  /* for GPS fix loss detection */
-static uint32_t healthPushTick = 0;  /* non-zero = deferred health push pending */
 
 /* Forward declarations for health functions */
 static void healthLoad(void);
@@ -310,7 +238,6 @@ static uint32_t computeLpfAlpha(uint16_t fc) {
 }
 
 /* ---- Activity filter state ---- */
-volatile uint8_t actRatio = 0;     /* last computed activity % (read by BLE) */
 static int32_t  actMean  = 0;             /* running mean(|sample|), Q0 */
 static int32_t  actMad   = 0;             /* running MAD, Q0 */
 static uint32_t actAbove = 0;             /* above-threshold count in current window */
@@ -329,7 +256,6 @@ static ota_ctx_t ota;
 
 /* Inference buffers from main.c */
 extern uint8_t modelBuf[56 * 1024];
-extern uint32_t modelBufSize;
 extern uint8_t tensorArena[112 * 1024];
 extern volatile uint64_t absSampleCount;
 
@@ -340,17 +266,8 @@ osThreadId_t inferenceTaskHandle;
 static int16_t melAccumBuf[256];  /* MEL_HOP samples */
 static int melAccumIdx = 0;
 
-/* Inference state */
-volatile uint8_t modelLoaded = 0;
-volatile uint32_t detWindowsProcessed = 0;
-volatile uint32_t detHits = 0;
-char detLastSpecies[32] = "";
-volatile uint8_t detLastConf = 0;
-char detLastTime[20] = "";
-
 /* Model metadata (loaded from model_config.json) */
 static char modelLabels[TFLITE_MAX_CLASSES][32];
-int modelNumLabels = 0;
 static float modelMelMin = -80.0f;
 static float modelMelMax = 0.0f;
 
@@ -683,7 +600,7 @@ void StartAudioTask(void *argument)
 
         /* Step 6: Encode + write (skip if detect-only mode) */
         if (cfg.missionMode == MISSION_DETECT) goto skip_write;
-        if (recFormat == REC_FMT_WAV) {
+        if (dev.rec.format == REC_FMT_WAV) {
           /* Pack int32 samples into 24-bit LE (3 bytes/sample) for WAV */
           static uint8_t packed[512 * 3];
           for (int i = 0; i < blockLen; i++) {
@@ -730,7 +647,6 @@ void StartAudioTask(void *argument)
         }
         /* Step 7: Check chunk duration — split file if elapsed */
         if (cfg.chunkMinutes > 0 && isRecording) {
-          extern uint32_t recStartTick;
           uint32_t elapsedMs = HAL_GetTick() - recStartTick;
           if (elapsedMs >= (uint32_t)cfg.chunkMinutes * 60000u) {
             extern void chunkRecording(void);
@@ -993,10 +909,10 @@ void StartCliTask(void *argument)
         if (isRecording) {
           printf("Stop recording first!\r\n");
         } else {
-          recFormat = (recFormat == REC_FMT_WAV) ? REC_FMT_FLAC : REC_FMT_WAV;
-          cfg.recFormat = recFormat;
+          dev.rec.format = (dev.rec.format == REC_FMT_WAV) ? REC_FMT_FLAC : REC_FMT_WAV;
+          cfg.recFormat = dev.rec.format;
           configSave();
-          printf("Recording format: %s\r\n", recFormat == REC_FMT_WAV ? "WAV" : "FLAC");
+          printf("Recording format: %s\r\n", dev.rec.format == REC_FMT_WAV ? "WAV" : "FLAC");
         }
         printMenu();
         break;
@@ -1946,7 +1862,7 @@ static void StartBleTask(void *argument)
     extern MDF_HandleTypeDef AdfHandle0;
     AdfFilterConfig0.Gain = (int32_t)cfg.gain;  /* raw dB value 0-24 */
     HAL_MDF_SetGain(&AdfHandle0, (int32_t)cfg.gain);  /* update hardware register */
-    recFormat = cfg.recFormat;
+    dev.rec.format = cfg.recFormat;
 
     printf("BLE: Config loaded (station=%s, gain=%d, fmt=%s)\r\n",
            cfg.stationId, cfg.gain,
@@ -2112,13 +2028,13 @@ static void StartBleTask(void *argument)
                         bleConnected = 1;
                         ble_proto_reset();
                         printf("BLE: Connected\r\n");
-                        /* Defer health report push — app needs ~2s for service discovery */
-                        healthPushTick = HAL_GetTick() | 1;  /* ensure non-zero */
+                        /* Reset health-report-sent flag so first CMD_GET_STATUS pushes it */
+                        extern uint8_t healthReportSent;
+                        healthReportSent = 0;
                     } else if (strstr(textBuf, "BLE_DISCONNECT") != NULL) {
                         bleConnected = 0;
                         ble_proto_reset();
                         bleLogEnabled = 0;
-                        healthPushTick = 0;
                         printf("BLE: Disconnected\r\n");
                         /* Reset health counters (keep boot count) and save */
                         healthReset();
@@ -2156,14 +2072,6 @@ static void StartBleTask(void *argument)
         /* Poll subscription timers and push due messages */
         if (bleConnected)
             ble_proto_poll_subscriptions();
-
-        /* Deferred health report push (2s after connect for app service discovery) */
-        if (healthPushTick && bleConnected &&
-            (HAL_GetTick() - healthPushTick) >= 2000) {
-            healthPushTick = 0;
-            ble_proto_push_topic(TOPIC_HEALTH_REPORT);
-            printf("BLE: Health report pushed\r\n");
-        }
 
         /* Periodic SHT30 temperature/humidity read (~every 5s) */
         if ((HAL_GetTick() - lastSht30Tick) >= SHT30_INTERVAL_MS) {

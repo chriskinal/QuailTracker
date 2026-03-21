@@ -29,6 +29,7 @@
 #include "user_diskio.h"
 #include "app_freertos.h"
 #include "flac_encoder.h"
+#include "device_state.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -83,7 +84,6 @@ int32_t pcmBuffer[AUDIO_BUF_SIZE / 2];
 int32_t pcmRing[PCM_RING_SIZE];
 volatile uint32_t ringHead = 0;   /* ISR writes here */
 uint32_t ringTail = 0;            /* audio task reads here */
-uint32_t ringOverruns = 0;
 
 /* FLAC encoder instance (shared with app_freertos.c audio task) */
 flac_enc_t flacEncoder;
@@ -91,7 +91,28 @@ flac_enc_t flacEncoder;
 /* Recording format: 0=FLAC, 1=WAV */
 #define REC_FMT_FLAC 0
 #define REC_FMT_WAV  1
-uint8_t recFormat = REC_FMT_FLAC;
+
+/* ---- Aliases: old variable names → dev struct fields ---- */
+#define ringOverruns   dev.rec.overruns
+#define isRecording    dev.rec.active
+#define sdMounted      dev.rec.sdMounted
+#define audioStarted   dev.rec.audioStarted
+#define totalDataBytes dev.rec.dataBytes
+#define fileCounter    dev.rec.fileCounter
+#define recStartTick   dev.rec.startTick
+#define recFilename    dev.rec.filename
+#define ppsCount       dev.gps.ppsCount
+#define ppsTick        dev.gps.ppsTick
+#define ppsUtcTime     dev.gps.ppsUtcTime
+#define ppsUtcDate     dev.gps.ppsUtcDate
+#define ppsSynced      dev.gps.ppsSynced
+#define ppsLatitude    dev.gps.ppsLatitude
+#define ppsLongitude   dev.gps.ppsLongitude
+#define ppsAltitude    dev.gps.ppsAltitude
+#define batteryMv      dev.env.batteryMv
+#define sht30TempC100  dev.env.tempC100
+#define sht30HumRH100  dev.env.humRH100
+#define modelBufSize   dev.det.modelBufSize
 
 /* UART RX queues — fed by RXNE interrupts, consumed by tasks */
 osMessageQueueId_t gpsRxQueue;    /* USART1 — GPS */
@@ -103,36 +124,11 @@ osMutexId_t printMutex;
 
 /* Recording state (shared with app_freertos.c tasks) */
 FIL wavFile;
-uint8_t isRecording = 0;
-uint8_t sdMounted = 0;
-uint8_t audioStarted = 0;
-uint32_t totalDataBytes = 0;
-uint32_t fileCounter = 0;
-uint32_t recStartTick = 0;      /* HAL_GetTick() at recording start */
 
-/* PPS time sync state (shared with app_freertos.c GPS task) */
-volatile uint32_t ppsCount = 0;
-volatile uint32_t ppsTick = 0;      /* HAL tick at last PPS edge */
-uint32_t ppsUtcTime = 0;            /* HHMMSS latched from NMEA after PPS */
-uint32_t ppsUtcDate = 0;            /* DDMMYY latched from NMEA after PPS */
-volatile uint8_t ppsSynced = 0;     /* 1 when PPS + valid NMEA time available */
-float ppsLatitude = 0.0f;
-float ppsLongitude = 0.0f;
-float ppsAltitude = 0.0f;
-
-/* Battery voltage (millivolts, updated by battReadMv()) */
-uint32_t batteryMv = 0;
 uint32_t battReadMv(void);
-
-/* SHT30 temperature/humidity (updated by sht30Read()) */
-int16_t  sht30TempC100 = 0;    /* temperature in 0.01 °C units */
-uint16_t sht30HumRH100 = 0;    /* humidity in 0.01 %RH units */
 
 /* Station ID (copied from config by app_freertos.c, used for FLAC metadata) */
 char deviceStationId[16] = "QT001";
-
-/* Current recording filename (shared with app_freertos.c for BLE status) */
-char recFilename[48] = "";
 
 /* Audio DMA callback tracking for PPS-sample correlation */
 volatile uint32_t dmaCallbackCount = 0;
@@ -156,7 +152,6 @@ static uint32_t recPpsEdgesInRec = 0;    /* PPS edges observed during recording 
 
 /* TFLite model loaded from SD /model/quail_model.tflite */
 uint8_t modelBuf[56 * 1024] __attribute__((aligned(16)));
-uint32_t modelBufSize = 0;
 
 /* TFLite Micro tensor arena */
 uint8_t tensorArena[112 * 1024] __attribute__((aligned(16)));
@@ -531,7 +526,7 @@ void printMenu(void)
     printf("7. Mount SD Card\r\n");
     printf("8. GPS Status / Control\r\n");
     printf("9. BLE Status\r\n");
-    printf("F. Toggle Format (%s)\r\n", recFormat == REC_FMT_WAV ? "WAV" : "FLAC");
+    printf("F. Toggle Format (%s)\r\n", dev.rec.format == REC_FMT_WAV ? "WAV" : "FLAC");
     printf("G. Toggle GPS Raw Output\r\n");
     printf("R. Toggle Recording\r\n");
     printf("S. Toggle GPS Survey-In (%s)\r\n",
@@ -557,7 +552,7 @@ void printStatus(void)
     printf("  Ring Overruns: %lu\r\n", (unsigned long)ringOverruns);
 
     printf("Recording:\r\n");
-    printf("  Format: %s\r\n", recFormat == REC_FMT_WAV ? "WAV" : "FLAC");
+    printf("  Format: %s\r\n", dev.rec.format == REC_FMT_WAV ? "WAV" : "FLAC");
     printf("  Active: %s\r\n", isRecording ? "Yes" : "No");
     if (isRecording) {
         uint32_t seconds = totalDataBytes / (SAMPLE_RATE * 3);
@@ -623,7 +618,7 @@ void startRecording(void)
         return;
     }
 
-    const char *ext = (recFormat == REC_FMT_WAV) ? "wav" : "flac";
+    const char *ext = (dev.rec.format == REC_FMT_WAV) ? "wav" : "flac";
     char fname[48];
     if (ppsSynced && ppsUtcDate != 0) {
         /* ppsUtcDate = DDMMYY, ppsUtcTime = HHMMSS */
@@ -681,7 +676,7 @@ void startRecording(void)
     }
 
     /* Write placeholder header (will be finalized on stop) */
-    if (recFormat == REC_FMT_WAV) {
+    if (dev.rec.format == REC_FMT_WAV) {
         WAV_WriteHeader(&wavFile, SAMPLE_RATE, 0);
     } else {
         flac_enc_init(&flacEncoder);
@@ -695,8 +690,7 @@ void startRecording(void)
     f_sync(&wavFile);
 
     totalDataBytes = 0;
-    extern uint32_t limiterClipCount;
-    limiterClipCount = 0;
+    dev.audio.clipCount = 0;
     isRecording = 1;
     recStartTick = HAL_GetTick();
     fileCounter++;
@@ -718,7 +712,7 @@ void stopRecording(void)
     isRecording = 0;
     recFilename[0] = '\0';
 
-    if (recFormat == REC_FMT_WAV) {
+    if (dev.rec.format == REC_FMT_WAV) {
         /* Append GUANO metadata chunk after audio data */
         writeGuanoChunk(&wavFile, totalDataBytes);
 
@@ -767,7 +761,7 @@ void stopRecording(void)
 
     /* Update health stats with completed recording */
     {
-        uint32_t secs = (recFormat == REC_FMT_WAV)
+        uint32_t secs = (dev.rec.format == REC_FMT_WAV)
             ? totalDataBytes / (SAMPLE_RATE * 3)
             : (uint32_t)(flacEncoder.totalSamples / SAMPLE_RATE);
         extern void healthUpdateRecStop(uint32_t bytes, uint32_t durationSecs);
@@ -798,7 +792,7 @@ void chunkRecording(void)
     if (!isRecording) return;
 
     uint32_t seconds = 0;
-    if (recFormat == REC_FMT_WAV) {
+    if (dev.rec.format == REC_FMT_WAV) {
         seconds = totalDataBytes / (SAMPLE_RATE * 3);
     } else {
         seconds = (uint32_t)(flacEncoder.totalSamples / SAMPLE_RATE);
