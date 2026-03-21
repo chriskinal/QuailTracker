@@ -100,6 +100,7 @@ public partial class ConfigViewModel : ObservableObject
         _bluetoothService = bluetoothService;
         _bluetoothService.ConfigReceived += OnConfigReceived;
         _bluetoothService.StatusReceived += OnStatusReceived;
+        _bluetoothService.ConnectionStateChanged += OnConnectionStateChanged;
 
         // Track changes
         PropertyChanged += (s, e) =>
@@ -111,6 +112,14 @@ public partial class ConfigViewModel : ObservableObject
                 HasChanges = true;
             }
         };
+    }
+
+    private async void OnConnectionStateChanged(object? sender, ConnectionState state)
+    {
+        if (state == ConnectionState.Connected)
+        {
+            await _bluetoothService.RequestConfigAsync();
+        }
     }
 
     private void OnStatusReceived(object? sender, DeviceStatus status)
