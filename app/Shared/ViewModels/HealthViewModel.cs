@@ -17,9 +17,7 @@
  */
 
 using System;
-using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.Input;
 using QuailTracker.Shared.Models;
 using QuailTracker.Shared.Services;
 
@@ -63,9 +61,6 @@ public partial class HealthViewModel : ObservableObject
     [ObservableProperty] private string _bleStatus = "Disconnected";
     [ObservableProperty] private string _bleDeviceName = "--";
     [ObservableProperty] private string _bleAddress = "--";
-
-    // Last Update
-    [ObservableProperty] private string _lastUpdated = "Never";
 
     // Since Last Visit
     [ObservableProperty] private bool _hasHealthReport = false;
@@ -230,14 +225,5 @@ public partial class HealthViewModel : ObservableObject
         // BLE address from firmware
         if (status.BleModuleAddr is { Length: > 0 })
             BleAddress = status.BleModuleAddr;
-
-        // Timestamp
-        LastUpdated = status.LastUpdated.ToString("HH:mm:ss");
-    }
-
-    [RelayCommand]
-    private async Task RefreshAsync()
-    {
-        await _bluetoothService.RequestStatusAsync();
     }
 }

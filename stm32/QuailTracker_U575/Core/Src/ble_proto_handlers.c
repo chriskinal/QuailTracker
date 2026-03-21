@@ -116,12 +116,23 @@ static void send_nack(quailtracker_CommandType cmd_type, const char *err)
     ble_proto_send(TOPIC_COMMAND_ACK, buf, stream.bytes_written);
 }
 
-/* Read SD free/total KB.  Returns 0,0 if unmounted or locked. */
+/* Return cached SD free/total KB (updated every 5s by BLE task). */
 static void get_sd_space(uint32_t *total_kb, uint32_t *free_kb)
 {
-    *total_kb = 0;
-    *free_kb = 0;
-    if (!dev.rec.sdMounted) return;
+    *total_kb = dev.rec.sdTotalKb;
+    *free_kb  = dev.rec.sdFreeKb;
+}
+
+/* Refresh cached SD space from FatFS.  Called from BLE task periodic block
+ * (every 5s).  Acquires fileMtx with a short timeout so it never blocks
+ * push_status/push_recording_state during active recording. */
+void sd_space_refresh(void)
+{
+    if (!dev.rec.sdMounted) {
+        dev.rec.sdTotalKb = 0;
+        dev.rec.sdFreeKb = 0;
+        return;
+    }
 
     FATFS *fs;
     DWORD fre_clust;
@@ -129,8 +140,8 @@ static void get_sd_space(uint32_t *total_kb, uint32_t *free_kb)
         if (f_getfree("", &fre_clust, &fs) == FR_OK) {
             DWORD tot_sect = (fs->n_fatent - 2) * fs->csize;
             DWORD fre_sect = fre_clust * fs->csize;
-            *total_kb = (uint32_t)(tot_sect / 2);
-            *free_kb  = (uint32_t)(fre_sect / 2);
+            dev.rec.sdTotalKb = (uint32_t)(tot_sect / 2);
+            dev.rec.sdFreeKb  = (uint32_t)(fre_sect / 2);
         }
         osMutexRelease(fileMtxHandle);
     }

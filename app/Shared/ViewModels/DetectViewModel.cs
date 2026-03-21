@@ -59,9 +59,6 @@ public partial class DetectViewModel : ObservableObject
     // Live Detection Stream
     [ObservableProperty] private bool _streamEnabled;
 
-    // Last Refreshed
-    [ObservableProperty] private string _lastRefreshed = "--";
-
     // Change tracking
     [ObservableProperty] private bool _hasChanges;
     [ObservableProperty] private string _statusMessage = "";
@@ -79,8 +76,6 @@ public partial class DetectViewModel : ObservableObject
 
     private void OnStatusReceived(object? sender, DeviceStatus status)
     {
-        LastRefreshed = DateTime.Now.ToString("h:mm:ss tt");
-
         ModelLoaded = status.ModelLoaded;
         ModelInfo = status.ModelLoaded
             ? $"Loaded ({status.ModelSize / 1024f:F1} KB, {status.ModelLabels} classes)"
@@ -148,12 +143,6 @@ public partial class DetectViewModel : ObservableObject
 
         await Task.Delay(2000);
         StatusMessage = "";
-    }
-
-    [RelayCommand]
-    private async Task RefreshAsync()
-    {
-        await _bluetoothService.RequestStatusAsync();
     }
 
     [RelayCommand]

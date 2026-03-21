@@ -36,6 +36,7 @@ public class MockBluetoothService : IBluetoothService
     public ConnectionState CurrentState { get; private set; } = ConnectionState.Disconnected;
     public string? ConnectedDeviceName { get; private set; }
     public HealthReport? LastHealthReport => null;
+    public int RefreshIntervalSeconds { get; set; } = 5;
 
     public event EventHandler<ConnectionState>? ConnectionStateChanged;
     public event EventHandler<DeviceStatus>? StatusReceived;
@@ -331,6 +332,8 @@ public class MockBluetoothService : IBluetoothService
         // Send updated status
         await RequestStatusAsync();
     }
+
+    public Task ResubscribePeriodicAsync() => Task.CompletedTask;
 
     private void SetState(ConnectionState state)
     {

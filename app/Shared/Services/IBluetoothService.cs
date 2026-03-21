@@ -167,6 +167,18 @@ public interface IBluetoothService
     /// Send detection configuration (mission mode, threshold, window step).
     /// </summary>
     Task<bool> SendDetectionConfigAsync(DeviceConfig config);
+
+    /// <summary>
+    /// App-side refresh interval for periodic push topics (Status, GpsFix, HealthReport).
+    /// Default 5 seconds. Not persisted to device.
+    /// </summary>
+    int RefreshIntervalSeconds { get; set; }
+
+    /// <summary>
+    /// Re-subscribe all periodic topics (Status, GpsFix, HealthReport) with the current interval.
+    /// Call after changing RefreshIntervalSeconds while connected.
+    /// </summary>
+    Task ResubscribePeriodicAsync();
 }
 
 /// <summary>

@@ -70,6 +70,7 @@ public class BluetoothService : IBluetoothService
     public ConnectionState CurrentState { get; private set; } = ConnectionState.Disconnected;
     public string? ConnectedDeviceName { get; private set; }
     public HealthReport? LastHealthReport => _cachedHealthReport;
+    public int RefreshIntervalSeconds { get; set; } = 5;
 
     // Discovered devices during scan (for device picker)
     private readonly Dictionary<Guid, (DiscoveredDevice Info, IDevice Device)> _discoveredDevices = new();
@@ -364,10 +365,21 @@ public class BluetoothService : IBluetoothService
             await SendFrameAsync(_frameBuilder.EncodeEmpty(BleProtoTopic.Ping));
             System.Console.WriteLine("[BLE] Ping sent OK");
 
-            // Subscribe to topics the app needs
-            System.Console.WriteLine("[BLE] Subscribing to topics...");
-            await SendSubscribeAsync(BleProtoTopic.Status, 30000);
-            await SendSubscribeAsync(BleProtoTopic.GpsFix, 10000);
+            // Wait for firmware to process the +EVENT:BLE_CONNECTED URC from
+            // the PB-03F module.  ble_proto_reset() in that handler wipes all
+            // subscriptions — if we subscribe before it fires, they get lost.
+            await Task.Delay(1500);
+
+            // Subscribe to periodic topics at configured interval.
+            // HealthReport is NOT subscribed periodically — it's large and
+            // cumulative.  The immediate push from each Subscribe already
+            // floods the BLE UART; adding HealthReport caused RX overflow
+            // that lost the remaining subscribe frames.  HealthReport is
+            // delivered once via CMD_GET_STATUS below.
+            var ms = (uint)(RefreshIntervalSeconds * 1000);
+            System.Console.WriteLine($"[BLE] Subscribing to topics (interval={ms}ms)...");
+            await SendSubscribeAsync(BleProtoTopic.Status, ms);
+            await SendSubscribeAsync(BleProtoTopic.GpsFix, ms);
             await SendSubscribeAsync(BleProtoTopic.RecordingState, 0);  // on-change
             await SendSubscribeAsync(BleProtoTopic.Detection, 0);      // on-change
             System.Console.WriteLine("[BLE] Subscriptions sent OK");
@@ -379,6 +391,23 @@ public class BluetoothService : IBluetoothService
 
         // Request initial status
         _ = RequestStatusAsync();
+    }
+
+    public async Task ResubscribePeriodicAsync()
+    {
+        if (CurrentState != ConnectionState.Connected) return;
+
+        try
+        {
+            var ms = (uint)(RefreshIntervalSeconds * 1000);
+            System.Console.WriteLine($"[BLE] Resubscribing periodic topics (interval={ms}ms)...");
+            await SendSubscribeAsync(BleProtoTopic.Status, ms);
+            await SendSubscribeAsync(BleProtoTopic.GpsFix, ms);
+        }
+        catch (Exception ex)
+        {
+            System.Console.WriteLine($"[BLE] ResubscribePeriodicAsync error: {ex}");
+        }
     }
 
     // ── Command methods (IBluetoothService) ───────────────────────────────

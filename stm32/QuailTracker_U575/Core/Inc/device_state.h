@@ -113,6 +113,8 @@ typedef struct {
         uint32_t startTick;       /* was recStartTick */
         uint32_t fileCounter;
         char     filename[48];    /* was recFilename */
+        uint32_t sdTotalKb;       /* cached SD total (updated every 5s) */
+        uint32_t sdFreeKb;        /* cached SD free  (updated every 5s) */
     } rec;
 
     struct {

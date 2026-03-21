@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+using System;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -47,6 +48,12 @@ public partial class MainWindowViewModel : ObservableObject
 
     [ObservableProperty]
     private int _selectedTabIndex = 0;
+
+    [ObservableProperty]
+    private string _lastRefreshed = "--:--:--";
+
+    [ObservableProperty]
+    private int _refreshIntervalSeconds = 5;
 
     [ObservableProperty]
     private HealthViewModel _healthViewModel;
@@ -86,8 +93,16 @@ public partial class MainWindowViewModel : ObservableObject
         _bluetoothService.StatusReceived += OnStatusReceived;
     }
 
+    partial void OnRefreshIntervalSecondsChanged(int value)
+    {
+        _bluetoothService.RefreshIntervalSeconds = value;
+        _ = _bluetoothService.ResubscribePeriodicAsync();
+    }
+
     private void OnStatusReceived(object? sender, DeviceStatus status)
     {
+        LastRefreshed = DateTime.Now.ToString("HH:mm:ss");
+
         var wasRecording = _deviceIsRecording;
         _deviceIsRecording = status.IsRecording;
 

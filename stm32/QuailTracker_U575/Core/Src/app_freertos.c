@@ -727,6 +727,7 @@ void StartCliTask(void *argument)
             printf("SD card inserted — mount failed\r\n");
           }
           osMutexRelease(fileMtxHandle);
+          { extern void sd_space_refresh(void); sd_space_refresh(); }
         }
       }
       if (flags & 0x20) {
@@ -2085,6 +2086,10 @@ static void StartBleTask(void *argument)
             if (prevGpsValid && !curGpsValid)
                 health.gpsFixLosses++;
             prevGpsValid = curGpsValid;
+            /* Refresh cached SD space (used by push_status/push_recording_state
+             * without blocking on fileMtx during active recording) */
+            extern void sd_space_refresh(void);
+            sd_space_refresh();
         }
 
         /* Periodic health save to flash (~every 5 min) */

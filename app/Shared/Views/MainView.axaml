@@ -10,16 +10,33 @@
         <Border Grid.Row="0"
                 Background="{StaticResource QuailPrimaryBrush}"
                 Padding="16">
-            <StackPanel>
-                <TextBlock Text="QuailTracker"
-                           FontSize="24"
-                           FontWeight="Bold"
-                           Foreground="White" />
-                <TextBlock Text="{Binding ConnectionStatus}"
-                           FontSize="12"
-                           Foreground="White"
-                           Opacity="0.8" />
-            </StackPanel>
+            <Grid ColumnDefinitions="*,Auto">
+                <StackPanel>
+                    <TextBlock Text="QuailTracker"
+                               FontSize="24"
+                               FontWeight="Bold"
+                               Foreground="White" />
+                    <TextBlock Text="{Binding ConnectionStatus}"
+                               FontSize="12"
+                               Foreground="White"
+                               Opacity="0.8" />
+                </StackPanel>
+
+                <!-- Refresh info (right side, visible when connected) -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8"
+                            VerticalAlignment="Center"
+                            IsVisible="{Binding IsConnected}">
+                    <TextBlock Text="{Binding LastRefreshed}"
+                               FontSize="12" Foreground="White" Opacity="0.6"
+                               VerticalAlignment="Center" />
+                    <NumericUpDown Value="{Binding RefreshIntervalSeconds}"
+                                   Minimum="1" Maximum="60" Increment="1"
+                                   Width="110" Height="28"
+                                   FontSize="12"
+                                   FormatString="0's'"
+                                   VerticalAlignment="Center" />
+                </StackPanel>
+            </Grid>
         </Border>
 
         <!-- Content Area: Device Picker / Tabs / Idle -->

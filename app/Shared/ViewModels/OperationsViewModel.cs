@@ -67,9 +67,6 @@ public partial class OperationsViewModel : ObservableObject
     [ObservableProperty] private string _bleLink = "Disconnected";
     [ObservableProperty] private string _bleColor = "#808080";
 
-    // Last Refreshed
-    [ObservableProperty] private string _lastRefreshed = "--";
-
     // Survey-In
     [ObservableProperty] private string _surveyPosition = "---, ---";
     [ObservableProperty] private string _surveyAltitude = "--";
@@ -90,8 +87,6 @@ public partial class OperationsViewModel : ObservableObject
 
     private void OnStatusReceived(object? sender, DeviceStatus status)
     {
-        LastRefreshed = DateTime.Now.ToString("h:mm:ss tt");
-
         // Recording
         IsRecording = status.IsRecording;
         RecordingStatus = status.IsRecording ? "Recording" : "Idle";
@@ -169,12 +164,6 @@ public partial class OperationsViewModel : ObservableObject
             SurveyPosition = "---, ---";
             SurveyAltitude = "--";
         }
-    }
-
-    [RelayCommand]
-    private async Task RefreshAsync()
-    {
-        await _bluetoothService.RequestStatusAsync();
     }
 
     [RelayCommand]
