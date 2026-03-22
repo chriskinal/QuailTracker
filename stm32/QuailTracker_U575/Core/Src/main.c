@@ -657,13 +657,18 @@ void startRecording(void)
         recHasGps = 0;
     }
 
-    /* Latch absolute sample position for PPS-sample correlation (TDOA) */
+    /* Latch absolute sample position for PPS-sample correlation (TDOA).
+     * Disable PPS EXTI while writing 64-bit values — the ISR reads them
+     * and a torn 64-bit write would produce garbage sample positions. */
+    HAL_NVIC_DisableIRQ(EXTI8_IRQn);
+    __DSB();
     uint32_t elapsed = HAL_GetTick() - dmaCallbackTick;
     if (elapsed > 11) elapsed = 11;
     recStartAbsSample = (uint64_t)dmaCallbackCount * 512 + elapsed * 48;
     recPpsEdgesInRec = 0;
     recPpsFirstSample = 0;
     recPpsLastSample = 0;
+    HAL_NVIC_EnableIRQ(EXTI8_IRQn);
 
     strncpy(recFilename, fname, sizeof(recFilename) - 1);
     recFilename[sizeof(recFilename) - 1] = '\0';
@@ -775,16 +780,24 @@ void stopRecording(void)
         diagLog(msg);
     }
 
-    /* Report PPS-sample correlation */
-    if (recPpsEdgesInRec >= 2) {
-        uint32_t intervals = recPpsEdgesInRec - 1;
-        uint64_t delta = recPpsLastSample - recPpsFirstSample;
+    /* Report PPS-sample correlation.
+     * Snapshot the 64-bit values with PPS EXTI disabled to avoid torn reads. */
+    HAL_NVIC_DisableIRQ(EXTI8_IRQn);
+    __DSB();
+    uint32_t ppsEdges = recPpsEdgesInRec;
+    uint64_t ppsFirst = recPpsFirstSample;
+    uint64_t ppsLast  = recPpsLastSample;
+    HAL_NVIC_EnableIRQ(EXTI8_IRQn);
+
+    if (ppsEdges >= 2) {
+        uint32_t intervals = ppsEdges - 1;
+        uint64_t delta = ppsLast - ppsFirst;
         uint32_t whole = (uint32_t)(delta / intervals);
         uint32_t frac = (uint32_t)((delta % intervals) * 1000 / intervals);
         printf("PPS: %lu edges, measured rate %lu.%03lu Hz\r\n",
-            (unsigned long)recPpsEdgesInRec,
+            (unsigned long)ppsEdges,
             (unsigned long)whole, (unsigned long)frac);
-    } else if (recPpsEdgesInRec == 1) {
+    } else if (ppsEdges == 1) {
         printf("PPS: 1 edge (need 2+ for rate measurement)\r\n");
     } else {
         printf("PPS: no edges during recording\r\n");

@@ -104,7 +104,7 @@ _Static_assert(sizeof(health_stats_t) == 256, "health_stats_t must be 256 bytes"
 /* ---- Consolidated runtime device state ---- */
 typedef struct {
     struct {
-        uint8_t  active;          /* was isRecording */
+        volatile uint8_t  active; /* was isRecording — read by PPS ISR */
         uint8_t  sdMounted;
         uint8_t  audioStarted;
         uint8_t  format;          /* was recFormat (0=FLAC, 1=WAV) */
