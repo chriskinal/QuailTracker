@@ -58,6 +58,11 @@ bool ble_proto_send(uint8_t topic, const uint8_t *pb_buf, size_t pb_len)
 
     /* Transmit over BLE UART */
     HAL_UART_Transmit(&husart2, frame, (uint16_t)(3 + raw_len), 100);
+
+    /* Update activity timestamp — outgoing pushes prove the link is alive */
+    extern volatile uint32_t lastBleRxTick;
+    lastBleRxTick = HAL_GetTick();
+
     return true;
 }
 

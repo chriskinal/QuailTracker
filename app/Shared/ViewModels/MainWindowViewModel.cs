@@ -53,7 +53,7 @@ public partial class MainWindowViewModel : ObservableObject
     private string _lastRefreshed = "--:--:--";
 
     [ObservableProperty]
-    private int _refreshIntervalSeconds = 5;
+    private int _refreshIntervalSeconds = 4;
 
     [ObservableProperty]
     private HealthViewModel _healthViewModel;
@@ -102,15 +102,7 @@ public partial class MainWindowViewModel : ObservableObject
     private void OnStatusReceived(object? sender, DeviceStatus status)
     {
         LastRefreshed = DateTime.Now.ToString("HH:mm:ss");
-
-        var wasRecording = _deviceIsRecording;
         _deviceIsRecording = status.IsRecording;
-
-        // Auto-start/stop rec stream when recording state changes
-        if (wasRecording != status.IsRecording)
-        {
-            _ = _bluetoothService.SetStreamRecAsync(status.IsRecording ? 1000 : 0);
-        }
     }
 
     private void OnConnectionStateChanged(object? sender, ConnectionState state)

@@ -2100,6 +2100,16 @@ static void StartBleTask(void *argument)
         if (bleConnected)
             ble_proto_poll_subscriptions();
 
+        /* BLE keepalive: PB-03F has a 5s supervision timeout that we can't
+         * change.  If no BLE data has been sent for 3s, send an empty Pong
+         * to keep the link alive.  Without this, 5s push intervals race
+         * the 5s timeout and lose. */
+        if (bleConnected && lastBleRxTick != 0 &&
+            (HAL_GetTick() - lastBleRxTick) >= 3000)
+        {
+            ble_proto_send(TOPIC_PONG, NULL, 0);
+        }
+
         /* Periodic SHT30 temperature/humidity read (~every 5s) */
         if ((HAL_GetTick() - lastSht30Tick) >= SHT30_INTERVAL_MS) {
             lastSht30Tick = HAL_GetTick();

@@ -72,7 +72,7 @@ public class BluetoothService : IBluetoothService
     public ConnectionState CurrentState { get; private set; } = ConnectionState.Disconnected;
     public string? ConnectedDeviceName { get; private set; }
     public HealthReport? LastHealthReport => _cachedHealthReport;
-    public int RefreshIntervalSeconds { get; set; } = 5;
+    public int RefreshIntervalSeconds { get; set; } = 4;
 
     // Discovered devices during scan (for device picker)
     private readonly Dictionary<Guid, (DiscoveredDevice Info, IDevice Device)> _discoveredDevices = new();
@@ -130,8 +130,8 @@ public class BluetoothService : IBluetoothService
             await _adapter.ConnectToDeviceAsync(found, connectParams);
             _device = found;
 
-            _mtu = await _device.RequestMtuAsync(185);
-            _device.UpdateConnectionInterval(ConnectionInterval.High);
+            try { _mtu = await _device.RequestMtuAsync(185); }
+            catch { _mtu = 20; }
             await DiscoverUartCharacteristicsAsync(CancellationToken.None);
 
             ConnectedDeviceName = _device.Name ?? "QuailTracker";
@@ -250,8 +250,8 @@ public class BluetoothService : IBluetoothService
             _device = await _adapter.ConnectToKnownDeviceAsync(device.Id, connectParams, timeoutCts.Token);
 
             timeoutCts.Token.ThrowIfCancellationRequested();
-            _mtu = await _device.RequestMtuAsync(185);
-            _device.UpdateConnectionInterval(ConnectionInterval.High);
+            try { _mtu = await _device.RequestMtuAsync(185); }
+            catch { _mtu = 20; } // MTU negotiation can fail on rapid reconnects
 
             await DiscoverUartCharacteristicsAsync(timeoutCts.Token);
 
