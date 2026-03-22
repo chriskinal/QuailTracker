@@ -1898,17 +1898,13 @@ static void StartBleTask(void *argument)
         /* Recovery loop: module may be in transparent mode, or phone may
          * auto-reconnect after AT+BLEDISCON putting module back in
          * transparent mode.  Try up to 3 times. */
-        /* Recovery: exit transparent mode, disconnect, full module restart */
+        /* Recovery: exit transparent mode, disconnect */
         bleSend("++");
         osDelay(1000);
         while (getCharBle(10) >= 0) {}
-        bleSendCmd("AT+BLEADVEN=0", resp, sizeof(resp), 500);
         bleSendCmd("AT+BLEDISCON", resp, sizeof(resp), 500);
         osDelay(500);
         while (getCharBle(10) >= 0) {}
-        bleSendCmd("AT+RST", resp, sizeof(resp), 500);
-        osDelay(1500);  /* wait for module reboot */
-        while (getCharBle(10) >= 0) {}  /* flush boot banner */
         bleSendCmd("ATE0", resp, sizeof(resp), 500);
     }
 
@@ -1931,6 +1927,12 @@ static void StartBleTask(void *argument)
          * NEVER send commands not in AT+HELP — can brick the module.
          * Safe commands: AT, ATE0/1, AT+BLENAME, AT+BLEMAC, AT+BLEADVEN,
          * AT+BLEADVDATA, AT+SLEEP, AT+RST, AT+BLEMODE, AT+GMR, etc. */
+
+        /* Set connection parameters — AT+RST resets to factory defaults
+         * which have timeout=200 (2s), way too tight.  Set to 500 (5s). */
+        bleSendCmd("AT+BLECONINTV=6,36,0,2000", resp, sizeof(resp), 1000);
+        if (bleSendCmd("AT+BLECONINTV?", resp, sizeof(resp), 1000) > 0)
+            printf("BLE: CONINTV = %s\r\n", resp);
 
         /* Get MAC address */
         if (bleSendCmd("AT+BLEMAC?", resp, sizeof(resp), 1000) > 0) {
@@ -2100,16 +2102,6 @@ static void StartBleTask(void *argument)
         if (bleConnected)
             ble_proto_poll_subscriptions();
 
-        /* BLE keepalive: PB-03F has a 5s supervision timeout that we can't
-         * change.  If no BLE data has been sent for 3s, send an empty Pong
-         * to keep the link alive.  Without this, 5s push intervals race
-         * the 5s timeout and lose. */
-        if (bleConnected && lastBleRxTick != 0 &&
-            (HAL_GetTick() - lastBleRxTick) >= 3000)
-        {
-            ble_proto_send(TOPIC_PONG, NULL, 0);
-        }
-
         /* Periodic SHT30 temperature/humidity read (~every 5s) */
         if ((HAL_GetTick() - lastSht30Tick) >= SHT30_INTERVAL_MS) {
             lastSht30Tick = HAL_GetTick();
@@ -2150,37 +2142,20 @@ static void StartBleTask(void *argument)
             osDelay(1000);
             while (getCharBle(10) >= 0) {}  /* flush "OK" */
 
-            /* Stop advertising so phone can't auto-reconnect */
-            bleSendCmd("AT+BLEADVEN=0", resp, sizeof(resp), 500);
-
-            /* Disconnect the BLE link */
+            /* Disconnect and restart advertising (no AT+RST — it resets
+             * connection parameters and causes baud rate garbage) */
             bleSendCmd("AT+BLEDISCON", resp, sizeof(resp), 1000);
             osDelay(500);
             while (getCharBle(10) >= 0) {}  /* flush URC */
-
-            /* Full module restart to clear corrupted BLE stack state */
-            bleSendCmd("AT+RST", resp, sizeof(resp), 500);
-            printf("BLE: RST -> %s\r\n", resp[0] ? resp : "(none)");
-            osDelay(1500);  /* wait for module reboot */
-            while (getCharBle(10) >= 0) {}  /* flush boot banner */
-
-            /* Re-init after reset */
-            bleSendCmd("ATE0", resp, sizeof(resp), 500);
             bleSendCmd("AT+BLEADVEN=0", resp, sizeof(resp), 500);
             osDelay(100);
-            {
-                char nameCmd[48];
-                snprintf(nameCmd, sizeof(nameCmd), "AT+BLENAME=%s", cfg.stationId);
-                bleSendCmd(nameCmd, resp, sizeof(resp), 500);
-            }
             bleSendCmd("AT+BLEADVEN=1", resp, sizeof(resp), 500);
-            printf("BLE: BLEADVEN=1 -> %s\r\n", resp[0] ? resp : "(none)");
 
             bleConnected = 0;
-            lastDisconnectTick = 0;
+            lastDisconnectTick = HAL_GetTick();
             ble_proto_reset();
             bleLogEnabled = 0;
-            printf("BLE: Module reset and advertising restarted\r\n");
+            printf("BLE: Stale disconnect — advertising restarted\r\n");
         }
 
         /* Advertising safety net: if not connected, retry every 10s.

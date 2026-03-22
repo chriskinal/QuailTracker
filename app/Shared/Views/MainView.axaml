@@ -30,7 +30,7 @@
                                FontSize="12" Foreground="White" Opacity="0.6"
                                VerticalAlignment="Center" />
                     <NumericUpDown Value="{Binding RefreshIntervalSeconds}"
-                                   Minimum="1" Maximum="60" Increment="1"
+                                   Minimum="1" Maximum="10" Increment="1"
                                    Width="110" Height="28"
                                    FontSize="12"
                                    FormatString="0's'"

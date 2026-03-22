@@ -53,7 +53,7 @@ public partial class MainWindowViewModel : ObservableObject
     private string _lastRefreshed = "--:--:--";
 
     [ObservableProperty]
-    private int _refreshIntervalSeconds = 4;
+    private int _refreshIntervalSeconds = 5;
 
     [ObservableProperty]
     private HealthViewModel _healthViewModel;
