@@ -652,6 +652,7 @@ void StartAudioTask(void *argument)
           uint32_t elapsedMs = HAL_GetTick() - recStartTick;
           if (elapsedMs >= (uint32_t)cfg.chunkMinutes * 60000u) {
             extern void chunkRecording(void);
+            diagLog("Chunk rotation");
             chunkRecording();
           }
         }
@@ -1848,6 +1849,39 @@ void printBleStatusBrief(void)
     }
 }
 
+/* Diagnostic event log — append timestamped events to diag.log on SD card */
+void diagLog(const char *event)
+{
+    if (!sdMounted) return;
+
+    uint32_t uptimeS = HAL_GetTick() / 1000;
+    char line[160];
+    if (ppsSynced && ppsUtcDate != 0) {
+        uint32_t d = ppsUtcDate, t = ppsUtcTime;
+        snprintf(line, sizeof(line), "[%02lu/%02lu/%02lu %02lu:%02lu:%02lu up=%lus] %s\n",
+                 (unsigned long)(d/10000), (unsigned long)((d/100)%100),
+                 (unsigned long)(d%100),
+                 (unsigned long)(t/10000), (unsigned long)((t/100)%100),
+                 (unsigned long)(t%100),
+                 (unsigned long)uptimeS, event);
+    } else {
+        snprintf(line, sizeof(line), "[up=%lus] %s\n",
+                 (unsigned long)uptimeS, event);
+    }
+
+    if (osMutexAcquire(fileMtxHandle, 200) == osOK) {
+        FIL f;
+        if (f_open(&f, "diag.log", FA_OPEN_APPEND | FA_WRITE) == FR_OK) {
+            UINT bw;
+            f_write(&f, line, strlen(line), &bw);
+            f_close(&f);
+        }
+        osMutexRelease(fileMtxHandle);
+    }
+
+    printf("DIAG: %s", line);
+}
+
 static void StartBleTask(void *argument)
 {
     char resp[64];
@@ -1988,6 +2022,15 @@ static void StartBleTask(void *argument)
 
     }
 
+    /* Log boot event */
+    {
+        char msg[80];
+        snprintf(msg, sizeof(msg), "BOOT v%s boots=%lu bat=%lumV",
+                 FW_VERSION, (unsigned long)health.bootCount,
+                 (unsigned long)battReadMv());
+        diagLog(msg);
+    }
+
     /* Initialize protobuf protocol */
     ble_proto_init();
 
@@ -2056,6 +2099,7 @@ static void StartBleTask(void *argument)
                         lastBleRxTick = HAL_GetTick();
                         ble_proto_reset();
                         printf("BLE: Connected\r\n");
+                        diagLog("BLE connected");
                         /* Reset health-report-sent flag so first CMD_GET_STATUS pushes it */
                         extern uint8_t healthReportSent;
                         healthReportSent = 0;
@@ -2065,6 +2109,7 @@ static void StartBleTask(void *argument)
                         ble_proto_reset();
                         bleLogEnabled = 0;
                         printf("BLE: Disconnected\r\n");
+                        diagLog("BLE disconnected");
                         /* Reset health counters (keep boot count) and save */
                         healthReset();
                         healthSave();
@@ -2135,6 +2180,7 @@ static void StartBleTask(void *argument)
             (HAL_GetTick() - lastBleRxTick) >= 60000)
         {
             printf("BLE: Stale connection detected (no data for 60s)\r\n");
+            diagLog("BLE stale connection detected");
 
             /* Exit transparent mode with raw "++" (no \r\n) */
             char resp[32];

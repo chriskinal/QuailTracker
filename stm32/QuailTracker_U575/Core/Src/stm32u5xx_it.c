@@ -23,6 +23,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <string.h>
+#include <stdio.h>
 #include "cmsis_os2.h"
 #include "SEGGER_RTT.h"
 /* USER CODE END Includes */

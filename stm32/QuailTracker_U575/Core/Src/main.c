@@ -700,6 +700,8 @@ void startRecording(void)
     healthUpdateRecStart(fname);
 
     printf("Recording to %s...\r\n", fname);
+    { extern void diagLog(const char *); char msg[80];
+      snprintf(msg, sizeof(msg), "REC start: %s", fname); diagLog(msg); }
 }
 
 void stopRecording(void)
@@ -766,6 +768,11 @@ void stopRecording(void)
             : (uint32_t)(flacEncoder.totalSamples / SAMPLE_RATE);
         extern void healthUpdateRecStop(uint32_t bytes, uint32_t durationSecs);
         healthUpdateRecStop(totalDataBytes, secs);
+        extern void diagLog(const char *);
+        char msg[80];
+        snprintf(msg, sizeof(msg), "REC stop: %lu bytes %lus",
+                 (unsigned long)totalDataBytes, (unsigned long)secs);
+        diagLog(msg);
     }
 
     /* Report PPS-sample correlation */
