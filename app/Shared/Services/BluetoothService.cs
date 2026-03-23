@@ -82,6 +82,7 @@ public class BluetoothService : IBluetoothService
     public event EventHandler<DeviceConfig>? ConfigReceived;
     public event EventHandler<DetectionEvent>? DetectionReceived;
     public event EventHandler<HealthReport>? HealthReportReceived;
+    public event EventHandler<string>? SessionTimeoutWarning;
     public event EventHandler<DiscoveredDevice>? DeviceDiscovered;
 
     public BluetoothService()
@@ -1002,8 +1003,15 @@ public class BluetoothService : IBluetoothService
                 break;
 
             case BleProtoTopic.Log:
-                // Log lines -- could be forwarded to a debug console in the future
+            {
+                var log = Quailtracker.LogLine.Parser.ParseFrom(payload);
+                if (log.Text.StartsWith("SESSION_TIMEOUT:"))
+                {
+                    Dispatcher.UIThread.Post(() =>
+                        SessionTimeoutWarning?.Invoke(this, log.Text));
+                }
                 break;
+            }
         }
     }
 

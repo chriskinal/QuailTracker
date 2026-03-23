@@ -5,7 +5,15 @@
         x:Class="QuailTracker.Shared.Views.MainView"
         x:DataType="vm:MainWindowViewModel">
 
-    <Grid RowDefinitions="Auto,*,Auto">
+    <Grid RowDefinitions="Auto,Auto,*,Auto">
+        <!-- Session Timeout Warning -->
+        <Border Grid.Row="1" Background="#FF9800" Padding="12,8"
+                IsVisible="{Binding ShowSessionWarning}">
+            <TextBlock Text="{Binding SessionWarning}"
+                       Foreground="White" FontWeight="SemiBold"
+                       FontSize="13" HorizontalAlignment="Center" />
+        </Border>
+
         <!-- Header -->
         <Border Grid.Row="0"
                 Background="{StaticResource QuailPrimaryBrush}"
@@ -40,7 +48,7 @@
         </Border>
 
         <!-- Content Area: Device Picker / Tabs / Idle -->
-        <Panel Grid.Row="1">
+        <Panel Grid.Row="2">
 
             <!-- Device Picker (visible when ShowDevicePicker is true) -->
             <Border IsVisible="{Binding ShowDevicePicker}">
@@ -144,7 +152,7 @@
         </Panel>
 
         <!-- Bottom Status Bar -->
-        <Border Grid.Row="2"
+        <Border Grid.Row="3"
                 Classes="StatusBar">
             <Grid ColumnDefinitions="*,Auto">
                 <TextBlock Text="{Binding DeviceName}"

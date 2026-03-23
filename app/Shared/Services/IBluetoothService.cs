@@ -138,6 +138,12 @@ public interface IBluetoothService
     event EventHandler<DetectionEvent>? DetectionReceived;
 
     /// <summary>
+    /// Fired when the device is about to disconnect (session timeout warning).
+    /// Payload is e.g. "SESSION_TIMEOUT:60" (seconds remaining).
+    /// </summary>
+    event EventHandler<string>? SessionTimeoutWarning;
+
+    /// <summary>
     /// Fired when a device is discovered during scanning.
     /// </summary>
     event EventHandler<DiscoveredDevice>? DeviceDiscovered;

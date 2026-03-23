@@ -163,7 +163,10 @@ void device_state_snapshot(device_state_t *out)
 /* BLE status streaming: independent audio-level and recording streams */
 static uint32_t lastSht30Tick = 0;
 static uint32_t lastDisconnectTick = 0;
+static uint32_t bleConnectTick = 0;   /* when BLE connected, for session timeout */
+static uint8_t  bleTimeoutWarned = 0; /* 1 = warning already sent this session */
 volatile uint32_t lastBleRxTick = 0;  /* updated by ble_proto_dispatch */
+#define BLE_SESSION_TIMEOUT_MS  (30 * 60 * 1000)  /* 30 minutes */
 #define SHT30_INTERVAL_MS 5000
 
 /* BLE log forwarding — ring buffer fed by _write(), drained by BLE task */
@@ -2096,6 +2099,8 @@ static void StartBleTask(void *argument)
                     if (strstr(textBuf, "BLE_CONNECTED") != NULL) {
                         bleConnected = 1;
                         lastDisconnectTick = 0;
+                        bleConnectTick = HAL_GetTick();
+                        bleTimeoutWarned = 0;
                         lastBleRxTick = HAL_GetTick();
                         ble_proto_reset();
                         printf("BLE: Connected\r\n");
@@ -2169,6 +2174,50 @@ static void StartBleTask(void *argument)
         if ((HAL_GetTick() - lastHealthSaveTick) >= HEALTH_SAVE_INTERVAL_MS) {
             lastHealthSaveTick = HAL_GetTick();
             healthSave();
+        }
+
+        /* BLE session timeout: warn at 29 min, disconnect at 30 min.
+         * In field use, connections are brief (check status, adjust settings).
+         * Long connections stress the PB-03F and drain battery. */
+        if (bleConnected && bleConnectTick != 0) {
+            uint32_t sessionMs = HAL_GetTick() - bleConnectTick;
+
+            /* 1-minute warning: send LogLine so app can show a banner */
+            if (sessionMs >= (BLE_SESSION_TIMEOUT_MS - 60000) &&
+                !bleTimeoutWarned)
+            {
+                bleTimeoutWarned = 1;
+                /* Static to avoid 258 bytes of stack in the BLE task */
+                static quailtracker_LogLine log;
+                static uint8_t logBuf[quailtracker_LogLine_size];
+                memset(&log, 0, sizeof(log));
+                strncpy(log.text, "SESSION_TIMEOUT:60", sizeof(log.text) - 1);
+                pb_ostream_t stream = pb_ostream_from_buffer(logBuf, sizeof(logBuf));
+                if (pb_encode(&stream, quailtracker_LogLine_fields, &log))
+                    ble_proto_send(TOPIC_LOG, logBuf, stream.bytes_written);
+                printf("BLE: Session timeout warning sent (60s) sessionMs=%lu\r\n",
+                       (unsigned long)sessionMs);
+            }
+
+            /* Disconnect after 30 minutes.
+             * Don't try ++ / AT commands — they fail during active transparent
+             * mode.  Just stop sending pushes by clearing bleConnected.  The
+             * PB-03F supervision timeout (20s) will drop the link, triggering
+             * BLE_DISCONNECT URC which restarts advertising normally. */
+            if (sessionMs >= BLE_SESSION_TIMEOUT_MS)
+            {
+                printf("BLE: Session timeout, stopping pushes sessionMs=%lu\r\n",
+                       (unsigned long)sessionMs);
+                diagLog("BLE session timeout");
+
+                bleConnected = 0;
+                bleConnectTick = 0;
+                ble_proto_reset();
+                bleLogEnabled = 0;
+                /* BLE_DISCONNECT URC will fire in ~20s when supervision
+                 * timeout expires, triggering normal disconnect handler
+                 * which restarts advertising. */
+            }
         }
 
         /* Stale connection detector: if bleConnected=1 but no BLE frames

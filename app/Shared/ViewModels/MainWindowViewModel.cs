@@ -56,6 +56,12 @@ public partial class MainWindowViewModel : ObservableObject
     private int _refreshIntervalSeconds = 5;
 
     [ObservableProperty]
+    private string _sessionWarning = "";
+
+    [ObservableProperty]
+    private bool _showSessionWarning = false;
+
+    [ObservableProperty]
     private HealthViewModel _healthViewModel;
 
     [ObservableProperty]
@@ -91,12 +97,19 @@ public partial class MainWindowViewModel : ObservableObject
 
         _bluetoothService.ConnectionStateChanged += OnConnectionStateChanged;
         _bluetoothService.StatusReceived += OnStatusReceived;
+        _bluetoothService.SessionTimeoutWarning += OnSessionTimeoutWarning;
     }
 
     partial void OnRefreshIntervalSecondsChanged(int value)
     {
         _bluetoothService.RefreshIntervalSeconds = value;
         _ = _bluetoothService.ResubscribePeriodicAsync();
+    }
+
+    private void OnSessionTimeoutWarning(object? sender, string message)
+    {
+        SessionWarning = "Device will disconnect in 1 minute. Save any pending changes.";
+        ShowSessionWarning = true;
     }
 
     private void OnStatusReceived(object? sender, DeviceStatus status)
@@ -113,6 +126,8 @@ public partial class MainWindowViewModel : ObservableObject
         {
             _deviceIsRecording = false;
             LastRefreshed = "--:--:--";
+            ShowSessionWarning = false;
+            SessionWarning = "";
         }
 
         if (state == ConnectionState.Connected)

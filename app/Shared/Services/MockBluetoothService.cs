@@ -44,6 +44,7 @@ public class MockBluetoothService : IBluetoothService
     public event EventHandler<DetectionEvent>? DetectionReceived;
     public event EventHandler<HealthReport>? HealthReportReceived;
     public event EventHandler<DiscoveredDevice>? DeviceDiscovered;
+    public event EventHandler<string>? SessionTimeoutWarning;
 
     private DiscoveredDevice? _selectedDevice;
 
