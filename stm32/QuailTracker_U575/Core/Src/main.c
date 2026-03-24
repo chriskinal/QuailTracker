@@ -607,6 +607,18 @@ void printStatus(void)
     printf("============================\r\n");
 }
 
+/* Create SD card directory structure and set volume label.
+ * Idempotent — f_mkdir returns FR_EXIST if already present,
+ * f_setlabel overwrites any existing label. */
+void sdCreateDirs(void)
+{
+    f_mkdir("audio");
+    f_mkdir("logs");
+    f_mkdir("model");
+    f_mkdir("firmware");
+    f_setlabel("QTRKR");
+}
+
 void startRecording(void)
 {
     if (!sdMounted) {
@@ -628,12 +640,12 @@ void startRecording(void)
         uint32_t hh = ppsUtcTime / 10000;
         uint32_t mn = (ppsUtcTime / 100) % 100;
         uint32_t ss = ppsUtcTime % 100;
-        snprintf(fname, sizeof(fname), "20%02lu%02lu%02lu_%02lu%02lu%02lu_%s.%s",
+        snprintf(fname, sizeof(fname), "audio/20%02lu%02lu%02lu_%02lu%02lu%02lu_%s.%s",
                  (unsigned long)yy, (unsigned long)mm, (unsigned long)dd,
                  (unsigned long)hh, (unsigned long)mn, (unsigned long)ss,
                  deviceStationId, ext);
     } else {
-        snprintf(fname, sizeof(fname), "rec_%03lu_%s.%s",
+        snprintf(fname, sizeof(fname), "audio/rec_%03lu_%s.%s",
                  (unsigned long)fileCounter, deviceStationId, ext);
     }
 
@@ -863,6 +875,7 @@ int formatSD(void)
     }
 
     sdMounted = 1;
+    sdCreateDirs();
     printf("Format complete, SD card ready\r\n");
     return 1;
 }
@@ -997,6 +1010,7 @@ int main(void)
       printf("No card detected\r\n");
   } else if (f_mount(&USERFatFS, USERPath, 1) == FR_OK) {
       sdMounted = 1;
+      sdCreateDirs();
       printf("Mounted\r\n");
   } else {
       printf("Not readable, formatting...\r\n");

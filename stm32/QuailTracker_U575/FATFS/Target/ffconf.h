@@ -37,7 +37,7 @@
 #define _USE_FASTSEEK        1
 #define	_USE_EXPAND		0
 #define _USE_CHMOD		0
-#define _USE_LABEL           0
+#define _USE_LABEL           1
 #define _USE_FORWARD         0
 
 /*-----------------------------------------------------------------------------/

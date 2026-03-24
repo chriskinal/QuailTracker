@@ -279,7 +279,7 @@ static float modelMelMax = 0.0f;
 /* BLE detection streaming interval (0=off) */
 
 /* Detection CSV filename for today */
-static char detCsvFilename[48] = "";
+static char detCsvFilename[56] = "";
 static uint32_t detCsvDate = 0;  /* YYYYMMDD */
 /* USER CODE END Variables */
 /* Definitions for audioTask */
@@ -728,6 +728,7 @@ void StartCliTask(void *argument)
           osMutexAcquire(fileMtxHandle, osWaitForever);
           if (f_mount(&USERFatFS, USERPath, 1) == FR_OK) {
             sdMounted = 1;
+            { extern void sdCreateDirs(void); sdCreateDirs(); }
             printf("SD card inserted — mounted\r\n");
           } else {
             printf("SD card inserted — mount failed\r\n");
@@ -1256,7 +1257,7 @@ static void detUpdateCsvFilename(void)
     if (dateKey != detCsvDate) {
         detCsvDate = dateKey;
         snprintf(detCsvFilename, sizeof(detCsvFilename),
-                 "detections_%08lu_%s.csv",
+                 "logs/detections_%08lu_%s.csv",
                  (unsigned long)dateKey, cfg.stationId);
     }
 }
@@ -1874,7 +1875,7 @@ void diagLog(const char *event)
 
     if (osMutexAcquire(fileMtxHandle, 200) == osOK) {
         FIL f;
-        if (f_open(&f, "diag.log", FA_OPEN_APPEND | FA_WRITE) == FR_OK) {
+        if (f_open(&f, "logs/diag.log", FA_OPEN_APPEND | FA_WRITE) == FR_OK) {
             UINT bw;
             f_write(&f, line, strlen(line), &bw);
             f_close(&f);
