@@ -1196,9 +1196,11 @@ static void MX_ADF1_Init(void)
   AdfFilterConfig0.CicMode = MDF_ONE_FILTER_SINC4;
   AdfFilterConfig0.DecimationRatio = 64;
   AdfFilterConfig0.Gain = 0;
-  AdfFilterConfig0.ReshapeFilter.Activation = DISABLE;  /* RSFLT adds ÷4 decimation — needs CIC
-                                                        * decimation=16 to maintain 48kHz output.
-                                                        * TODO: evaluate Sinc5/dec=16 + RSFLT. */
+  AdfFilterConfig0.ReshapeFilter.Activation = DISABLE;  /* RSFLT tested: Sinc5/dec=16+RSFLT raised
+                                                        * noise floor by 33dB (from -44dB to -11dB).
+                                                        * Low CIC decimation lets too much quantization
+                                                        * noise fold into passband. Not viable at our
+                                                        * 3MHz PDM clock without higher sample rate. */
   AdfFilterConfig0.HighPassFilter.Activation = ENABLE; /* Remove DC offset from PDM mic.
                                                         * Cutoff = 0.000625 × Fpcm = 30Hz at 48kHz.
                                                         * Per ST AN5795 recommendation. */
