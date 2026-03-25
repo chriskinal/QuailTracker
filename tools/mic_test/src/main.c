@@ -92,7 +92,8 @@ static void MX_ADF1_Init(void)
     AdfFilterConfig0.DecimationRatio = 64;
     AdfFilterConfig0.Gain = 6;  /* +18 dB (6 * 3dB) */
     AdfFilterConfig0.ReshapeFilter.Activation = DISABLE;
-    AdfFilterConfig0.HighPassFilter.Activation = DISABLE;
+    AdfFilterConfig0.HighPassFilter.Activation = ENABLE;
+    AdfFilterConfig0.HighPassFilter.CutOffFrequency = MDF_HPF_CUTOFF_0_000625FPCM;
     AdfFilterConfig0.SoundActivity.Activation = DISABLE;
     AdfFilterConfig0.AcquisitionMode = MDF_MODE_ASYNC_CONT;
     AdfFilterConfig0.FifoThreshold = MDF_FIFO_THRESHOLD_NOT_EMPTY;
