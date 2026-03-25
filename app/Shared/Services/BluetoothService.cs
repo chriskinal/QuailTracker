@@ -132,7 +132,6 @@ public class BluetoothService : IBluetoothService
             _device = found;
 
             _mtu = await _device.RequestMtuAsync(185);
-            _device.UpdateConnectionInterval(ConnectionInterval.High);
             await DiscoverUartCharacteristicsAsync(CancellationToken.None);
 
             ConnectedDeviceName = _device.Name ?? "QuailTracker";
@@ -252,7 +251,6 @@ public class BluetoothService : IBluetoothService
 
             timeoutCts.Token.ThrowIfCancellationRequested();
             _mtu = await _device.RequestMtuAsync(185);
-            _device.UpdateConnectionInterval(ConnectionInterval.High);
 
             await DiscoverUartCharacteristicsAsync(timeoutCts.Token);
 
