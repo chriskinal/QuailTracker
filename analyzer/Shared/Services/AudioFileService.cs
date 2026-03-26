@@ -183,26 +183,47 @@ public class AudioFileService : IAudioFileService
 
             sampleCount = (int)Math.Min(sampleCount, totalSamples - startSample);
 
-            // Seek to desired position — Position setter handles both WAV and FLAC
+            // For FLAC files, never use Position setter — it can crash with
+            // AccessViolationException on files without seek tables (NAudio bug).
+            // Always skip forward sequentially instead.
+            if (reader is FlacReader)
+            {
+                var provider2 = reader.ToSampleProvider();
+                if (offsetSeconds > 0.01)
+                {
+                    var skipSamples = startSample * waveFormat.Channels;
+                    var skipBuf = new float[Math.Min(4096, skipSamples)];
+                    while (skipSamples > 0)
+                    {
+                        var toRead = (int)Math.Min(skipBuf.Length, skipSamples);
+                        var skipped = provider2.Read(skipBuf, 0, toRead);
+                        if (skipped == 0) break;
+                        skipSamples -= skipped;
+                    }
+                }
+                var buffer2 = new float[sampleCount * waveFormat.Channels];
+                var samplesRead2 = provider2.Read(buffer2, 0, buffer2.Length);
+                if (waveFormat.Channels == 2)
+                {
+                    var mono = new float[samplesRead2 / 2];
+                    for (var i = 0; i < mono.Length; i++)
+                        mono[i] = (buffer2[i * 2] + buffer2[i * 2 + 1]) / 2f;
+                    buffer2 = mono;
+                }
+                else if (samplesRead2 < buffer2.Length)
+                {
+                    Array.Resize(ref buffer2, samplesRead2);
+                }
+                if (waveFormat.SampleRate != TargetSampleRate)
+                    buffer2 = Resample(buffer2, waveFormat.SampleRate, TargetSampleRate);
+                return buffer2;
+            }
+
+            // WAV files: seek is safe
             reader.Position = startSample * waveFormat.BlockAlign;
 
             // Create SampleProvider — reads from current stream position
             var provider = reader.ToSampleProvider();
-
-            // If FlacReader prescan is broken, Position setter is a no-op (clamps to 0).
-            // Skip forward by reading and discarding samples.
-            if (offsetSeconds > 0.01 && reader.Position == 0 && reader is FlacReader)
-            {
-                var skipSamples = startSample * waveFormat.Channels;
-                var skipBuf = new float[Math.Min(4096, skipSamples)];
-                while (skipSamples > 0)
-                {
-                    var toRead = (int)Math.Min(skipBuf.Length, skipSamples);
-                    var skipped = provider.Read(skipBuf, 0, toRead);
-                    if (skipped == 0) break;
-                    skipSamples -= skipped;
-                }
-            }
 
             // Read samples as float via SampleProvider
             var buffer = new float[sampleCount * waveFormat.Channels];
