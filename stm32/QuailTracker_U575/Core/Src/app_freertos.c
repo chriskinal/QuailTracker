@@ -642,6 +642,7 @@ void StartAudioTask(void *argument)
               isRecording = 0;
             }
             totalDataBytes += bw;
+            flac_enc_notify_write(&flacEncoder, bw);
 
             /* Sync every ~8 frames (~680ms) */
             if ((flacEncoder.frameNumber % 8) == 0) {

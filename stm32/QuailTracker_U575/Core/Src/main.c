@@ -699,10 +699,19 @@ void startRecording(void)
         flac_enc_init(&flacEncoder);
         uint8_t hdr[FLAC_HEADER_SIZE];
         flac_enc_write_header(&flacEncoder, hdr);
-        hdr[4] &= 0x7F;  /* STREAMINFO is NOT last — PADDING/VORBIS_COMMENT follows */
+        hdr[4] &= 0x7F;  /* STREAMINFO is NOT last — SEEKTABLE follows */
         UINT bw;
         f_write(&wavFile, hdr, FLAC_HEADER_SIZE, &bw);
+
+        /* Write placeholder SEEKTABLE (patched at finalization) */
+        static uint8_t seekBuf[FLAC_SEEKTABLE_BLOCK_SIZE];
+        flac_enc_write_seektable_placeholder(&flacEncoder, seekBuf);
+        f_write(&wavFile, seekBuf, FLAC_SEEKTABLE_BLOCK_SIZE, &bw);
+
         writeFlacPaddingBlock(&wavFile); /* placeholder, replaced at stop */
+
+        /* Mark where audio frames begin (after all metadata blocks) */
+        flac_enc_set_audio_start(&flacEncoder, f_tell(&wavFile));
     }
     f_sync(&wavFile);
 
@@ -757,15 +766,22 @@ void stopRecording(void)
             UINT bw;
             f_write(&wavFile, flacEncoder.outBuf, flushBytes, &bw);
             totalDataBytes += bw;
+            flac_enc_notify_write(&flacEncoder, bw);
         }
 
-        /* Rewrite STREAMINFO + VORBIS_COMMENT at file offset 0 */
+        /* Rewrite STREAMINFO + SEEKTABLE + VORBIS_COMMENT at file offset 0 */
         f_lseek(&wavFile, 0);
         uint8_t hdr[FLAC_HEADER_SIZE];
         flac_enc_finalize_header(&flacEncoder, hdr);
-        hdr[4] &= 0x7F;  /* NOT last — Vorbis comment block follows */
+        hdr[4] &= 0x7F;  /* NOT last — SEEKTABLE follows */
         UINT bw;
         f_write(&wavFile, hdr, FLAC_HEADER_SIZE, &bw);
+
+        /* Finalize SEEKTABLE with real byte offsets */
+        static uint8_t seekBuf[FLAC_SEEKTABLE_BLOCK_SIZE];
+        flac_enc_finalize_seektable(&flacEncoder, seekBuf);
+        f_write(&wavFile, seekBuf, FLAC_SEEKTABLE_BLOCK_SIZE, &bw);
+
         writeFlacVorbisComment(&wavFile); /* replaces PADDING with real metadata */
 
         f_close(&wavFile);

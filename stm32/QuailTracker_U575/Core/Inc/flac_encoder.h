@@ -34,6 +34,19 @@
 #define FLAC_CHANNELS         1
 #define FLAC_HEADER_SIZE      42     /* "fLaC" + STREAMINFO block */
 
+/* SEEKTABLE: one seek point every 10 seconds.
+ * For 15-minute chunks: 90 points × 18 bytes = 1620 bytes + 4 byte header. */
+#define FLAC_SEEK_INTERVAL_SAMPLES  (FLAC_SAMPLE_RATE * 10)  /* 10 seconds */
+#define FLAC_MAX_SEEK_POINTS        100  /* supports up to ~16.7 min chunks */
+#define FLAC_SEEKTABLE_DATA_SIZE    (FLAC_MAX_SEEK_POINTS * 18)
+#define FLAC_SEEKTABLE_BLOCK_SIZE   (4 + FLAC_SEEKTABLE_DATA_SIZE)  /* header + data */
+
+typedef struct {
+    uint64_t sampleNumber;
+    uint64_t byteOffset;    /* from first audio frame */
+    uint16_t frameSamples;
+} flac_seekpoint_t;
+
 typedef struct {
     /* PCM accumulation buffer */
     int32_t  blockBuf[FLAC_BLOCK_SIZE];
@@ -49,6 +62,13 @@ typedef struct {
     uint64_t totalSamples;
     uint32_t minFrameSize;
     uint32_t maxFrameSize;
+
+    /* Seek table (filled during encoding) */
+    flac_seekpoint_t seekPoints[FLAC_MAX_SEEK_POINTS];
+    uint32_t seekPointCount;
+    uint64_t nextSeekSample;   /* next sample number that triggers a seek point */
+    uint64_t audioStartOffset; /* file byte offset where audio frames begin */
+    uint64_t currentFileOffset;/* running byte offset for seek point tracking */
 } flac_enc_t;
 
 /* Initialize encoder state. Call before starting a new file. */
@@ -66,5 +86,17 @@ uint32_t flac_enc_flush(flac_enc_t *e);
 
 /* Write finalized STREAMINFO to out[42]. Seek to file offset 0 and write. */
 void flac_enc_finalize_header(flac_enc_t *e, uint8_t *out);
+
+/* Write placeholder SEEKTABLE metadata block. Returns bytes written. */
+uint32_t flac_enc_write_seektable_placeholder(flac_enc_t *e, uint8_t *out);
+
+/* Write finalized SEEKTABLE metadata block with real offsets. */
+uint32_t flac_enc_finalize_seektable(flac_enc_t *e, uint8_t *out);
+
+/* Notify encoder of bytes written to file (for seek point byte offsets). */
+void flac_enc_notify_write(flac_enc_t *e, uint32_t bytesWritten);
+
+/* Set the file offset where audio frames begin (after all metadata blocks). */
+void flac_enc_set_audio_start(flac_enc_t *e, uint64_t offset);
 
 #endif /* FLAC_ENCODER_H */

@@ -373,6 +373,17 @@ static uint32_t encode_frame(flac_enc_t *e, uint32_t blockSize)
     if (frameSize > e->maxFrameSize)
         e->maxFrameSize = frameSize;
 
+    /* Record seek point if this frame crosses a seek boundary */
+    if (e->totalSamples >= e->nextSeekSample &&
+        e->seekPointCount < FLAC_MAX_SEEK_POINTS)
+    {
+        flac_seekpoint_t *sp = &e->seekPoints[e->seekPointCount++];
+        sp->sampleNumber = e->totalSamples;
+        sp->byteOffset = e->currentFileOffset - e->audioStartOffset;
+        sp->frameSamples = (uint16_t)blockSize;
+        e->nextSeekSample = e->totalSamples + FLAC_SEEK_INTERVAL_SAMPLES;
+    }
+
     e->frameNumber++;
     e->totalSamples += blockSize;
     e->blockPos = 0;
@@ -439,6 +450,10 @@ void flac_enc_init(flac_enc_t *e)
     e->totalSamples = 0;
     e->minFrameSize = 0;
     e->maxFrameSize = 0;
+    e->seekPointCount = 0;
+    e->nextSeekSample = 0;  /* first frame always gets a seek point */
+    e->audioStartOffset = 0;
+    e->currentFileOffset = 0;
 }
 
 uint32_t flac_enc_write_header(flac_enc_t *e, uint8_t *out)
@@ -479,4 +494,82 @@ void flac_enc_finalize_header(flac_enc_t *e, uint8_t *out)
     write_streaminfo(out, blockSize, blockSize,
                      e->minFrameSize, e->maxFrameSize,
                      e->totalSamples);
+}
+
+/* Helper: write big-endian uint64 */
+static void put_be64(uint8_t *p, uint64_t v)
+{
+    p[0] = (uint8_t)(v >> 56); p[1] = (uint8_t)(v >> 48);
+    p[2] = (uint8_t)(v >> 40); p[3] = (uint8_t)(v >> 32);
+    p[4] = (uint8_t)(v >> 24); p[5] = (uint8_t)(v >> 16);
+    p[6] = (uint8_t)(v >> 8);  p[7] = (uint8_t)(v);
+}
+
+/* Helper: write big-endian uint16 */
+static void put_be16(uint8_t *p, uint16_t v)
+{
+    p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)(v);
+}
+
+uint32_t flac_enc_write_seektable_placeholder(flac_enc_t *e, uint8_t *out)
+{
+    (void)e;
+    uint32_t dataLen = FLAC_SEEKTABLE_DATA_SIZE;
+    uint32_t totalLen = 4 + dataLen;
+
+    /* Metadata block header: not last, type=3 (SEEKTABLE) */
+    out[0] = 0x03;  /* is_last=0, type=3 */
+    out[1] = (uint8_t)(dataLen >> 16);
+    out[2] = (uint8_t)(dataLen >> 8);
+    out[3] = (uint8_t)(dataLen);
+
+    /* Fill with placeholder seek points (sample=0xFFFFFFFFFFFFFFFF = unused) */
+    for (uint32_t i = 0; i < FLAC_MAX_SEEK_POINTS; i++) {
+        uint8_t *p = &out[4 + i * 18];
+        memset(p, 0xFF, 8);   /* sample number = placeholder */
+        memset(p + 8, 0, 8);  /* byte offset = 0 */
+        put_be16(p + 16, 0);  /* frame samples = 0 */
+    }
+
+    return totalLen;
+}
+
+uint32_t flac_enc_finalize_seektable(flac_enc_t *e, uint8_t *out)
+{
+    uint32_t dataLen = FLAC_SEEKTABLE_DATA_SIZE;
+    uint32_t totalLen = 4 + dataLen;
+
+    /* Metadata block header: not last, type=3 (SEEKTABLE) */
+    out[0] = 0x03;
+    out[1] = (uint8_t)(dataLen >> 16);
+    out[2] = (uint8_t)(dataLen >> 8);
+    out[3] = (uint8_t)(dataLen);
+
+    /* Write actual seek points, pad remainder with placeholders */
+    for (uint32_t i = 0; i < FLAC_MAX_SEEK_POINTS; i++) {
+        uint8_t *p = &out[4 + i * 18];
+        if (i < e->seekPointCount) {
+            put_be64(p, e->seekPoints[i].sampleNumber);
+            put_be64(p + 8, e->seekPoints[i].byteOffset);
+            put_be16(p + 16, e->seekPoints[i].frameSamples);
+        } else {
+            /* Placeholder point per FLAC spec */
+            memset(p, 0xFF, 8);
+            memset(p + 8, 0, 8);
+            put_be16(p + 16, 0);
+        }
+    }
+
+    return totalLen;
+}
+
+void flac_enc_notify_write(flac_enc_t *e, uint32_t bytesWritten)
+{
+    e->currentFileOffset += bytesWritten;
+}
+
+void flac_enc_set_audio_start(flac_enc_t *e, uint64_t offset)
+{
+    e->audioStartOffset = offset;
+    e->currentFileOffset = offset;
 }
