@@ -62,3 +62,6 @@ obj/
 *.suo
 *.cache
 *.nupkg
+
+# Datasheets
+datasheets/
