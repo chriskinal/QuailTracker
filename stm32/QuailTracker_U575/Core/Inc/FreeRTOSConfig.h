@@ -177,6 +177,13 @@ extern void vAssertCalled(const char *file, int line);
  * Without this, concurrent printf from multiple tasks corrupts shared
  * newlib state, causing hangs. */
 #define configUSE_NEWLIB_REENTRANT 1
+
+/* SystemView requires these */
+#define INCLUDE_xTaskGetIdleTaskHandle  1
+#define INCLUDE_pxTaskGetStackStart     1
 /* USER CODE END Defines */
+
+/* SystemView FreeRTOS trace hooks — must be LAST in FreeRTOSConfig.h */
+#include "SEGGER_SYSVIEW_FreeRTOS.h"
 
 #endif /* __FREERTOS_CONFIG_H */

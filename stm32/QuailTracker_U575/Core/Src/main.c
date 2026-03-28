@@ -1066,6 +1066,10 @@ int main(void)
   /* Call init function for freertos objects (in app_freertos.c) */
   MX_FREERTOS_Init();
 
+  /* Initialize SystemView before starting scheduler */
+  extern void SEGGER_SYSVIEW_Conf(void);
+  SEGGER_SYSVIEW_Conf();
+
   /* Start scheduler */
   osKernelStart();
 
