@@ -1460,7 +1460,23 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
-  /* PD12 — GPS_EN (active high, GPS on at boot) */
+  /* PD10 — BLE_VCC EN (active high, BLE on at boot) */
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_10, GPIO_PIN_SET);
+  GPIO_InitStruct.Pin = GPIO_PIN_10;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+
+  /* PD11 — PERIPH_VCC EN (active high, SD+SHT30 on at boot) */
+  HAL_GPIO_WritePin(GPIOD, GPIO_PIN_11, GPIO_PIN_SET);
+  GPIO_InitStruct.Pin = GPIO_PIN_11;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+
+  /* PD12 — GPS_VCC EN (active high, GPS on at boot) */
   HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_SET);
   GPIO_InitStruct.Pin = GPIO_PIN_12;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -1729,9 +1745,11 @@ void enterStop2(uint32_t seconds)
      * Keep as outputs (don't change MODER) — floating PD12 turns on
      * the power switch, floating PD14 could wake GPS from backup. */
     uint32_t odr_d = GPIOD->ODR;
-    GPIOD->BSRR = (1u << (12+16))   /* PD12 GPS_EN    → LOW */
-                 | (1u << (14+16))   /* PD14 GPS_WAKE   → LOW */
-                 | (1u << (15+16));  /* PD15 GPS_nRESET → LOW */
+    GPIOD->BSRR = (1u << (10+16))   /* PD10 BLE_VCC EN    → LOW */
+                 | (1u << (11+16))   /* PD11 PERIPH_VCC EN → LOW */
+                 | (1u << (12+16))   /* PD12 GPS_VCC EN    → LOW */
+                 | (1u << (14+16))   /* PD14 GPS_WAKE      → LOW */
+                 | (1u << (15+16));  /* PD15 GPS_nRESET    → LOW */
 
     /* Disable SysTick + HAL timebase (TIM17) to stop periodic ticks */
     SysTick->CTRL &= ~(SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk);
