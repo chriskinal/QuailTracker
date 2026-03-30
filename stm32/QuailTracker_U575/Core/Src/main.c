@@ -589,6 +589,18 @@ void printStatus(void)
         printf("  Level:   %d%%\r\n", pct);
     }
 
+    printf("Solar:\r\n");
+    {
+        int chrg = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_0);  /* active low */
+        int done = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_1);  /* active low */
+        const char *status;
+        if (!chrg && done)       status = "Charging";
+        else if (chrg && !done)  status = "Complete";
+        else if (!chrg && !done) status = "Fault";
+        else                     status = "No Solar / Standby";
+        printf("  Status: %s (CHRG=%d DONE=%d)\r\n", status, chrg, done);
+    }
+
     printf("Environment:\r\n");
     sht30Read();
     {
@@ -1475,6 +1487,19 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+
+  /* PB0 — Solar CHRG status (active low, open drain + 10k pull-up) */
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+  GPIO_InitStruct.Pin = GPIO_PIN_0;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;  /* external 10k pull-up */
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /* PB1 — Solar DONE status (active low, open drain + 10k pull-up) */
+  GPIO_InitStruct.Pin = GPIO_PIN_1;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;  /* external 10k pull-up */
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* PD12 — GPS_VCC EN (active high, GPS on at boot) */
   HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_SET);
