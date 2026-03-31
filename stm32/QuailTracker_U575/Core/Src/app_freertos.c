@@ -215,6 +215,12 @@ static uint32_t lastHealthSaveTick = 0;
 #define HEALTH_SAVE_INTERVAL_MS 300000  /* 5 minutes */
 static uint8_t prevGpsValid = 0;  /* for GPS fix loss detection */
 
+/* SPI2 bridge to ESP32-C3 */
+extern SPI_HandleTypeDef hspi2;
+#define SPI2_CS_PORT  GPIOD
+#define SPI2_CS_PIN   GPIO_PIN_0
+#define SPI2_BUF_SIZE 128
+
 /* Forward declarations for health functions */
 static void healthLoad(void);
 int healthSave(void);
@@ -2170,6 +2176,34 @@ static void StartBleTask(void *argument)
              * without blocking on fileMtx during active recording) */
             extern void sd_space_refresh(void);
             sd_space_refresh();
+
+            /* Push status to ESP32-C3 over SPI2 */
+            {
+                uint8_t spi_tx[SPI2_BUF_SIZE];
+                uint8_t spi_rx[SPI2_BUF_SIZE];
+                memset(spi_tx, 0, SPI2_BUF_SIZE);
+
+                int32_t t = sht30TempC100;
+                int tSign = (t < 0) ? -1 : 1;
+                int tWhole = t / 100;
+                int tFrac = (t % 100) * tSign;
+
+                snprintf((char *)spi_tx, SPI2_BUF_SIZE,
+                    "{\"bat\":%lu,\"temp\":%d.%02d,\"hum\":%u.%u,"
+                    "\"rec\":%d,\"sd\":%d,\"gps\":%d,\"sat\":%d}",
+                    (unsigned long)mv,
+                    tWhole, tFrac,
+                    (unsigned)(sht30HumRH100 / 100),
+                    (unsigned)(sht30HumRH100 / 10 % 10),
+                    (int)isRecording,
+                    (int)sdMounted,
+                    (int)gpsData.valid,
+                    (int)gpsData.satellites);
+
+                HAL_GPIO_WritePin(SPI2_CS_PORT, SPI2_CS_PIN, GPIO_PIN_RESET);
+                HAL_SPI_TransmitReceive(&hspi2, spi_tx, spi_rx, SPI2_BUF_SIZE, 100);
+                HAL_GPIO_WritePin(SPI2_CS_PORT, SPI2_CS_PIN, GPIO_PIN_SET);
+            }
         }
 
         /* Periodic health save to flash (~every 5 min) */
