@@ -60,6 +60,7 @@ UART_HandleTypeDef husart2;
 UART_HandleTypeDef husart3;
 
 SPI_HandleTypeDef hspi1;
+SPI_HandleTypeDef hspi2;  /* ESP32-C3 bridge */
 
 ADC_HandleTypeDef hadc1;
 
@@ -169,6 +170,7 @@ static void MX_GPIO_Init(void);
 static void MX_GPDMA1_Init(void);
 static void MX_ICACHE_Init(void);
 static void MX_SPI1_Init(void);
+static void MX_SPI2_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_USART3_UART_Init(void);
@@ -965,6 +967,7 @@ int main(void)
   MX_ICACHE_Init();
   HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 5: icache ok */
   MX_SPI1_Init();
+  MX_SPI2_Init();
   HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 6: spi ok */
   MX_USART1_UART_Init();
   HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 7: usart1 ok */
@@ -989,6 +992,17 @@ int main(void)
   SEGGER_RTT_WriteString(0, "\r\n[RTT OK]\r\n");
 
   setvbuf(stdout, NULL, _IONBF, 0);
+
+  /* SPI2 ping-pong test with ESP32-C3 bridge */
+  {
+      uint8_t tx[64] = {0}, rx[64] = {0};
+      memcpy(tx, "PING", 4);
+      HAL_GPIO_WritePin(GPIOD, GPIO_PIN_0, GPIO_PIN_RESET);  /* CS low */
+      HAL_StatusTypeDef s = HAL_SPI_TransmitReceive(&hspi2, tx, rx, 64, 1000);
+      HAL_GPIO_WritePin(GPIOD, GPIO_PIN_0, GPIO_PIN_SET);    /* CS high */
+      printf("SPI2 test: %s (RX: \"%.*s\")\r\n",
+             s == HAL_OK ? "OK" : "FAIL", 8, (char *)rx);
+  }
 
   printf("\r\n\r\n");
   printf("================================================\r\n");
@@ -1431,6 +1445,62 @@ static void MX_SPI1_Init(void)
 
   /* USER CODE END SPI1_Init 2 */
 
+}
+
+/**
+  * @brief SPI2 Init — ESP32-C3 bridge
+  * PD1=SCK, PC3=MOSI, PD3=MISO, PD0=CS (GPIO software)
+  */
+static void MX_SPI2_Init(void)
+{
+    __HAL_RCC_SPI2_CLK_ENABLE();
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+    __HAL_RCC_GPIOD_CLK_ENABLE();
+
+    GPIO_InitTypeDef gpio = {0};
+    gpio.Mode = GPIO_MODE_AF_PP;
+    gpio.Pull = GPIO_NOPULL;
+    gpio.Speed = GPIO_SPEED_FREQ_HIGH;
+    gpio.Alternate = GPIO_AF5_SPI2;
+
+    /* PD1 = SPI2_SCK */
+    gpio.Pin = GPIO_PIN_1;
+    HAL_GPIO_Init(GPIOD, &gpio);
+
+    /* PD3 = SPI2_MISO */
+    gpio.Pin = GPIO_PIN_3;
+    HAL_GPIO_Init(GPIOD, &gpio);
+
+    /* PC3 = SPI2_MOSI */
+    gpio.Pin = GPIO_PIN_3;
+    HAL_GPIO_Init(GPIOC, &gpio);
+
+    /* PD0 = CS (GPIO output, start high/deselected) */
+    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_0, GPIO_PIN_SET);
+    gpio.Pin = GPIO_PIN_0;
+    gpio.Mode = GPIO_MODE_OUTPUT_PP;
+    gpio.Alternate = 0;
+    HAL_GPIO_Init(GPIOD, &gpio);
+
+    /* SPI2: master, 8-bit, mode 0, 5 MHz (160MHz/32) */
+    hspi2.Instance = SPI2;
+    hspi2.Init.Mode = SPI_MODE_MASTER;
+    hspi2.Init.Direction = SPI_DIRECTION_2LINES;
+    hspi2.Init.DataSize = SPI_DATASIZE_8BIT;
+    hspi2.Init.CLKPolarity = SPI_POLARITY_LOW;
+    hspi2.Init.CLKPhase = SPI_PHASE_1EDGE;
+    hspi2.Init.NSS = SPI_NSS_SOFT;
+    hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_32;
+    hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
+    hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
+    hspi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+    hspi2.Init.NSSPMode = SPI_NSS_PULSE_DISABLE;
+    hspi2.Init.MasterKeepIOState = SPI_MASTER_KEEP_IO_STATE_ENABLE;
+    hspi2.Init.IOSwap = SPI_IO_SWAP_DISABLE;
+    hspi2.Init.ReadyMasterManagement = SPI_RDY_MASTER_MANAGEMENT_INTERNALLY;
+    hspi2.Init.ReadyPolarity = SPI_RDY_POLARITY_HIGH;
+    if (HAL_SPI_Init(&hspi2) != HAL_OK)
+        Error_Handler();
 }
 
 /**
