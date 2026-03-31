@@ -219,7 +219,7 @@ static uint8_t prevGpsValid = 0;  /* for GPS fix loss detection */
 extern SPI_HandleTypeDef hspi2;
 #define SPI2_CS_PORT  GPIOD
 #define SPI2_CS_PIN   GPIO_PIN_0
-#define SPI2_BUF_SIZE 128
+#define SPI2_BUF_SIZE 512
 
 /* Forward declarations for health functions */
 static void healthLoad(void);
@@ -2188,9 +2188,46 @@ static void StartBleTask(void *argument)
                 int tWhole = t / 100;
                 int tFrac = (t % 100) * tSign;
 
+                /* Solar charger status from PB0 (CHRG) / PB1 (DONE) — active low */
+                int chrg = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_0);
+                int done = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_1);
+                const char *solar;
+                if (!chrg && done)       solar = "Charging";
+                else if (chrg && !done)  solar = "Complete";
+                else if (!chrg && !done) solar = "Fault";
+                else                     solar = "Standby";
+
+                /* GPS time as HH:MM:SS string */
+                char gpsTimeStr[12] = "--:--:--";
+                if (gpsData.utc_time) {
+                    snprintf(gpsTimeStr, sizeof(gpsTimeStr), "%02lu:%02lu:%02lu",
+                             (unsigned long)(gpsData.utc_time / 10000),
+                             (unsigned long)((gpsData.utc_time / 100) % 100),
+                             (unsigned long)(gpsData.utc_time % 100));
+                }
+
+                /* Format lat/lon/alt as integers to avoid newlib-nano %f */
+                int32_t latI = (int32_t)(gpsData.latitude * 100000);
+                int32_t lonI = (int32_t)(gpsData.longitude * 100000);
+                int32_t altI = (int32_t)(gpsData.altitude * 10);
+
+                /* Health temp min/max as integer x100 */
+                int32_t tMin = health.tempMinC100;
+                int32_t tMax = health.tempMaxC100;
+
                 snprintf((char *)spi_tx, SPI2_BUF_SIZE,
                     "{\"bat\":%lu,\"temp\":%d.%02d,\"hum\":%u.%u,"
-                    "\"rec\":%d,\"sd\":%d,\"gps\":%d,\"sat\":%d}",
+                    "\"rec\":%d,\"sd\":%d,\"gps\":%d,\"sat\":%d,"
+                    "\"station\":\"%s\",\"fw\":\"%s\","
+                    "\"lat5\":%ld,\"lon5\":%ld,\"alt1\":%ld,"
+                    "\"gpsTime\":\"%s\",\"pps\":%d,\"ppsCnt\":%lu,"
+                    "\"sdFree\":%lu,\"sdTotal\":%lu,"
+                    "\"solar\":\"%s\","
+                    "\"recFile\":\"%s\",\"recBytes\":%lu,\"ovf\":%lu,"
+                    "\"hFiles\":%lu,\"hSecs\":%lu,\"hDet\":%lu,"
+                    "\"hBatMin\":%lu,\"hBatMax\":%lu,"
+                    "\"hTmpMin\":%ld,\"hTmpMax\":%ld,"
+                    "\"hBoots\":%lu,\"hSdErr\":%lu,\"hGpsLoss\":%lu}",
                     (unsigned long)mv,
                     tWhole, tFrac,
                     (unsigned)(sht30HumRH100 / 100),
@@ -2198,7 +2235,25 @@ static void StartBleTask(void *argument)
                     (int)isRecording,
                     (int)sdMounted,
                     (int)gpsData.valid,
-                    (int)gpsData.satellites);
+                    (int)gpsData.satellites,
+                    cfg.stationId, FW_VERSION,
+                    (long)latI, (long)lonI, (long)altI,
+                    gpsTimeStr,
+                    (int)ppsSynced, (unsigned long)ppsCount,
+                    (unsigned long)dev.rec.sdFreeKb,
+                    (unsigned long)dev.rec.sdTotalKb,
+                    solar,
+                    recFilename, (unsigned long)totalDataBytes,
+                    (unsigned long)ringOverruns,
+                    (unsigned long)health.filesWritten,
+                    (unsigned long)health.recordingSecs,
+                    (unsigned long)health.detections,
+                    (unsigned long)health.battMinMv,
+                    (unsigned long)health.battMaxMv,
+                    (long)tMin, (long)tMax,
+                    (unsigned long)health.bootCount,
+                    (unsigned long)health.sdErrors,
+                    (unsigned long)health.gpsFixLosses);
 
                 HAL_GPIO_WritePin(SPI2_CS_PORT, SPI2_CS_PIN, GPIO_PIN_RESET);
                 HAL_SPI_TransmitReceive(&hspi2, spi_tx, spi_rx, SPI2_BUF_SIZE, 100);
