@@ -2248,7 +2248,10 @@ static void StartBleTask(void *argument)
                 "\"mission\":%d,\"conf\":%d,\"winStep\":%d,"
                 "\"sunEn\":%d,\"sunB\":%u,\"sunA\":%u,"
                 "\"setEn\":%d,\"setB\":%u,\"setA\":%u,"
-                "\"nWin\":%d,\"wins\":[%s]}",
+                "\"nWin\":%d,\"wins\":[%s],"
+                "\"gain\":%d,\"fmt\":%d,\"hpf\":%u,\"lpf\":%u,\"chunk\":%d,"
+                "\"trigEn\":%d,\"trigDb\":%d,\"trigPre\":%d,\"trigPost\":%d,"
+                "\"lowBat\":%d,\"autoStop\":%d}",
                 (unsigned long)mv,
                 tWhole, tFrac,
                 (unsigned)(sht30HumRH100 / 100),
@@ -2296,7 +2299,18 @@ static void StartBleTask(void *argument)
                 (unsigned)cfg.sunsetBefore,
                 (unsigned)cfg.sunsetAfter,
                 (int)cfg.numWindows,
-                winBuf);
+                winBuf,
+                (int)cfg.gain,
+                (int)cfg.recFormat,
+                (unsigned)cfg.bpfLow,
+                (unsigned)cfg.bpfHigh,
+                (int)cfg.chunkMinutes,
+                (int)cfg.trigEnabled,
+                (int)cfg.trigDb,
+                (int)cfg.trigPre,
+                (int)cfg.trigPost,
+                (int)cfg.lowBatPct,
+                (int)cfg.autoStop);
 
             HAL_GPIO_WritePin(SPI2_CS_PORT, SPI2_CS_PIN, GPIO_PIN_RESET);
             HAL_SPI_TransmitReceive(&hspi2, spi_tx, spi_rx, SPI2_BUF_SIZE, 100);
@@ -2401,6 +2415,45 @@ static void StartBleTask(void *argument)
                            cfg.sunriseEnabled, cfg.sunriseBefore, cfg.sunriseAfter,
                            cfg.sunsetEnabled, cfg.sunsetBefore, cfg.sunsetAfter,
                            cfg.numWindows);
+                } else if (strstr(rx, "set_config")) {
+                    char *p;
+                    /* Station ID */
+                    if ((p = strstr(rx, "\"stId\":\"")) != NULL) {
+                        p += 8;
+                        char *end = strchr(p, '"');
+                        if (end) {
+                            int len = end - p;
+                            if (len > 15) len = 15;
+                            memcpy(cfg.stationId, p, len);
+                            cfg.stationId[len] = '\0';
+                        }
+                    }
+                    if ((p = strstr(rx, "\"gain\":")) != NULL)
+                        cfg.gain = (uint8_t)atoi(p + 7);
+                    if ((p = strstr(rx, "\"fmt\":")) != NULL)
+                        cfg.recFormat = (uint8_t)atoi(p + 6);
+                    if ((p = strstr(rx, "\"hpf\":")) != NULL)
+                        cfg.bpfLow = (uint16_t)atoi(p + 6);
+                    if ((p = strstr(rx, "\"lpf\":")) != NULL)
+                        cfg.bpfHigh = (uint16_t)atoi(p + 6);
+                    if ((p = strstr(rx, "\"chunk\":")) != NULL)
+                        cfg.chunkMinutes = (uint8_t)atoi(p + 8);
+                    if ((p = strstr(rx, "\"trigEn\":")) != NULL)
+                        cfg.trigEnabled = (uint8_t)atoi(p + 9);
+                    if ((p = strstr(rx, "\"trigDb\":")) != NULL)
+                        cfg.trigDb = (int8_t)atoi(p + 9);
+                    if ((p = strstr(rx, "\"trigPre\":")) != NULL)
+                        cfg.trigPre = (uint8_t)atoi(p + 10);
+                    if ((p = strstr(rx, "\"trigPost\":")) != NULL)
+                        cfg.trigPost = (uint8_t)atoi(p + 11);
+                    if ((p = strstr(rx, "\"lowBat\":")) != NULL)
+                        cfg.lowBatPct = (uint8_t)atoi(p + 9);
+                    if ((p = strstr(rx, "\"autoStop\":")) != NULL)
+                        cfg.autoStop = (uint8_t)atoi(p + 11);
+                    dev.rec.format = cfg.recFormat;
+                    configSave();
+                    printf("SPI cmd: set_config station=%s gain=%d fmt=%d\r\n",
+                           cfg.stationId, cfg.gain, cfg.recFormat);
                 }
             }
         }

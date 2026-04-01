@@ -453,28 +453,93 @@
 
         <!-- ════════════════ Config Tab ════════════════ -->
         <div class="tab" id="t-config">
+            <!-- Device & Audio -->
             <div class="card">
-                <div class="sect">Device</div>
                 <div class="row">
-                    <span class="lbl">Station</span>
-                    <span class="val" id="cfgStation">--</span>
+                    <span class="sect">Station</span>
+                    <input type="text" class="num" style="width:auto;flex:1;margin-left:8px;text-align:left" id="cfgStationIn" maxlength="15" value="">
                 </div>
-                <div class="row">
-                    <span class="lbl">FW</span>
-                    <span class="val" id="cfgFw">--</span>
+                <div class="row" style="margin-top:8px;gap:8px">
+                    <div style="flex:1">
+                        <div class="val-sm" style="color:#888">Gain</div>
+                        <select id="cfgGainSel" class="sel">
+                            <option value="0">0 dB</option><option value="3">3 dB</option>
+                            <option value="6">6 dB</option><option value="9">9 dB</option>
+                            <option value="12">12 dB</option><option value="15">15 dB</option>
+                            <option value="18">18 dB</option><option value="21">21 dB</option>
+                            <option value="24">24 dB</option>
+                        </select>
+                    </div>
+                    <div style="flex:1">
+                        <div class="val-sm" style="color:#888">Format</div>
+                        <select id="cfgFmtSel" class="sel">
+                            <option value="0">FLAC</option><option value="1">WAV</option>
+                        </select>
+                    </div>
+                    <div style="flex:1">
+                        <div class="val-sm" style="color:#888">Rate</div>
+                        <select id="cfgRate" class="sel"><option value="48">48 kHz</option></select>
+                    </div>
+                </div>
+                <div style="margin-top:10px">
+                    <div class="row"><span class="val-sm" style="color:#888">HPF</span><span class="spacer"></span><span class="val-sm" id="hpfVal">150 Hz</span></div>
+                    <input type="range" class="slider" id="cfgHpf" min="0" max="500" step="10" value="150"
+                           oninput="document.getElementById('hpfVal').textContent=this.value+' Hz'">
+                </div>
+                <div style="margin-top:6px">
+                    <div class="row"><span class="val-sm" style="color:#888">LPF</span><span class="spacer"></span><span class="val-sm" id="lpfVal">8000 Hz</span></div>
+                    <input type="range" class="slider" id="cfgLpf" min="2000" max="12000" step="100" value="8000"
+                           oninput="document.getElementById('lpfVal').textContent=this.value+' Hz'">
+                </div>
+                <div style="margin-top:6px">
+                    <div class="row"><span class="val-sm" style="color:#888">Chunk</span><span class="spacer"></span><span class="val-sm" id="chunkVal">30 min</span></div>
+                    <input type="range" class="slider" id="cfgChunk" min="0" max="240" step="5" value="30"
+                           oninput="document.getElementById('chunkVal').textContent=this.value==0?'Off':this.value+' min'">
                 </div>
             </div>
+            <!-- Amplitude Trigger -->
             <div class="card">
-                <div class="sect">Audio</div>
                 <div class="row">
-                    <span class="lbl">Gain</span>
-                    <span class="val" id="cfgGain">--</span>
+                    <span class="sect">Amplitude Trigger</span>
+                    <span class="spacer"></span>
+                    <label class="toggle"><input type="checkbox" id="cfgTrigEn"><span class="tsl"></span></label>
+                    <span class="val-sm" style="margin-left:6px" id="trigEnLbl">Off</span>
                 </div>
-                <div class="row">
-                    <span class="lbl">Format</span>
-                    <span class="val" id="cfgFormat">--</span>
+                <div style="margin-top:8px">
+                    <div class="row"><span class="val-sm" style="color:#888">Thr</span><span class="spacer"></span><span class="val-sm" id="trigDbVal">-40 dB</span></div>
+                    <input type="range" class="slider" id="cfgTrigDb" min="-60" max="0" value="-40"
+                           oninput="document.getElementById('trigDbVal').textContent=this.value+' dB'">
+                </div>
+                <div class="row" style="margin-top:8px">
+                    <div style="flex:1">
+                        <div class="val-sm" style="color:#888">Pre (s)</div>
+                        <input type="number" class="num" id="cfgTrigPre" min="0" max="30" value="2">
+                    </div>
+                    <div style="flex:1;margin-left:12px">
+                        <div class="val-sm" style="color:#888">Post (s)</div>
+                        <input type="number" class="num" id="cfgTrigPost" min="0" max="60" value="5">
+                    </div>
                 </div>
             </div>
+            <!-- Low Battery -->
+            <div class="card">
+                <div class="row">
+                    <span class="val-sm" style="color:#888">Low Bat</span>
+                    <input type="range" class="slider" style="flex:1;margin:0 8px" id="cfgLowBat" min="0" max="50" value="10"
+                           oninput="document.getElementById('lowBatVal').textContent=this.value+'%'">
+                    <span class="val-sm" id="lowBatVal">10%</span>
+                    <label style="margin-left:12px;display:flex;align-items:center;gap:4px;cursor:pointer">
+                        <input type="checkbox" id="cfgAutoStop"> <span class="val-sm">Auto-stop</span>
+                    </label>
+                </div>
+            </div>
+            <!-- Buttons -->
+            <div style="display:flex;gap:8px;margin-top:10px;padding:0 2px">
+                <button class="btn btn-blue" style="flex:1" onclick="loadConfig()">Load</button>
+                <button class="btn btn-gray" style="flex:1" onclick="sendCmd('cfg_reset')">Reset</button>
+                <button class="btn btn-gray" style="flex:1" onclick="saveConfig()">Save</button>
+            </div>
+            <div class="val-sm" style="text-align:center;margin-top:6px;color:#888" id="cfgStatus"></div>
         </div>
     </div>
 
@@ -624,6 +689,40 @@
             document.getElementById('schStatus').textContent = 'Schedule loaded';
         }
 
+        /* Config */
+        document.getElementById('cfgTrigEn').addEventListener('change', function() {
+            document.getElementById('trigEnLbl').textContent = this.checked ? 'On' : 'Off';
+        });
+
+        function saveConfig() {
+            var obj = {
+                cmd: 'set_config',
+                stId: document.getElementById('cfgStationIn').value,
+                gain: parseInt(document.getElementById('cfgGainSel').value),
+                fmt: parseInt(document.getElementById('cfgFmtSel').value),
+                hpf: parseInt(document.getElementById('cfgHpf').value),
+                lpf: parseInt(document.getElementById('cfgLpf').value),
+                chunk: parseInt(document.getElementById('cfgChunk').value),
+                trigEn: document.getElementById('cfgTrigEn').checked ? 1 : 0,
+                trigDb: parseInt(document.getElementById('cfgTrigDb').value),
+                trigPre: parseInt(document.getElementById('cfgTrigPre').value),
+                trigPost: parseInt(document.getElementById('cfgTrigPost').value),
+                lowBat: parseInt(document.getElementById('cfgLowBat').value),
+                autoStop: document.getElementById('cfgAutoStop').checked ? 1 : 0
+            };
+            if (ws && ws.readyState === 1) {
+                ws.send(JSON.stringify(obj));
+                document.getElementById('cfgStatus').textContent = 'Configuration saved';
+            }
+        }
+
+        function loadConfig() {
+            window._cfgLoaded = false;
+            window._detCfgLoaded = false;
+            window._schLoaded = false;
+            document.getElementById('cfgStatus').textContent = 'Loading...';
+        }
+
         function connect() {
             ws = new WebSocket('ws://' + location.host + '/ws');
 
@@ -639,6 +738,7 @@
             };
 
             ws.onmessage = function(ev) {
+              try {
                 var d = JSON.parse(ev.data);
 
                 /* Timestamp */
@@ -766,12 +866,10 @@
                 /* Station ID / Firmware */
                 if (d.station !== undefined) {
                     document.getElementById('stationId').textContent = d.station;
-                    document.getElementById('cfgStation').textContent = d.station;
                     document.getElementById('devName').textContent = d.station;
                 }
                 if (d.fw !== undefined) {
                     document.getElementById('fwVer').textContent = d.fw;
-                    document.getElementById('cfgFw').textContent = d.fw;
                 }
 
                 /* Since Last Visit (health report) */
@@ -855,6 +953,38 @@
                     }
                     window._schLoaded = true;
                 }
+
+                /* Config — populate controls on first load or after Load button */
+                if (d.gain !== undefined && !window._cfgLoaded) {
+                    try {
+                        document.getElementById('cfgStationIn').value = d.station || '';
+                        document.getElementById('cfgGainSel').value = d.gain;
+                        document.getElementById('cfgFmtSel').value = d.fmt;
+                        document.getElementById('cfgHpf').value = d.hpf;
+                        document.getElementById('hpfVal').textContent = d.hpf + ' Hz';
+                        document.getElementById('cfgLpf').value = d.lpf;
+                        document.getElementById('lpfVal').textContent = d.lpf + ' Hz';
+                        document.getElementById('cfgChunk').value = d.chunk;
+                        document.getElementById('chunkVal').textContent = d.chunk == 0 ? 'Off' : d.chunk + ' min';
+                        document.getElementById('cfgTrigEn').checked = !!d.trigEn;
+                        document.getElementById('trigEnLbl').textContent = d.trigEn ? 'On' : 'Off';
+                        document.getElementById('cfgTrigDb').value = d.trigDb;
+                        document.getElementById('trigDbVal').textContent = d.trigDb + ' dB';
+                        document.getElementById('cfgTrigPre').value = d.trigPre;
+                        document.getElementById('cfgTrigPost').value = d.trigPost;
+                        document.getElementById('cfgLowBat').value = d.lowBat;
+                        document.getElementById('lowBatVal').textContent = d.lowBat + '%';
+                        document.getElementById('cfgAutoStop').checked = !!d.autoStop;
+                        document.getElementById('cfgStatus').textContent = 'Configuration loaded';
+                    } catch(e) {
+                        document.getElementById('cfgStatus').textContent = 'Error: ' + e.message;
+                    }
+                    window._cfgLoaded = true;
+                }
+              } catch(e) {
+                document.getElementById('cfgStatus').textContent = 'ERR: ' + e.message;
+                console.error('onmessage error:', e);
+              }
             };
         }
 

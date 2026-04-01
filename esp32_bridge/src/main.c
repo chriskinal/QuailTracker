@@ -47,7 +47,7 @@ static uint32_t spi_transaction_count = 0;
 static bool new_spi_data = false;
 
 /* Pending command from browser → STM32 (sent in next SPI tx) */
-static char pending_cmd[64] = "";
+static char pending_cmd[512] = "";
 static portMUX_TYPE cmd_mux = portMUX_INITIALIZER_UNLOCKED;
 
 /* ── WiFi AP Config ────────────────────────────────────────────── */
@@ -131,7 +131,7 @@ static esp_err_t ws_handler(httpd_req_t *req)
     /* Receive command from browser */
     httpd_ws_frame_t ws_pkt = {0};
     ws_pkt.type = HTTPD_WS_TYPE_TEXT;
-    uint8_t buf[128];
+    uint8_t buf[512];
     ws_pkt.payload = buf;
     esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, sizeof(buf));
     if (ret == ESP_OK && ws_pkt.len > 0 && ws_pkt.len < sizeof(buf)) {
