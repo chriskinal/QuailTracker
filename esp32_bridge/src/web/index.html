@@ -102,6 +102,18 @@
         .btn-green { background: #4CAF50; }
         .btn-red { background: #F44336; }
         .btn-gray { background: #34495e; }
+        .btn-blue { background: #2196F3; }
+
+        /* Form controls */
+        .sel {
+            width: 100%; padding: 8px 10px; border-radius: 6px;
+            border: 1px solid #444; background: #0d1b2a; color: #e0e0e0;
+            font-size: 13px;
+        }
+        .slider {
+            width: 100%; margin-top: 4px;
+            accent-color: #4FC3F7;
+        }
 
         /* Bottom status bar */
         .status-bar {
@@ -289,15 +301,51 @@
 
         <!-- ════════════════ Detect Tab ════════════════ -->
         <div class="tab" id="t-detect">
+            <!-- Model Status -->
             <div class="card">
-                <div class="row">
-                    <span class="sect">Model</span>
-                    <span class="badge" id="modelBadge">--</span>
+                <div class="sect" style="color:#4FC3F7">Model Status</div>
+                <div class="row" style="margin-top:6px">
+                    <span class="val" id="modelInfo">--</span>
+                    <span class="spacer"></span>
+                    <button class="btn btn-blue" style="width:auto;padding:6px 16px;margin:0" onclick="sendCmd('model_reload')">Reload</button>
                 </div>
                 <div class="row">
-                    <span class="val" id="modelInfo">--</span>
+                    <span class="val-sm" id="modelActivity">--</span>
                 </div>
             </div>
+            <!-- Detection Control -->
+            <div class="card">
+                <div class="sect" style="color:#4FC3F7">Detection Control</div>
+                <div style="margin-top:8px">
+                    <div class="val-sm" style="color:#888;margin-bottom:4px">Mission Mode</div>
+                    <select id="cfgMission" class="sel">
+                        <option value="0">Record Only</option>
+                        <option value="1">Detect Only</option>
+                        <option value="2">Record + Detect</option>
+                    </select>
+                </div>
+                <div style="margin-top:10px">
+                    <div class="row">
+                        <span class="val-sm" style="color:#888">Confidence Threshold</span>
+                        <span class="spacer"></span>
+                        <span class="val" id="confVal">50%</span>
+                    </div>
+                    <input type="range" id="cfgConf" min="10" max="95" value="50" class="slider"
+                           oninput="document.getElementById('confVal').textContent=this.value+'%'">
+                </div>
+                <div style="margin-top:10px">
+                    <div class="val-sm" style="color:#888;margin-bottom:4px">Window Step</div>
+                    <select id="cfgWinStep" class="sel">
+                        <option value="1">1 second</option>
+                        <option value="2">2 seconds</option>
+                        <option value="3">3 seconds</option>
+                    </select>
+                </div>
+                <div style="text-align:right;margin-top:8px">
+                    <button class="btn btn-gray" style="width:auto;padding:8px 24px" onclick="saveDetect()">Save</button>
+                </div>
+            </div>
+            <!-- Detection Stats -->
             <div class="card">
                 <div class="row">
                     <span class="lbl">Windows</span>
@@ -306,7 +354,7 @@
                     <span class="lbl">Hits</span>
                     <span class="val" id="detHits">0</span>
                 </div>
-                <div class="row" style="margin-top:4px">
+                <div class="row" style="margin-top:6px">
                     <span class="val" id="lastSpecies" style="font-size:15px">--</span>
                 </div>
                 <div class="row">
@@ -395,6 +443,16 @@
 
         function sendCmd(cmd) {
             if (ws && ws.readyState === 1) ws.send(JSON.stringify({ cmd: cmd }));
+        }
+
+        function saveDetect() {
+            var obj = {
+                cmd: 'set_detect',
+                mission: parseInt(document.getElementById('cfgMission').value),
+                conf: parseInt(document.getElementById('cfgConf').value),
+                winStep: parseInt(document.getElementById('cfgWinStep').value)
+            };
+            if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
         }
 
         function connect() {
@@ -570,6 +628,39 @@
                     var hasIssues = d.hSdErr > 0 || d.hGpsLoss > 0;
                     hlthBadge.textContent = hasIssues ? 'Issues' : 'OK';
                     hlthBadge.className = 'badge ' + (hasIssues ? 'by' : 'bg');
+                }
+
+                /* Detection */
+                if (d.mdl !== undefined) {
+                    var info = document.getElementById('modelInfo');
+                    var act = document.getElementById('modelActivity');
+                    if (d.mdl) {
+                        var kb = (d.mdlSz / 1024).toFixed(1);
+                        info.textContent = 'Loaded (' + kb + ' KB, ' + d.mdlCls + ' classes)';
+                        act.textContent = d.rec ? 'Active' : 'Inactive';
+                    } else {
+                        info.textContent = 'Not loaded';
+                        act.textContent = '';
+                    }
+                }
+                if (d.detWin !== undefined)
+                    document.getElementById('detWindows').textContent = d.detWin;
+                if (d.detHit !== undefined)
+                    document.getElementById('detHits').textContent = d.detHit;
+                if (d.detSp !== undefined && d.detSp !== '')
+                    document.getElementById('lastSpecies').textContent = d.detSp;
+                if (d.detPct !== undefined && d.detPct > 0)
+                    document.getElementById('lastConf').textContent = d.detPct + '%';
+                if (d.detTm !== undefined && d.detTm !== '')
+                    document.getElementById('lastDetTime').textContent = d.detTm;
+
+                /* Detection config — only set controls on first load */
+                if (d.mission !== undefined && !window._detCfgLoaded) {
+                    document.getElementById('cfgMission').value = d.mission;
+                    document.getElementById('cfgConf').value = d.conf;
+                    document.getElementById('confVal').textContent = d.conf + '%';
+                    document.getElementById('cfgWinStep').value = d.winStep;
+                    window._detCfgLoaded = true;
                 }
             };
         }

@@ -36,7 +36,7 @@
 #define PIN_MISO       9
 #define PIN_SCK        8
 #define PIN_CS         5
-#define TRANSFER_SIZE  512
+#define TRANSFER_SIZE  1024
 
 WORD_ALIGNED_ATTR uint8_t spi_rxBuf[TRANSFER_SIZE];
 WORD_ALIGNED_ATTR uint8_t spi_txBuf[TRANSFER_SIZE];

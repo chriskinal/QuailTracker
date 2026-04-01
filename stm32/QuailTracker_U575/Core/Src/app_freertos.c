@@ -219,7 +219,7 @@ static uint8_t prevGpsValid = 0;  /* for GPS fix loss detection */
 extern SPI_HandleTypeDef hspi2;
 #define SPI2_CS_PORT  GPIOD
 #define SPI2_CS_PIN   GPIO_PIN_0
-#define SPI2_BUF_SIZE 512
+#define SPI2_BUF_SIZE 1024
 #define SPI2_POLL_MS  250  /* SPI command poll + status push interval */
 static uint32_t lastSpiPollTick = 0;
 
@@ -2230,7 +2230,11 @@ static void StartBleTask(void *argument)
                 "\"hFiles\":%lu,\"hSecs\":%lu,\"hDet\":%lu,"
                 "\"hBatMin\":%lu,\"hBatMax\":%lu,"
                 "\"hTmpMin\":%ld,\"hTmpMax\":%ld,"
-                "\"hBoots\":%lu,\"hSdErr\":%lu,\"hGpsLoss\":%lu}",
+                "\"hBoots\":%lu,\"hSdErr\":%lu,\"hGpsLoss\":%lu,"
+                "\"mdl\":%d,\"mdlSz\":%lu,\"mdlCls\":%d,"
+                "\"detWin\":%lu,\"detHit\":%lu,"
+                "\"detSp\":\"%s\",\"detPct\":%d,\"detTm\":\"%s\","
+                "\"mission\":%d,\"conf\":%d,\"winStep\":%d}",
                 (unsigned long)mv,
                 tWhole, tFrac,
                 (unsigned)(sht30HumRH100 / 100),
@@ -2259,7 +2263,18 @@ static void StartBleTask(void *argument)
                 (long)tMin, (long)tMax,
                 (unsigned long)health.bootCount,
                 (unsigned long)health.sdErrors,
-                (unsigned long)health.gpsFixLosses);
+                (unsigned long)health.gpsFixLosses,
+                (int)modelLoaded,
+                (unsigned long)modelBufSize,
+                (int)modelNumLabels,
+                (unsigned long)detWindowsProcessed,
+                (unsigned long)detHits,
+                detLastSpecies,
+                (int)detLastConf,
+                detLastTime,
+                (int)cfg.missionMode,
+                (int)cfg.detConfThresh,
+                (int)cfg.detWindowStep);
 
             HAL_GPIO_WritePin(SPI2_CS_PORT, SPI2_CS_PIN, GPIO_PIN_RESET);
             HAL_SPI_TransmitReceive(&hspi2, spi_tx, spi_rx, SPI2_BUF_SIZE, 100);
@@ -2319,6 +2334,21 @@ static void StartBleTask(void *argument)
                     cfg.surveyCount = 0;
                     configSave();
                     printf("SPI cmd: survey_clear\r\n");
+                } else if (strstr(rx, "set_detect")) {
+                    /* Parse mission, conf, winStep from JSON */
+                    char *p;
+                    if ((p = strstr(rx, "\"mission\":")) != NULL)
+                        cfg.missionMode = (uint8_t)atoi(p + 10);
+                    if ((p = strstr(rx, "\"conf\":")) != NULL)
+                        cfg.detConfThresh = (uint8_t)atoi(p + 7);
+                    if ((p = strstr(rx, "\"winStep\":")) != NULL)
+                        cfg.detWindowStep = (uint8_t)atoi(p + 10);
+                    configSave();
+                    printf("SPI cmd: set_detect mission=%d conf=%d step=%d\r\n",
+                           cfg.missionMode, cfg.detConfThresh, cfg.detWindowStep);
+                } else if (strstr(rx, "model_reload")) {
+                    /* TODO: trigger model reload from SD */
+                    printf("SPI cmd: model_reload\r\n");
                 }
             }
         }
