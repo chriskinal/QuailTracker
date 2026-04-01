@@ -45,12 +45,6 @@ extern osMutexId_t printMutex;
 /* USART3 handle for debug console output */
 extern UART_HandleTypeDef husart3;
 
-/* BLE log forwarding ring buffer (defined in app_freertos.c) */
-#define BLE_LOG_RING_SIZE 512
-extern volatile uint8_t bleLogEnabled;
-extern volatile uint8_t bleLogRing[BLE_LOG_RING_SIZE];
-extern volatile uint16_t bleLogHead;
-extern volatile uint16_t bleLogTail;
 
 
 char *__env[1] = { 0 };
@@ -101,17 +95,6 @@ __attribute__((weak)) int _write(int file, char *ptr, int len)
   if (printMutex) osMutexAcquire(printMutex, osWaitForever);
   SEGGER_RTT_Write(0, ptr, len);
   HAL_UART_Transmit(&husart3, (const uint8_t *)ptr, len, 50);
-
-  /* Mirror output to BLE log ring buffer (non-blocking, drops on overflow) */
-  if (bleLogEnabled) {
-    const char *p = ptr;
-    for (int i = 0; i < len; i++) {
-      uint16_t next = (uint16_t)((bleLogHead + 1) % BLE_LOG_RING_SIZE);
-      if (next == bleLogTail) break;  /* full — drop remaining */
-      bleLogRing[bleLogHead] = (uint8_t)p[i];
-      bleLogHead = next;
-    }
-  }
 
   if (printMutex) osMutexRelease(printMutex);
   return len;

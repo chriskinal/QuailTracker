@@ -241,6 +241,12 @@ void RTC_IRQHandler(void)
     HAL_RTCEx_WakeUpTimerIRQHandler(&hrtc);
 }
 
+void EXTI0_IRQHandler(void)
+{
+    /* ESP32 CS wake — clear pending, wake source checked in enterStop2() */
+    HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_0);
+}
+
 void EXTI4_IRQHandler(void)
 {
     HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_4);
@@ -259,16 +265,6 @@ void USART1_IRQHandler(void)
         osMessageQueuePut(gpsRxQueue, &ch, 0, 0);
     }
     USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
-}
-
-void USART2_IRQHandler(void)
-{
-    if (USART2->ISR & USART_ISR_RXNE_RXFNE) {
-        uint8_t ch = (uint8_t)(USART2->RDR & 0xFF);
-        extern osMessageQueueId_t bleRxQueue;
-        osMessageQueuePut(bleRxQueue, &ch, 0, 0);
-    }
-    USART2->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
 }
 
 void USART3_IRQHandler(void)

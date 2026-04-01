@@ -32,10 +32,9 @@
 #include "mel_spectrogram.h"
 #include "tflite_inference.h"
 #include "SEGGER_RTT.h"
-#include "ble_proto.h"
-#include "quailtracker.pb.h"
-#include <pb_encode.h>
 #include "device_state.h"
+#include "solar.h"
+#include "schedule.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -160,30 +159,12 @@ void device_state_snapshot(device_state_t *out)
  * Set to ~85% of int16 max to leave headroom while preserving dynamics. */
 #define PEAK_LIMITER_THRESHOLD  7168000
 
-/* BLE status streaming: independent audio-level and recording streams */
 static uint32_t lastSht30Tick = 0;
-static uint32_t lastDisconnectTick = 0;
-static uint32_t bleConnectTick = 0;   /* when BLE connected, for session timeout */
-static uint8_t  bleTimeoutWarned = 0; /* 1 = warning already sent this session */
-volatile uint32_t lastBleRxTick = 0;  /* updated by ble_proto_dispatch */
-#define BLE_SESSION_TIMEOUT_MS  (30 * 60 * 1000)  /* 30 minutes */
 #define SHT30_INTERVAL_MS 5000
-
-/* BLE log forwarding — ring buffer fed by _write(), drained by BLE task */
-#define BLE_LOG_RING_SIZE 512
-volatile uint8_t bleLogEnabled = 0;
-volatile uint8_t bleLogRing[BLE_LOG_RING_SIZE];
-volatile uint16_t bleLogHead = 0;  /* written by _write (producer) */
-volatile uint16_t bleLogTail = 0;  /* read by BLE task (consumer) */
-
-/* Queues from main.c */
-extern osMessageQueueId_t bleRxQueue;
 
 /* Functions from main.c */
 extern int getChar(uint32_t timeoutMs);
 extern int getCharGps(uint32_t timeoutMs);
-extern int getCharBle(uint32_t timeoutMs);
-extern void bleSend(const char *s);
 extern void WAV_WriteHeader(FIL *fp, uint32_t sampleRate, uint32_t dataSize);
 extern void printMenu(void);
 extern void printStatus(void);
@@ -201,12 +182,7 @@ extern void sht30Read(void);
 static volatile uint8_t gpsRawOutput;
 static uint8_t gpsPowered = 1;
 
-/* BLE live probe — CLI task sets request, BLE task executes and stores result */
-static volatile uint8_t bleLiveProbeReq;
-static volatile uint8_t bleLiveProbeReady;
-static char bleLiveProbeResp[64];
-
-/* Flash-persisted device config (loaded at BLE task start) */
+/* Flash-persisted device config (loaded at bridge task start) */
 device_config_t cfg __attribute__((aligned(16)));
 
 /* Flash-persisted health statistics */
@@ -222,6 +198,20 @@ extern SPI_HandleTypeDef hspi2;
 #define SPI2_BUF_SIZE 1024
 #define SPI2_POLL_MS  250  /* SPI command poll + status push interval */
 static uint32_t lastSpiPollTick = 0;
+
+/* ---- Power management ---- */
+#define GPS_DUTY_CYCLE_DEFAULT_SEC  300  /* GPS wake every 5 min during recording */
+#define GPS_FIX_TIMEOUT_MS         15000 /* max wait for GPS fix during duty cycle */
+#define SCHEDULE_CHECK_INTERVAL_MS 1000  /* how often to evaluate schedule */
+static uint32_t lastScheduleCheckTick = 0;
+static uint32_t lastGpsDutyTick = 0;
+static uint8_t  gpsDutyActive = 0;   /* 1 = GPS is on for duty cycle fix */
+
+/* Forward declarations for power management */
+static void powerEnterNonRecord(void);
+static void powerEnterRecord(void);
+static void powerScheduleCheck(void);
+static void gpsDutyCycle(void);
 
 /* Forward declarations for health functions */
 static void healthLoad(void);
@@ -323,13 +313,11 @@ const osSemaphoreAttr_t audioDmaSem_attributes = {
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 static void StartGpsTask(void *argument);
-static void StartBleTask(void *argument);
+static void StartBridgeTask(void *argument);
 static void StartInferenceTask(void *argument);
 static void printGpsStatus(void);
 static void gpsSetPower(uint8_t on);
 static void gpsReset(void);
-static void printBleStatus(void);
-void printBleStatusBrief(void);
 
 /* Flash config */
 static void configSetDefaults(device_config_t *c);
@@ -340,8 +328,8 @@ int configSave(void);
 /* Survey-in */
 static void surveyAccumulate(float lat, float lon, float alt);
 
-/* BLE protocol */
-static int bleSendCmd(const char *cmd, char *resp, int respSize, int timeoutMs);
+/* Diagnostic log */
+void diagLog(const char *event);
 
 /* OTA */
 static uint32_t crc32_compute(const uint8_t *data, uint32_t len);
@@ -399,12 +387,12 @@ void MX_FREERTOS_Init(void) {
     osThreadNew(StartGpsTask, NULL, &gpsTask_attributes);
   }
   {
-    const osThreadAttr_t bleTask_attributes = {
-      .name = "bleTask",
+    const osThreadAttr_t bridgeTask_attributes = {
+      .name = "bridgeTask",
       .priority = (osPriority_t) osPriorityNormal,
       .stack_size = 1536 * 4
     };
-    osThreadNew(StartBleTask, NULL, &bleTask_attributes);
+    osThreadNew(StartBridgeTask, NULL, &bridgeTask_attributes);
   }
   {
     const osThreadAttr_t inferenceTask_attributes = {
@@ -723,6 +711,25 @@ void StartCliTask(void *argument)
     if ((HAL_GetTick() - lastHeartbeat) >= 1000) {
         HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
         lastHeartbeat = HAL_GetTick();
+
+        /* Low battery auto-sleep: stop recording if battery below threshold */
+        if (cfg.autoStop && cfg.lowBatPct > 0 && batteryMv > 0) {
+            uint32_t pct = (batteryMv <= 3000) ? 0 :
+                           (batteryMv >= 4200) ? 100 :
+                           (batteryMv - 3000) * 100 / 1200;
+            if (pct <= cfg.lowBatPct && isRecording) {
+                printf("PWR: Low battery (%lu%%) — stopping recording\r\n",
+                       (unsigned long)pct);
+                uint8_t cmd = CMD_STOP_REC;
+                osMessageQueuePut(audioCmdQueueHandle, &cmd, 0, 0);
+            }
+        }
+    }
+
+    /* Autonomous schedule check — every 1 second */
+    if ((HAL_GetTick() - lastScheduleCheckTick) >= SCHEDULE_CHECK_INTERVAL_MS) {
+        lastScheduleCheckTick = HAL_GetTick();
+        powerScheduleCheck();
     }
 
     /* SD card detect — auto-mount on insert, auto-unmount on remove */
@@ -916,11 +923,6 @@ void StartCliTask(void *argument)
         break;
       }
 
-      case '9':
-        printBleStatus();
-        printMenu();
-        break;
-
       case 'f':
       case 'F':
         if (isRecording) {
@@ -1012,42 +1014,16 @@ void StartCliTask(void *argument)
               sdMounted = 0;
               osMutexRelease(fileMtxHandle);
             }
-            /* Send BLE module to deep sleep with GPIO wake on pin 7 (RX).
-             * When MCU wakes and sends UART data, the start bit pulls RX low,
-             * triggering the low-level GPIO wake.  50µA, no advertising.
-             * Mode 0 keeps advertising but can only be woken by power cycle.
-             * Use bleSendCmd to wait for OK — confirms module accepted the
-             * command before we enter Stop 2. */
-            {
-              char sleepResp[32];
-              bleSendCmd("AT+SLEEP=2,2,7,0", sleepResp, sizeof(sleepResp), 1000);
-              osDelay(100);  /* let module settle into deep sleep */
-            }
-
             printf("Entering Stop 2 for %lu seconds...\r\n",
                    (unsigned long)sleepSec);
             fflush(stdout);
             osDelay(50);
-            enterStop2(sleepSec);
-            printf("\r\nWoke from Stop 2 (%lu seconds)\r\n",
-                   (unsigned long)sleepSec);
-
-            /* Wake BLE module from deep sleep (mode 2).  The start bit of
-             * the first UART byte pulls RX low, triggering the GPIO wake.
-             * Module does a full reboot (~1s) and prints a boot banner
-             * (~300 bytes) before it's ready for AT commands.
-             * After ATE0, query AT+BLESTATE? to confirm the BLE stack is
-             * fully initialized — without this, a subsequent AT+SLEEP=2
-             * can leave the radio partially on (higher sleep current). */
-            bleSend("AT\r\n");
-            osDelay(1000);
-            { uint8_t d; while (osMessageQueueGet(bleRxQueue, &d, NULL, 0) == osOK) {} }
             {
-              char wResp[32];
-              bleSendCmd("ATE0", wResp, sizeof(wResp), 500);
-              bleSendCmd("AT+BLESTATE?", wResp, sizeof(wResp), 500);
+              wake_source_t ws = enterStop2(sleepSec);
+              printf("\r\nWoke from Stop 2 (%s, %lu sec)\r\n",
+                     ws == WAKE_ESP32 ? "ESP32" : "RTC",
+                     (unsigned long)sleepSec);
             }
-            printf("BLE: Module rebooted from deep sleep\r\n");
             /* Remount SD after wake */
             if (wasMounted) {
               extern FATFS USERFatFS;
@@ -1065,6 +1041,47 @@ void StartCliTask(void *argument)
         }
         printMenu();
         break;
+
+      case 'a':
+      case 'A':
+      {
+        /* Toggle autonomous schedule mode */
+        if (dev.pwr.scheduleActive) {
+            dev.pwr.scheduleActive = 0;
+            dev.pwr.state = PWR_DEV_MODE;
+            printf("Schedule: OFF (dev mode)\r\n");
+        } else {
+            if (!dev.pwr.rtcSynced) {
+                printf("Schedule: Need GPS fix to sync RTC first!\r\n");
+            } else if (!schedule_has_windows(&cfg)) {
+                printf("Schedule: No windows configured\r\n");
+            } else {
+                dev.pwr.scheduleActive = 1;
+                dev.pwr.devMode = 0;
+                dev.pwr.state = PWR_SCHEDULED_REC;  /* start evaluating */
+                printf("Schedule: ON — autonomous recording enabled\r\n");
+            }
+        }
+        printMenu();
+        break;
+      }
+
+      case 'd':
+      case 'D':
+      {
+        /* Toggle dev mode */
+        dev.pwr.devMode = !dev.pwr.devMode;
+        if (dev.pwr.devMode) {
+            dev.pwr.scheduleActive = 0;
+            dev.pwr.state = PWR_DEV_MODE;
+            printf("Dev mode: ON (schedule disabled, everything stays on)\r\n");
+        } else {
+            dev.pwr.state = PWR_SCHEDULED_REC;
+            printf("Dev mode: OFF\r\n");
+        }
+        printMenu();
+        break;
+      }
 
       case '\r':
       case '\n':
@@ -1463,10 +1480,7 @@ static void StartInferenceTask(void *argument)
 
                 printf("DET: %s %d%% @ %s\r\n", species, confPct, detLastTime);
 
-                /* Push detection over BLE if subscribed */
-                if (ble_proto_has_subscriber(TOPIC_DETECTION)) {
-                    ble_proto_push_topic(TOPIC_DETECTION);
-                }
+                /* Detection data is pushed to ESP32 via SPI JSON */
             }
         }
     }
@@ -1599,6 +1613,15 @@ static void nmea_process_line(const char *line)
         nmea_parse_rmc(line);
     else if (strncmp(line + 3, "GGA,", 4) == 0)
         nmea_parse_gga(line);
+
+    /* Auto-sync RTC from GPS on first valid fix (and periodically) */
+    if (gpsData.valid && gpsData.utc_date != 0 && !dev.pwr.rtcSynced) {
+        rtcSyncFromGps();
+        printf("RTC: Synced from GPS (%02lu:%02lu:%02lu UTC)\r\n",
+               (unsigned long)(gpsData.utc_time / 10000),
+               (unsigned long)((gpsData.utc_time / 100) % 100),
+               (unsigned long)(gpsData.utc_time % 100));
+    }
 
     if (gpsRawOutput)
         printf("%s\r\n", line);
@@ -1751,8 +1774,7 @@ static void surveyAccumulate(float lat, float lon, float alt)
                 printf("Survey: Complete (%lu fixes)\r\n",
                        (unsigned long)cfg.surveyCount);
             }
-            /* Push config so app sees survey results */
-            ble_proto_push_topic(TOPIC_CONFIG_DUMP);
+            /* Survey results pushed to ESP32 via SPI JSON */
             return;
         }
 
@@ -1769,10 +1791,7 @@ static void surveyAccumulate(float lat, float lon, float alt)
             printf("Survey: %lu fixes, %lus remaining\r\n",
                    (unsigned long)cfg.surveyCount, (unsigned long)remain);
         }
-        /* Push status to app every 5 fixes for live countdown */
-        if ((cfg.surveyCount % 5) == 0) {
-            ble_proto_push_topic(TOPIC_STATUS);
-        }
+        /* Status pushed to ESP32 via SPI JSON */
     } else if (cfg.surveyCount > 0) {
         /* Continuous refinement: keep averaging after initial survey */
         cfg.surveyCount++;
@@ -1784,81 +1803,6 @@ static void surveyAccumulate(float lat, float lon, float alt)
         if ((cfg.surveyCount % 100) == 0) {
             configSave();
         }
-    }
-}
-
-/* ========================= BLE / PB-03F ========================= */
-
-/* Send AT command and wait for response (blocking, with timeout) */
-static int bleSendCmd(const char *cmd, char *resp, int respSize, int timeoutMs)
-{
-    /* PB-03F requires \r\n line termination on AT commands */
-    char cmdBuf[128];
-    int cmdLen = snprintf(cmdBuf, sizeof(cmdBuf), "%s\r\n", cmd);
-    if (cmdLen > 0 && cmdLen < (int)sizeof(cmdBuf))
-        bleSend(cmdBuf);
-    else
-        bleSend(cmd);
-    int pos = 0;
-    uint32_t start = HAL_GetTick();
-
-    while (1) {
-        uint32_t elapsed = HAL_GetTick() - start;
-        if (elapsed >= (uint32_t)timeoutMs) break;
-        uint32_t remaining = (uint32_t)timeoutMs - elapsed;
-        int c = getCharBle(remaining);
-        if (c >= 0) {
-            if (c == '\n' || c == '\r') {
-                if (pos > 0) {
-                    resp[pos] = '\0';
-                    return pos;
-                }
-            } else if (pos < respSize - 1) {
-                resp[pos++] = (char)c;
-            }
-        }
-    }
-    /* Some responses don't end with newline (e.g. "OK") */
-    if (pos > 0) {
-        resp[pos] = '\0';
-        return pos;
-    }
-    return 0;
-}
-
-static void printBleStatus(void)
-{
-    printf("\r\n=== BLE Status ===\r\n");
-    printf("Module:    %s\r\n", bleReady ? "PB-03F (PHY6252)" : "Not detected");
-    if (bleReady) {
-        printf("Name:      %s\r\n", bleName);
-        printf("Address:   %s\r\n", bleAddr);
-        printf("Connected: %s\r\n", bleConnected ? "Yes" : "No");
-
-        /* Request BLE task to run AT probe (avoids queue contention) */
-        bleLiveProbeReady = 0;
-        bleLiveProbeReq = 1;
-        uint32_t start = HAL_GetTick();
-        while (!bleLiveProbeReady && (HAL_GetTick() - start < 2000))
-            osDelay(50);
-
-        if (bleLiveProbeReady)
-            printf("AT test:   %s\r\n", bleLiveProbeResp);
-        else
-            printf("AT test:   Timeout\r\n");
-    }
-    printf("==================\r\n");
-}
-
-/* Brief BLE status for main status display (no live AT probe) */
-void printBleStatusBrief(void)
-{
-    printf("BLE:\r\n");
-    printf("  Module: %s\r\n", bleReady ? "PB-03F (PHY6252)" : "Not detected");
-    if (bleReady) {
-        printf("  Name:   %s\r\n", bleName);
-        printf("  Addr:   %s\r\n", bleAddr);
-        printf("  Link:   %s\r\n", bleConnected ? "Connected" : "Idle");
     }
 }
 
@@ -1895,10 +1839,10 @@ void diagLog(const char *event)
     printf("DIAG: %s", line);
 }
 
-static void StartBleTask(void *argument)
-{
-    char resp[64];
+/* ========================= Bridge Task (SPI2 + housekeeping) ========================= */
 
+static void StartBridgeTask(void *argument)
+{
     /* Load health stats from flash, increment boot count */
     healthLoad();
     health.bootCount++;
@@ -1910,130 +1854,20 @@ static void StartBleTask(void *argument)
     /* Apply persisted config to runtime state */
     extern MDF_FilterConfigTypeDef AdfFilterConfig0;
     extern MDF_HandleTypeDef AdfHandle0;
-    AdfFilterConfig0.Gain = (int32_t)cfg.gain;  /* raw dB value 0-24 */
-    HAL_MDF_SetGain(&AdfHandle0, (int32_t)cfg.gain);  /* update hardware register */
+    AdfFilterConfig0.Gain = (int32_t)cfg.gain;
+    HAL_MDF_SetGain(&AdfHandle0, (int32_t)cfg.gain);
     dev.rec.format = cfg.recFormat;
 
-    printf("BLE: Config loaded (station=%s, gain=%d, fmt=%s)\r\n",
+    /* Initialize power management state — default to dev mode (everything on) */
+    dev.pwr.state = PWR_DEV_MODE;
+    dev.pwr.devMode = 1;
+    dev.pwr.scheduleActive = 0;
+    dev.pwr.rtcSynced = 0;
+    dev.pwr.gpsDutyCycleSec = GPS_DUTY_CYCLE_DEFAULT_SEC;
+
+    printf("Config loaded (station=%s, gain=%d, fmt=%s)\r\n",
            cfg.stationId, cfg.gain,
            cfg.recFormat == REC_FMT_FLAC ? "FLAC" : "WAV");
-
-    printf("BLE: Probing PB-03F on USART2 (115200 baud)\r\n");
-
-    /* Wait for module to power up.
-     * PB-03F needs up to 1s to be ready for AT commands on some boots. */
-    osDelay(1000);
-
-    /* Flush any bytes received during power-up */
-    {
-        uint8_t discard;
-        while (osMessageQueueGet(bleRxQueue, &discard, NULL, 0) == osOK) {}
-    }
-
-    /* Wake module if it was sleeping from a previous boot */
-    bleSendCmd("AT", resp, sizeof(resp), 500);
-    osDelay(200);
-    while (getCharBle(10) >= 0) {}  /* flush wake garbage */
-
-    /* Disable echo (PB-03F has echo ON by default) */
-    bleSendCmd("ATE0", resp, sizeof(resp), 1000);
-
-    /* Probe with AT — if no response, module may be stuck in transparent
-     * mode from a previous MCU session (J-Link doesn't reset PB-03F). */
-    if (bleSendCmd("AT", resp, sizeof(resp), 1000) == 0) {
-        printf("BLE: No response, trying ++ escape...\r\n");
-        /* Recovery loop: module may be in transparent mode, or phone may
-         * auto-reconnect after AT+BLEDISCON putting module back in
-         * transparent mode.  Try up to 3 times. */
-        /* Recovery: exit transparent mode, disconnect */
-        bleSend("++");
-        osDelay(1000);
-        while (getCharBle(10) >= 0) {}
-        bleSendCmd("AT+BLEDISCON", resp, sizeof(resp), 500);
-        osDelay(500);
-        while (getCharBle(10) >= 0) {}
-        bleSendCmd("ATE0", resp, sizeof(resp), 500);
-    }
-
-    /* Final probe */
-    if (bleSendCmd("AT", resp, sizeof(resp), 1000) > 0) {
-        printf("BLE: AT -> %s\r\n", resp);
-        bleReady = 1;
-    }
-
-    if (!bleReady) {
-        printf("BLE: Module not responding\r\n");
-    }
-
-    if (bleReady) {
-        /* SAFETY: Only send commands listed in AT+HELP output.
-         * Sending unknown commands can brick the module.
-         * WARNING: NEVER send AT+RESTORE — erases firmware permanently. */
-
-        /* All commands below are confirmed in AT+HELP output (42 commands).
-         * NEVER send commands not in AT+HELP — can brick the module.
-         * Safe commands: AT, ATE0/1, AT+BLENAME, AT+BLEMAC, AT+BLEADVEN,
-         * AT+BLEADVDATA, AT+SLEEP, AT+RST, AT+BLEMODE, AT+GMR, etc. */
-
-        /* Set connection parameters — AT+RST resets to factory defaults
-         * which have timeout=200 (2s), way too tight.  Set to 500 (5s). */
-        bleSendCmd("AT+BLECONINTV=6,36,0,2000", resp, sizeof(resp), 1000);
-        if (bleSendCmd("AT+BLECONINTV?", resp, sizeof(resp), 1000) > 0)
-            printf("BLE: CONINTV = %s\r\n", resp);
-
-        /* Get MAC address */
-        if (bleSendCmd("AT+BLEMAC?", resp, sizeof(resp), 1000) > 0) {
-            const char *addr = resp;
-            const char *p = strchr(resp, ':');
-            if (!p) p = strchr(resp, '=');
-            if (p) addr = p + 1;
-            strncpy(bleAddr, addr, sizeof(bleAddr) - 1);
-            bleAddr[sizeof(bleAddr) - 1] = '\0';
-            printf("BLE: Addr = %s\r\n", bleAddr);
-        }
-
-        /* Query current name */
-        if (bleSendCmd("AT+BLENAME?", resp, sizeof(resp), 1000) > 0) {
-            const char *name = resp;
-            const char *p = strchr(resp, ':');
-            if (!p) p = strchr(resp, '=');
-            if (p) name = p + 1;
-            strncpy(bleName, name, sizeof(bleName) - 1);
-            bleName[sizeof(bleName) - 1] = '\0';
-            printf("BLE: Name = %s\r\n", bleName);
-        }
-
-        /* Always cycle advertising on boot.  Even when the GATT name
-         * matches cfg.stationId, the scan-response packet can revert to
-         * "AI-Thinker" after power-cycle.  Toggling adv off/on forces the
-         * BLE stack to rebuild the scan response from the current GATT name. */
-        {
-            /* Stop advertising */
-            if (bleSendCmd("AT+BLEADVEN=0", resp, sizeof(resp), 1000) > 0)
-                printf("BLE: BLEADVEN=0 -> %s\r\n", resp);
-            osDelay(100);
-
-            /* Set GATT name (unconditional — cheap, idempotent) */
-            char nameCmd[48];
-            snprintf(nameCmd, sizeof(nameCmd), "AT+BLENAME=%s", cfg.stationId);
-            if (bleSendCmd(nameCmd, resp, sizeof(resp), 1000) > 0)
-                printf("BLE: BLENAME=%s -> %s\r\n", cfg.stationId, resp);
-            osDelay(100);
-
-            /* Restart advertising */
-            if (bleSendCmd("AT+BLEADVEN=1", resp, sizeof(resp), 1000) > 0)
-                printf("BLE: BLEADVEN=1 -> %s\r\n", resp);
-            osDelay(100);
-
-            /* Verify name */
-            if (bleSendCmd("AT+BLENAME?", resp, sizeof(resp), 1000) > 0)
-                printf("BLE: Name verify = %s\r\n", resp);
-
-            strncpy(bleName, cfg.stationId, sizeof(bleName) - 1);
-            bleName[sizeof(bleName) - 1] = '\0';
-        }
-
-    }
 
     /* Log boot event */
     {
@@ -2044,123 +1878,9 @@ static void StartBleTask(void *argument)
         diagLog(msg);
     }
 
-    /* Initialize protobuf protocol */
-    ble_proto_init();
-
-    /* Main loop: read incoming BLE data (transparent mode)
-     * Binary protocol: accumulate bytes until 0x00 COBS delimiter,
-     * then dispatch as a protobuf frame.
-     * Text lines from PB-03F module (URC events like +EVENT:BLE_CONNECTED)
-     * are detected by leading '+' or ASCII printable and handled as text. */
-    uint8_t frameBuf[256];
-    int framePos = 0;
-    int frameExpected = 0;   /* expected frame length after SOF + length bytes */
-    uint8_t frameState = 0;  /* 0=idle, 1=got SOF, 2=got len_hi, 3=receiving data */
-    uint8_t frameLenHi = 0;
-    char textBuf[128];
-    int textPos = 0;
-
+    /* Main loop: SPI2 bridge to ESP32 + sensor reads + health saves */
     for (;;) {
-        /* Handle live AT probe requests from CLI task */
-        if (bleLiveProbeReq) {
-            bleLiveProbeReq = 0;
-            if (bleSendCmd("AT", bleLiveProbeResp, sizeof(bleLiveProbeResp), 500) == 0)
-                strcpy(bleLiveProbeResp, "No response");
-            bleLiveProbeReady = 1;
-            continue;
-        }
-
-        int c = getCharBle(10);
-        if (c >= 0) {
-            uint8_t b = (uint8_t)c;
-
-            if (b == 0x01 && frameState == 0) {
-                /* Start-of-frame marker */
-                frameState = 1;
-                framePos = 0;
-                textPos = 0;
-            } else if (frameState == 1) {
-                /* Length high byte */
-                frameLenHi = b;
-                frameState = 2;
-            } else if (frameState == 2) {
-                /* Length low byte — now we know how many bytes to read */
-                frameExpected = (frameLenHi << 8) | b;
-                if (frameExpected > (int)sizeof(frameBuf) || frameExpected < FRAME_HEADER_SIZE) {
-                    frameState = 0;  /* invalid length — resync */
-                } else {
-                    frameState = 3;
-                    framePos = 0;
-                }
-            } else if (frameState == 3) {
-                /* Accumulate frame data */
-                frameBuf[framePos++] = b;
-                if (framePos >= frameExpected) {
-                    /* Complete frame received */
-                    ble_proto_receive(frameBuf, (size_t)framePos);
-                    frameState = 0;
-                    framePos = 0;
-                }
-            } else if (b == '\n') {
-                /* Text line — check for PB-03F URC events */
-                if (textPos > 0 && textBuf[textPos - 1] == '\r') textPos--;
-                textBuf[textPos] = '\0';
-                if (textPos > 0) {
-                    if (strstr(textBuf, "BLE_CONNECTED") != NULL) {
-                        bleConnected = 1;
-                        lastDisconnectTick = 0;
-                        bleConnectTick = HAL_GetTick();
-                        bleTimeoutWarned = 0;
-                        lastBleRxTick = HAL_GetTick();
-                        ble_proto_reset();
-                        printf("BLE: Connected\r\n");
-                        diagLog("BLE connected");
-                        /* Reset health-report-sent flag so first CMD_GET_STATUS pushes it */
-                        extern uint8_t healthReportSent;
-                        healthReportSent = 0;
-                    } else if (strstr(textBuf, "BLE_DISCONNECT") != NULL) {
-                        bleConnected = 0;
-                        lastDisconnectTick = HAL_GetTick();
-                        ble_proto_reset();
-                        bleLogEnabled = 0;
-                        printf("BLE: Disconnected\r\n");
-                        diagLog("BLE disconnected");
-                        /* Reset health counters (keep boot count) and save */
-                        healthReset();
-                        healthSave();
-                        /* Always restart advertising after disconnect.
-                         * PB-03F can stop advertising after unclean disconnect
-                         * (app killed, out of range). Cycle off/on to ensure
-                         * the device is discoverable again. */
-                        {
-                            char nameCmd[48];
-                            char nameResp[32];
-                            bleSendCmd("AT+BLEADVEN=0", nameResp, sizeof(nameResp), 1000);
-                            osDelay(100);
-                            if (bleNameUpdatePending) {
-                                bleNameUpdatePending = 0;
-                                snprintf(nameCmd, sizeof(nameCmd), "AT+BLENAME=%s", cfg.stationId);
-                                bleSendCmd(nameCmd, nameResp, sizeof(nameResp), 1000);
-                                strncpy(bleName, cfg.stationId, sizeof(bleName) - 1);
-                                bleName[sizeof(bleName) - 1] = '\0';
-                                printf("BLE: Name updated to %s\r\n", bleName);
-                            }
-                            bleSendCmd("AT+BLEADVEN=1", nameResp, sizeof(nameResp), 1000);
-                            printf("BLE: Advertising restarted\r\n");
-                        }
-                    }
-                }
-                textPos = 0;
-            } else {
-                /* Accumulate text (URC events, AT responses) */
-                if (textPos < (int)sizeof(textBuf) - 1)
-                    textBuf[textPos++] = (char)b;
-            }
-        }
-
-        /* Poll subscription timers and push due messages */
-        if (bleConnected)
-            ble_proto_poll_subscriptions();
+        osDelay(10);  /* yield to other tasks */
 
         /* Periodic SHT30 temperature/humidity read (~every 5s) */
         if ((HAL_GetTick() - lastSht30Tick) >= SHT30_INTERVAL_MS) {
@@ -2251,7 +1971,8 @@ static void StartBleTask(void *argument)
                 "\"nWin\":%d,\"wins\":[%s],"
                 "\"gain\":%d,\"fmt\":%d,\"hpf\":%u,\"lpf\":%u,\"chunk\":%d,"
                 "\"trigEn\":%d,\"trigDb\":%d,\"trigPre\":%d,\"trigPost\":%d,"
-                "\"lowBat\":%d,\"autoStop\":%d}",
+                "\"lowBat\":%d,\"autoStop\":%d,"
+                "\"pwrState\":%d,\"devMode\":%d,\"schedActive\":%d,\"rtcSync\":%d}",
                 (unsigned long)mv,
                 tWhole, tFrac,
                 (unsigned)(sht30HumRH100 / 100),
@@ -2310,7 +2031,11 @@ static void StartBleTask(void *argument)
                 (int)cfg.trigPre,
                 (int)cfg.trigPost,
                 (int)cfg.lowBatPct,
-                (int)cfg.autoStop);
+                (int)cfg.autoStop,
+                (int)dev.pwr.state,
+                (int)dev.pwr.devMode,
+                (int)dev.pwr.scheduleActive,
+                (int)dev.pwr.rtcSynced);
 
             HAL_GPIO_WritePin(SPI2_CS_PORT, SPI2_CS_PIN, GPIO_PIN_RESET);
             HAL_SPI_TransmitReceive(&hspi2, spi_tx, spi_rx, SPI2_BUF_SIZE, 100);
@@ -2454,6 +2179,25 @@ static void StartBleTask(void *argument)
                     configSave();
                     printf("SPI cmd: set_config station=%s gain=%d fmt=%d\r\n",
                            cfg.stationId, cfg.gain, cfg.recFormat);
+                } else if (strstr(rx, "schedule_on")) {
+                    if (dev.pwr.rtcSynced && schedule_has_windows(&cfg)) {
+                        dev.pwr.scheduleActive = 1;
+                        dev.pwr.devMode = 0;
+                        dev.pwr.state = PWR_SCHEDULED_REC;
+                        printf("SPI cmd: schedule_on\r\n");
+                    }
+                } else if (strstr(rx, "schedule_off")) {
+                    dev.pwr.scheduleActive = 0;
+                    dev.pwr.devMode = 1;
+                    dev.pwr.state = PWR_DEV_MODE;
+                    printf("SPI cmd: schedule_off\r\n");
+                } else if (strstr(rx, "dev_mode")) {
+                    dev.pwr.devMode = !dev.pwr.devMode;
+                    if (dev.pwr.devMode) {
+                        dev.pwr.scheduleActive = 0;
+                        dev.pwr.state = PWR_DEV_MODE;
+                    }
+                    printf("SPI cmd: dev_mode=%d\r\n", dev.pwr.devMode);
                 }
             }
         }
@@ -2464,126 +2208,6 @@ static void StartBleTask(void *argument)
             healthSave();
         }
 
-        /* BLE session timeout: warn at 29 min, disconnect at 30 min.
-         * In field use, connections are brief (check status, adjust settings).
-         * Long connections stress the PB-03F and drain battery. */
-        if (bleConnected && bleConnectTick != 0) {
-            uint32_t sessionMs = HAL_GetTick() - bleConnectTick;
-
-            /* 1-minute warning: send LogLine so app can show a banner */
-            if (sessionMs >= (BLE_SESSION_TIMEOUT_MS - 60000) &&
-                !bleTimeoutWarned)
-            {
-                bleTimeoutWarned = 1;
-                /* Static to avoid 258 bytes of stack in the BLE task */
-                static quailtracker_LogLine log;
-                static uint8_t logBuf[quailtracker_LogLine_size];
-                memset(&log, 0, sizeof(log));
-                strncpy(log.text, "SESSION_TIMEOUT:60", sizeof(log.text) - 1);
-                pb_ostream_t stream = pb_ostream_from_buffer(logBuf, sizeof(logBuf));
-                if (pb_encode(&stream, quailtracker_LogLine_fields, &log))
-                    ble_proto_send(TOPIC_LOG, logBuf, stream.bytes_written);
-                printf("BLE: Session timeout warning sent (60s) sessionMs=%lu\r\n",
-                       (unsigned long)sessionMs);
-            }
-
-            /* Disconnect after 30 minutes.
-             * Don't try ++ / AT commands — they fail during active transparent
-             * mode.  Just stop sending pushes by clearing bleConnected.  The
-             * PB-03F supervision timeout (20s) will drop the link, triggering
-             * BLE_DISCONNECT URC which restarts advertising normally. */
-            if (sessionMs >= BLE_SESSION_TIMEOUT_MS)
-            {
-                printf("BLE: Session timeout, stopping pushes sessionMs=%lu\r\n",
-                       (unsigned long)sessionMs);
-                diagLog("BLE session timeout");
-
-                bleConnected = 0;
-                bleConnectTick = 0;
-                ble_proto_reset();
-                bleLogEnabled = 0;
-                /* BLE_DISCONNECT URC will fire in ~20s when supervision
-                 * timeout expires, triggering normal disconnect handler
-                 * which restarts advertising. */
-            }
-        }
-
-        /* Stale connection detector: if bleConnected=1 but no BLE frames
-         * received for 60s, the app was killed without a clean disconnect.
-         * The PB-03F still thinks it's connected (transparent mode).
-         * Send "++" to exit transparent mode, then disconnect and restart
-         * advertising. */
-        if (bleConnected && lastBleRxTick != 0 &&
-            (HAL_GetTick() - lastBleRxTick) >= 60000)
-        {
-            printf("BLE: Stale connection detected (no data for 60s)\r\n");
-            diagLog("BLE stale connection detected");
-
-            /* Exit transparent mode with raw "++" (no \r\n) */
-            char resp[32];
-            bleSend("++");
-            osDelay(1000);
-            while (getCharBle(10) >= 0) {}  /* flush "OK" */
-
-            /* Disconnect and restart advertising (no AT+RST — it resets
-             * connection parameters and causes baud rate garbage) */
-            bleSendCmd("AT+BLEDISCON", resp, sizeof(resp), 1000);
-            osDelay(500);
-            while (getCharBle(10) >= 0) {}  /* flush URC */
-            bleSendCmd("AT+BLEADVEN=0", resp, sizeof(resp), 500);
-            osDelay(100);
-            bleSendCmd("AT+BLEADVEN=1", resp, sizeof(resp), 500);
-
-            bleConnected = 0;
-            lastDisconnectTick = HAL_GetTick();
-            ble_proto_reset();
-            bleLogEnabled = 0;
-            printf("BLE: Stale disconnect — advertising restarted\r\n");
-        }
-
-        /* Advertising safety net: if not connected, retry every 10s.
-         * Probe with AT first — if the module is still in transparent mode
-         * (PB-03F hasn't timed out the BLE link yet), AT won't respond and
-         * we just retry later.  Once the module exits transparent mode
-         * (supervision timeout fired), AT responds and we can restart adv. */
-        if (!bleConnected && bleReady &&
-            lastDisconnectTick != 0 &&
-            (HAL_GetTick() - lastDisconnectTick) >= 10000)
-        {
-            char advResp[32];
-            if (bleSendCmd("AT", advResp, sizeof(advResp), 500) > 0) {
-                bleSendCmd("AT+BLEADVEN=0", advResp, sizeof(advResp), 500);
-                osDelay(100);
-                bleSendCmd("AT+BLEADVEN=1", advResp, sizeof(advResp), 500);
-                printf("BLE: Advertising restarted (safety net)\r\n");
-                lastDisconnectTick = 0;  /* success — stop retrying */
-            } else {
-                printf("BLE: Module unresponsive (transparent mode?), retry in 10s\r\n");
-                lastDisconnectTick = HAL_GetTick();  /* retry */
-            }
-        }
-
-        /* Drain log ring buffer over BLE as protobuf LogLine messages */
-        if (bleLogEnabled && bleConnected) {
-            char logChunk[120];
-            int n = 0;
-            while (n < (int)sizeof(logChunk) - 1) {
-                uint16_t t = bleLogTail;
-                if (t == bleLogHead) break;
-                logChunk[n++] = (char)bleLogRing[t];
-                bleLogTail = (uint16_t)((t + 1) % BLE_LOG_RING_SIZE);
-            }
-            if (n > 0) {
-                logChunk[n] = '\0';
-                /* Send as protobuf LogLine */
-                quailtracker_LogLine log = quailtracker_LogLine_init_zero;
-                strncpy(log.text, logChunk, sizeof(log.text) - 1);
-                uint8_t pb_buf[140];
-                pb_ostream_t stream = pb_ostream_from_buffer(pb_buf, sizeof(pb_buf));
-                if (pb_encode(&stream, quailtracker_LogLine_fields, &log))
-                    ble_proto_send(TOPIC_LOG, pb_buf, stream.bytes_written);
-            }
-        }
     }
 }
 
@@ -2878,8 +2502,207 @@ void healthUpdateRecStop(uint32_t bytes, uint32_t durationSecs)
     health.lastFileSecs = durationSecs;
 }
 
-/* ========================= BLE Protocol (legacy text handlers removed — see ble_proto_handlers.c) ========================= */
+/* ========================= Power Management ========================= */
 
+/* Transition to Non-Record state: stop recording, unmount SD, power down peripherals, sleep */
+static void powerEnterNonRecord(void)
+{
+    dev.pwr.state = PWR_SCHEDULED_NONREC;
+
+    /* Stop recording if active */
+    if (isRecording) {
+        uint8_t cmd = CMD_STOP_REC;
+        osMessageQueuePut(audioCmdQueueHandle, &cmd, 0, 0);
+        osDelay(200);  /* let audio task finalize file */
+    }
+
+    /* Unmount SD to prevent FAT corruption */
+    if (sdMounted) {
+        extern char USERPath[];
+        osMutexAcquire(fileMtxHandle, osWaitForever);
+        f_mount(NULL, USERPath, 0);
+        USER_disk_deinit();
+        sdMounted = 0;
+        osMutexRelease(fileMtxHandle);
+    }
+
+    /* Power down peripherals */
+    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_11, GPIO_PIN_RESET);  /* PERIPH_VCC off */
+    gpsSetPower(0);
+    gpsDutyActive = 0;
+
+    printf("PWR: Entering Non-Record sleep\r\n");
+    fflush(stdout);
+    osDelay(50);
+}
+
+/* Transition to Record state: power on peripherals, mount SD, start recording */
+static void powerEnterRecord(void)
+{
+    dev.pwr.state = PWR_SCHEDULED_REC;
+
+    /* Power on peripherals */
+    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_11, GPIO_PIN_SET);   /* PERIPH_VCC on */
+    osDelay(50);  /* let power rails stabilize */
+
+    /* Mount SD */
+    if (!sdMounted) {
+        extern FATFS USERFatFS;
+        extern char USERPath[];
+        osMutexAcquire(fileMtxHandle, osWaitForever);
+        if (f_mount(&USERFatFS, USERPath, 1) == FR_OK) {
+            sdMounted = 1;
+            extern void sdCreateDirs(void);
+            sdCreateDirs();
+        } else {
+            printf("PWR: SD mount failed!\r\n");
+        }
+        osMutexRelease(fileMtxHandle);
+    }
+
+    /* Start GPS duty cycle */
+    gpsSetPower(1);
+    lastGpsDutyTick = HAL_GetTick();
+    gpsDutyActive = 0;
+
+    /* Start recording */
+    if (sdMounted && !isRecording) {
+        uint8_t cmd = CMD_START_REC;
+        osMessageQueuePut(audioCmdQueueHandle, &cmd, 0, 0);
+    }
+
+    printf("PWR: Entering Scheduled Record\r\n");
+}
+
+/* GPS duty cycling: periodically wake GPS for RTC sync during recording */
+static void gpsDutyCycle(void)
+{
+    if (dev.pwr.state != PWR_SCHEDULED_REC) return;
+
+    uint32_t dutySec = dev.pwr.gpsDutyCycleSec;
+    if (dutySec == 0) dutySec = GPS_DUTY_CYCLE_DEFAULT_SEC;
+
+    uint32_t now = HAL_GetTick();
+
+    if (gpsDutyActive) {
+        /* GPS is on, waiting for fix */
+        if (gpsData.valid && gpsData.fix >= 1) {
+            /* Got fix — sync RTC and power down GPS */
+            rtcSyncFromGps();
+            gpsSetPower(0);
+            gpsDutyActive = 0;
+            lastGpsDutyTick = now;
+            printf("PWR: GPS duty cycle sync OK\r\n");
+        } else if ((now - lastGpsDutyTick) > GPS_FIX_TIMEOUT_MS) {
+            /* Timeout — give up, try again next cycle */
+            gpsSetPower(0);
+            gpsDutyActive = 0;
+            lastGpsDutyTick = now;
+            printf("PWR: GPS duty cycle timeout\r\n");
+        }
+    } else {
+        /* GPS is off, check if it's time to wake it */
+        if ((now - lastGpsDutyTick) >= (dutySec * 1000)) {
+            gpsSetPower(1);
+            gpsDutyActive = 1;
+            lastGpsDutyTick = now;
+        }
+    }
+}
+
+/* Main schedule check — called every second from CLI task */
+static void powerScheduleCheck(void)
+{
+    /* Skip if not in autonomous mode or in dev mode */
+    if (dev.pwr.devMode || !dev.pwr.scheduleActive) return;
+
+    /* Skip if RTC not synced (no reliable time) */
+    if (!dev.pwr.rtcSynced) return;
+
+    /* Read current time from RTC */
+    uint8_t hh, mm, ss;
+    uint8_t day, month;
+    uint16_t year;
+    rtcGetTime(&hh, &mm, &ss);
+    rtcGetDate(&day, &month, &year);
+    uint16_t nowMinUTC = (uint16_t)(hh * 60 + mm);
+
+    /* Get lat/lon for solar calc — prefer survey, fallback to live GPS */
+    float lat = cfg.surveyLat;
+    float lon = cfg.surveyLon;
+    if (cfg.surveyCount == 0 && gpsData.valid) {
+        lat = gpsData.latitude;
+        lon = gpsData.longitude;
+    }
+
+    /* Evaluate schedule */
+    schedule_result_t sched = schedule_evaluate(&cfg, nowMinUTC,
+                                                 day, month, year, lat, lon);
+
+    power_state_t curState = dev.pwr.state;
+
+    if (sched.shouldRecord && curState == PWR_SCHEDULED_NONREC) {
+        /* Time to start recording */
+        powerEnterRecord();
+    } else if (!sched.shouldRecord && curState == PWR_SCHEDULED_REC) {
+        /* Recording window ended — stop and sleep */
+        powerEnterNonRecord();
+
+        /* Calculate sleep duration, chain if needed (RTC timer max 65535s) */
+        uint32_t sleepSec = sched.secsUntilNext;
+        if (sleepSec < 10) sleepSec = 10;  /* minimum sleep */
+
+        while (sleepSec > 0 && dev.pwr.state == PWR_SCHEDULED_NONREC) {
+            uint32_t chunk = (sleepSec > 65000) ? 65000 : sleepSec;
+
+            wake_source_t ws = enterStop2((uint32_t)chunk);
+            printf("\r\nPWR: Woke from Stop 2 (%s)\r\n",
+                   ws == WAKE_ESP32 ? "ESP32" : "RTC");
+
+            if (ws == WAKE_ESP32) {
+                /* User connected via ESP32 — break out of sleep chain */
+                dev.pwr.state = PWR_USER_CONNECTED;
+                powerEnterRecord();  /* power everything up */
+                return;
+            }
+
+            sleepSec -= chunk;
+
+            /* Re-evaluate schedule in case we should start recording now */
+            if (sleepSec > 0) {
+                rtcGetTime(&hh, &mm, &ss);
+                rtcGetDate(&day, &month, &year);
+                nowMinUTC = (uint16_t)(hh * 60 + mm);
+                sched = schedule_evaluate(&cfg, nowMinUTC,
+                                           day, month, year, lat, lon);
+                if (sched.shouldRecord) {
+                    /* Remount and start recording */
+                    powerEnterRecord();
+                    return;
+                }
+            }
+        }
+
+        /* If we exited the loop naturally, re-evaluate once more */
+        if (dev.pwr.state == PWR_SCHEDULED_NONREC) {
+            /* Remount SD for next cycle */
+            HAL_GPIO_WritePin(GPIOD, GPIO_PIN_11, GPIO_PIN_SET);
+            osDelay(50);
+            extern FATFS USERFatFS;
+            extern char USERPath[];
+            osMutexAcquire(fileMtxHandle, osWaitForever);
+            if (f_mount(&USERFatFS, USERPath, 1) == FR_OK) {
+                sdMounted = 1;
+            }
+            osMutexRelease(fileMtxHandle);
+        }
+    }
+
+    /* GPS duty cycling during recording */
+    if (dev.pwr.state == PWR_SCHEDULED_REC) {
+        gpsDutyCycle();
+    }
+}
 
 /* USER CODE END Application */
 

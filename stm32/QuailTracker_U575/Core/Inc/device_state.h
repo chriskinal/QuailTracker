@@ -16,6 +16,20 @@
 
 #include <stdint.h>
 
+/* ---- Power states ---- */
+typedef enum {
+    PWR_SCHEDULED_NONREC = 0,  /* Sleeping between recording windows */
+    PWR_SCHEDULED_REC    = 1,  /* Recording during a scheduled window */
+    PWR_USER_CONNECTED   = 2,  /* User connected via BLE/WiFi */
+    PWR_DEV_MODE         = 3,  /* Development mode — everything on */
+} power_state_t;
+
+/* Wake source from Stop 2 */
+typedef enum {
+    WAKE_RTC   = 0,   /* RTC timer expired */
+    WAKE_ESP32 = 1,   /* ESP32 asserted CS pin (PD0) */
+} wake_source_t;
+
 /* ---- GPS data ---- */
 typedef struct {
     uint8_t  fix;        /* 0=no fix, 1=GPS, 2=DGPS */
@@ -150,6 +164,15 @@ typedef struct {
         volatile uint8_t actRatio;
         uint32_t clipCount;          /* was limiterClipCount */
     } audio;
+
+    struct {
+        volatile power_state_t state;    /* current power state */
+        uint8_t  devMode;                /* 1 = dev mode override */
+        uint8_t  rtcSynced;             /* 1 = RTC has been set from GPS */
+        uint8_t  scheduleActive;        /* 1 = autonomous schedule running */
+        uint32_t lastGpsSyncTick;       /* HAL tick of last GPS→RTC sync */
+        uint32_t gpsDutyCycleSec;       /* GPS wake interval during recording (0=off) */
+    } pwr;
 
     struct {
         volatile uint8_t  modelLoaded;

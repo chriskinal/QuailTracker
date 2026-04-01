@@ -54,8 +54,12 @@ extern "C" {
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
-void enterStop2(uint32_t seconds);
+#include "device_state.h"
+wake_source_t enterStop2(uint32_t seconds);
 void sht30Read(void);
+void rtcSyncFromGps(void);
+void rtcGetTime(uint8_t *hours, uint8_t *minutes, uint8_t *seconds);
+void rtcGetDate(uint8_t *day, uint8_t *month, uint16_t *year);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
@@ -65,7 +69,7 @@ void sht30Read(void);
 #define SD_CD_GPIO_Port GPIOC
 
 /* USER CODE BEGIN Private defines */
-#define FW_VERSION "0.9.6"
+#define FW_VERSION "0.9.7"
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

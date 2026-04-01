@@ -56,7 +56,6 @@ DMA_QListTypeDef List_GPDMA1_Channel0;
 DMA_HandleTypeDef handle_GPDMA1_Channel0;
 
 UART_HandleTypeDef husart1;
-UART_HandleTypeDef husart2;
 UART_HandleTypeDef husart3;
 
 SPI_HandleTypeDef hspi1;
@@ -117,7 +116,6 @@ flac_enc_t flacEncoder;
 
 /* UART RX queues — fed by RXNE interrupts, consumed by tasks */
 osMessageQueueId_t gpsRxQueue;    /* USART1 — GPS */
-osMessageQueueId_t bleRxQueue;    /* USART2 — BLE */
 osMessageQueueId_t consoleRxQueue; /* USART3 — Debug console */
 
 /* Printf mutex — serializes _write() across FreeRTOS tasks */
@@ -172,7 +170,6 @@ static void MX_ICACHE_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_SPI2_Init(void);
 static void MX_USART1_UART_Init(void);
-static void MX_USART2_UART_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_ADF1_Init(void);
 /* USER CODE BEGIN PFP */
@@ -219,19 +216,6 @@ int getCharGps(uint32_t timeoutMs)
     if (osMessageQueueGet(gpsRxQueue, &ch, NULL, timeoutMs) == osOK)
         return (int)ch;
     return -1;
-}
-
-int getCharBle(uint32_t timeoutMs)
-{
-    uint8_t ch;
-    if (osMessageQueueGet(bleRxQueue, &ch, NULL, timeoutMs) == osOK)
-        return (int)ch;
-    return -1;
-}
-
-void bleSend(const char *s)
-{
-    HAL_UART_Transmit(&husart2, (const uint8_t *)s, strlen(s), 100);
 }
 
 void WAV_WriteHeader(FIL *fp, uint32_t sampleRate, uint32_t dataSize)
@@ -527,15 +511,23 @@ void printMenu(void)
     printf("6. Eject SD Card\r\n");
     printf("7. Mount SD Card\r\n");
     printf("8. GPS Status / Control\r\n");
-    printf("9. BLE Status\r\n");
     printf("F. Toggle Format (%s)\r\n", dev.rec.format == REC_FMT_WAV ? "WAV" : "FLAC");
     printf("G. Toggle GPS Raw Output\r\n");
     printf("R. Toggle Recording\r\n");
     printf("S. Toggle GPS Survey-In (%s)\r\n",
            configGetSurveyCount() > 0 ? "has data" : "no data");
     printf("Z. Sleep (Stop 2)\r\n");
+    printf("A. Toggle Autonomous Schedule (%s)\r\n",
+           dev.pwr.scheduleActive ? "ON" : "OFF");
+    printf("D. Toggle Dev Mode (%s)\r\n",
+           dev.pwr.devMode ? "ON" : "OFF");
     printf("================\r\n");
-    printf("[%s] > ", isRecording ? "REC" : "IDLE");
+    {
+        static const char *pwr_names[] = {"SLEEP", "REC", "USER", "DEV"};
+        printf("[%s|%s] > ",
+               isRecording ? "REC" : "IDLE",
+               pwr_names[dev.pwr.state & 3]);
+    }
     fflush(stdout);
 }
 
@@ -614,9 +606,6 @@ void printStatus(void)
     }
     printf("  Humidity: %u.%u%%\r\n",
            (unsigned)(sht30HumRH100 / 100), (unsigned)(sht30HumRH100 / 10 % 10));
-
-    extern void printBleStatusBrief(void);
-    printBleStatusBrief();
 
     printf("============================\r\n");
 }
@@ -971,8 +960,6 @@ int main(void)
   HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 6: spi ok */
   MX_USART1_UART_Init();
   HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 7: usart1 ok */
-  MX_USART2_UART_Init();
-  HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 8: usart2 ok */
   MX_USART3_UART_Init();
   MX_ADF1_Init();
   HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 9: adf ok */
@@ -1064,7 +1051,6 @@ int main(void)
   }
   /* Create UART RX queues (must exist before RXNE interrupts are enabled) */
   gpsRxQueue = osMessageQueueNew(128, sizeof(uint8_t), NULL);
-  bleRxQueue = osMessageQueueNew(128, sizeof(uint8_t), NULL);
   consoleRxQueue = osMessageQueueNew(128, sizeof(uint8_t), NULL);
 
   /* Enable RXNE interrupts — ISRs push bytes into queues above.
@@ -1073,9 +1059,7 @@ int main(void)
   HAL_NVIC_SetPriority(USART1_IRQn, 6, 0);
   HAL_NVIC_EnableIRQ(USART1_IRQn);
 
-  __HAL_UART_ENABLE_IT(&husart2, UART_IT_RXNE);
-  HAL_NVIC_SetPriority(USART2_IRQn, 6, 0);
-  HAL_NVIC_EnableIRQ(USART2_IRQn);
+
 
   __HAL_UART_ENABLE_IT(&husart3, UART_IT_RXNE);
   HAL_NVIC_SetPriority(USART3_IRQn, 6, 0);
@@ -1339,29 +1323,6 @@ static void MX_USART1_UART_Init(void)
   husart1.Init.ClockPrescaler = UART_PRESCALER_DIV1;
   husart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
   if (HAL_UART_Init(&husart1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-}
-
-/**
-  * @brief USART2 Initialization Function — BLE module (PB-03F, 115200 baud, PA2/PA3)
-  * @retval None
-  */
-static void MX_USART2_UART_Init(void)
-{
-  husart2.Instance = USART2;
-  husart2.Init.BaudRate = 115200;
-  husart2.Init.WordLength = UART_WORDLENGTH_8B;
-  husart2.Init.StopBits = UART_STOPBITS_1;
-  husart2.Init.Parity = UART_PARITY_NONE;
-  husart2.Init.Mode = UART_MODE_TX_RX;
-  husart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  husart2.Init.OverSampling = UART_OVERSAMPLING_16;
-  husart2.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
-  husart2.Init.ClockPrescaler = UART_PRESCALER_DIV1;
-  husart2.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-  if (HAL_UART_Init(&husart2) != HAL_OK)
   {
     Error_Handler();
   }
@@ -1790,9 +1751,60 @@ static void MX_RTC_Init(void)
     printf("RTC: OK (LSE 32.768kHz)\r\n");
 }
 
-void enterStop2(uint32_t seconds)
+/* ---- RTC time sync from GPS ---- */
+void rtcSyncFromGps(void)
 {
-    if (seconds == 0 || seconds > 65535) return;
+    extern device_state_t dev;
+    gps_data_t gps = dev.gps.fix;
+    if (!gps.valid || gps.utc_date == 0) return;
+
+    /* Parse HHMMSS → hours/minutes/seconds */
+    RTC_TimeTypeDef sTime = {0};
+    sTime.Hours   = (uint8_t)(gps.utc_time / 10000);
+    sTime.Minutes = (uint8_t)((gps.utc_time / 100) % 100);
+    sTime.Seconds = (uint8_t)(gps.utc_time % 100);
+    sTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
+    sTime.StoreOperation = RTC_STOREOPERATION_RESET;
+
+    /* Parse DDMMYY → day/month/year */
+    RTC_DateTypeDef sDate = {0};
+    sDate.Date  = (uint8_t)(gps.utc_date / 10000);
+    sDate.Month = (uint8_t)((gps.utc_date / 100) % 100);
+    sDate.Year  = (uint8_t)(gps.utc_date % 100);  /* 2-digit year */
+
+    HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
+    HAL_RTC_SetDate(&hrtc, &sDate, RTC_FORMAT_BIN);
+
+    dev.pwr.rtcSynced = 1;
+    dev.pwr.lastGpsSyncTick = HAL_GetTick();
+}
+
+/* ---- RTC read helpers ---- */
+void rtcGetTime(uint8_t *hours, uint8_t *minutes, uint8_t *seconds)
+{
+    RTC_TimeTypeDef sTime = {0};
+    RTC_DateTypeDef sDate = {0};  /* must read date after time per RM */
+    HAL_RTC_GetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
+    HAL_RTC_GetDate(&hrtc, &sDate, RTC_FORMAT_BIN);
+    *hours   = sTime.Hours;
+    *minutes = sTime.Minutes;
+    *seconds = sTime.Seconds;
+}
+
+void rtcGetDate(uint8_t *day, uint8_t *month, uint16_t *year)
+{
+    RTC_TimeTypeDef sTime = {0};
+    RTC_DateTypeDef sDate = {0};
+    HAL_RTC_GetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
+    HAL_RTC_GetDate(&hrtc, &sDate, RTC_FORMAT_BIN);
+    *day   = sDate.Date;
+    *month = sDate.Month;
+    *year  = 2000 + (uint16_t)sDate.Year;
+}
+
+wake_source_t enterStop2(uint32_t seconds)
+{
+    if (seconds == 0 || seconds > 65535) return WAKE_RTC;
 
     uint8_t wasAudioStarted = audioStarted;
 
@@ -1809,13 +1821,10 @@ void enterStop2(uint32_t seconds)
      * re-assert the USART NVIC line immediately after any pending clear,
      * causing WFI to return instantly.  Clear errors + drain RDR first. */
     __HAL_UART_DISABLE_IT(&husart1, UART_IT_RXNE);
-    __HAL_UART_DISABLE_IT(&husart2, UART_IT_RXNE);
     __HAL_UART_DISABLE_IT(&husart3, UART_IT_RXNE);
     USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
-    USART2->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
     USART3->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
     (void)USART1->RDR;  /* drain stale RXNE */
-    (void)USART2->RDR;
     (void)USART3->RDR;
 
     /* Set all peripheral-facing GPIOs to analog (hi-Z) to prevent
@@ -1824,9 +1833,7 @@ void enterStop2(uint32_t seconds)
     uint32_t moder_a = GPIOA->MODER;
     uint32_t moder_b = GPIOB->MODER;
     uint32_t moder_d = GPIOD->MODER;
-    GPIOA->MODER |= (0x3u << (2*2))   /* PA2  USART2_TX (BLE RX)  */
-                   | (0x3u << (3*2))   /* PA3  USART2_RX (BLE TX)  */
-                   | (0x3u << (4*2))   /* PA4  SD_CS               */
+    GPIOA->MODER |= (0x3u << (4*2))   /* PA4  SD_CS               */
                    | (0x3u << (5*2))   /* PA5  SPI1_SCK  (SD CLK)  */
                    | (0x3u << (6*2))   /* PA6  SPI1_MISO (SD MISO) */
                    | (0x3u << (7*2))   /* PA7  SPI1_MOSI (SD MOSI) */
@@ -1846,6 +1853,19 @@ void enterStop2(uint32_t seconds)
                  | (1u << (14+16))   /* PD14 GPS_WAKE      → LOW */
                  | (1u << (15+16));  /* PD15 GPS_nRESET    → LOW */
 
+    /* --- Phase 2: Configure PD0 (SPI2 CS) as EXTI input for ESP32 wake ---
+     * Save PD0 MODER, then reconfigure as input with pull-up.
+     * ESP32 pulls PD0 LOW for 10ms to wake STM32. */
+    uint32_t pd0_moder_save = GPIOD->MODER & (0x3u << (0*2));
+    uint32_t pd0_pupdr_save = GPIOD->PUPDR & (0x3u << (0*2));
+    GPIOD->MODER &= ~(0x3u << (0*2));         /* PD0 = input */
+    GPIOD->PUPDR &= ~(0x3u << (0*2));
+    GPIOD->PUPDR |=  (0x1u << (0*2));         /* PD0 = pull-up */
+
+    /* Enable EXTI0 falling edge (PD0) for ESP32 wake */
+    EXTI->FTSR1 |= EXTI_FTSR1_FT0;           /* falling edge trigger */
+    EXTI->IMR1  |= EXTI_IMR1_IM0;             /* unmask EXTI line 0 */
+
     /* Disable SysTick + HAL timebase (TIM17) to stop periodic ticks */
     SysTick->CTRL &= ~(SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk);
     HAL_SuspendTick();
@@ -1864,16 +1884,15 @@ void enterStop2(uint32_t seconds)
     EXTI->IMR1  |= EXTI_IMR1_IM19;
 
     /* Save all NVIC interrupt enables, then disable everything except
-     * the RTC IRQ (EXTI line 19).  This prevents ANY peripheral from
-     * causing a spurious WFI return — TIM17 HAL tick, USART ORE errors,
-     * DMA TC flags, EXTI8 (PPS), etc.  WFI only wakes on enabled+pending
-     * interrupts, so with only RTC_IRQn enabled, only EXTI19 can wake. */
+     * the RTC IRQ (EXTI line 19) and EXTI0 (ESP32 CS wake).
+     * WFI only wakes on enabled+pending interrupts. */
     uint32_t nvic_iser_save[8];
     for (uint32_t i = 0; i < 8u; i++) {
         nvic_iser_save[i] = NVIC->ISER[i];
         NVIC->ICER[i] = 0xFFFFFFFFu;       /* disable all IRQs */
     }
-    NVIC_EnableIRQ(RTC_IRQn);               /* enable only RTC wake */
+    NVIC_EnableIRQ(RTC_IRQn);               /* enable RTC wake */
+    NVIC_EnableIRQ(EXTI0_IRQn);             /* enable ESP32 CS wake */
 
     /* Clear ALL pending: SysTick, PendSV, NVIC, and EXTI (both edges) */
     SCB->ICSR  = SCB_ICSR_PENDSTCLR_Msk | SCB_ICSR_PENDSVCLR_Msk;
@@ -1887,7 +1906,13 @@ void enterStop2(uint32_t seconds)
     /* Enter Stop 2 */
     HAL_PWREx_EnterSTOP2Mode(PWR_STOPENTRY_WFI);
 
-    /* --- CPU resumes here after RTC wake-up --- */
+    /* --- CPU resumes here after RTC or EXTI0 wake-up --- */
+
+    /* Determine wake source: check EXTI FPR1 bit 0 before clearing */
+    wake_source_t wakeSource = WAKE_RTC;
+    if (EXTI->FPR1 & EXTI_FPR1_FPIF0) {
+        wakeSource = WAKE_ESP32;
+    }
 
     /* Restore PLL / 160MHz system clock */
     SystemClock_Config();
@@ -1901,13 +1926,22 @@ void enterStop2(uint32_t seconds)
     HAL_RTCEx_DeactivateWakeUpTimer(&hrtc);
     __HAL_RTC_WRITEPROTECTION_ENABLE(&hrtc);
 
+    /* Disable EXTI0 (PD0) — no longer needed as wake source */
+    EXTI->FTSR1 &= ~EXTI_FTSR1_FT0;
+    EXTI->IMR1  &= ~EXTI_IMR1_IM0;
+    EXTI->FPR1   = EXTI_FPR1_FPIF0;    /* clear pending */
+
+    /* Restore PD0 to its original mode (SPI2 CS output) */
+    GPIOD->PUPDR &= ~(0x3u << (0*2));
+    GPIOD->PUPDR |= pd0_pupdr_save;
+    GPIOD->MODER &= ~(0x3u << (0*2));
+    GPIOD->MODER |= pd0_moder_save;
+
     /* Clear UART error flags accumulated during sleep (ORE from RX pins
      * disconnected from AF) and drain stale RDR before restoring GPIOs. */
     USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
-    USART2->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
     USART3->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
     (void)USART1->RDR;
-    (void)USART2->RDR;
     (void)USART3->RDR;
 
     /* Restore peripheral GPIO states (saved before sleep) */
@@ -1919,10 +1953,8 @@ void enterStop2(uint32_t seconds)
     /* GPIOs restored — USART RX pins reconnected, may generate new ORE.
      * Clear errors again + drain RDR before restoring NVIC enables. */
     USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
-    USART2->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
     USART3->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
     (void)USART1->RDR;
-    (void)USART2->RDR;
     (void)USART3->RDR;
 
     /* Restore all NVIC interrupt enables (saved before sleep) */
@@ -1931,7 +1963,6 @@ void enterStop2(uint32_t seconds)
 
     /* Re-enable UART RXNE interrupts */
     __HAL_UART_ENABLE_IT(&husart1, UART_IT_RXNE);
-    __HAL_UART_ENABLE_IT(&husart2, UART_IT_RXNE);
     __HAL_UART_ENABLE_IT(&husart3, UART_IT_RXNE);
 
     /* Restart ADF1 DMA if it was running */
@@ -1947,6 +1978,8 @@ void enterStop2(uint32_t seconds)
             audioStarted = 1;
         }
     }
+
+    return wakeSource;
 }
 
 /* ADF1 DMA callbacks — copy PCM data into ring buffer directly from ISR.

@@ -1,16 +1,21 @@
 /*
- * ESP32-C3 Bridge — SPI Slave + WiFi AP + WebSocket Server
+ * ESP32-C3 Bridge — BLE Beacon + SPI Slave + WiFi-on-Demand + WebSocket
  *
- * - SPI slave receives status data from STM32 master
- * - WiFi soft AP: SSID "QuailTracker", no password, 192.168.9.1
- * - HTTP server serves web UI
- * - WebSocket pushes live updates to browser — no polling
+ * Power states:
+ *   LOW_POWER:    BLE advertising only, WiFi off, SPI slave idle (~1-3mA)
+ *   NORMAL_POWER: BLE + WiFi AP + SPI active, full web UI (~80mA)
  *
- * Wiring (XIAO ESP32-C3):
- *   GPIO8  = SCK
- *   GPIO10 = MOSI (master out, slave in)
- *   GPIO9  = MISO (master in, slave out)
- *   GPIO5  = CS
+ * State transitions:
+ *   Boot → LOW_POWER (BLE beacon starts)
+ *   BLE connect OR SPI activity → NORMAL_POWER (WiFi starts, STM32 woken if sleeping)
+ *   BLE disconnect + 30s timeout → LOW_POWER (WiFi stops)
+ *   STM32 sends sleep command → LOW_POWER
+ *
+ * Wiring (ESP32-C3 Super Mini):
+ *   GPIO4  = SCK
+ *   GPIO6  = MOSI (master out, slave in)
+ *   GPIO5  = MISO (master in, slave out)
+ *   GPIO7  = CS (also used as wake output when STM32 is sleeping)
  */
 
 #include <stdio.h>
@@ -26,16 +31,32 @@
 #include "esp_http_server.h"
 #include "nvs_flash.h"
 #include "esp_netif.h"
+#include "ble_beacon.h"
 
 #define TAG "BRIDGE"
+
+/* ── Power State ───────────────────────────────────────────────── */
+
+typedef enum {
+    BRIDGE_LOW_POWER,     /* BLE only, WiFi off */
+    BRIDGE_NORMAL_POWER,  /* BLE + WiFi + SPI */
+} bridge_power_t;
+
+static volatile bridge_power_t bridge_state = BRIDGE_LOW_POWER;
+static volatile uint32_t disconnect_tick = 0;   /* tick when BLE disconnected */
+static volatile bool stm32_sleeping = false;     /* true = STM32 in Stop 2 */
+static bool wifi_started = false;
+static bool spi_initialized = false;
+
+#define BLE_DISCONNECT_TIMEOUT_MS 30000  /* 30s before stopping WiFi */
 
 /* ── SPI Slave Config ──────────────────────────────────────────── */
 
 #define SPI_HOST       SPI2_HOST
-#define PIN_MOSI       10
-#define PIN_MISO       9
-#define PIN_SCK        8
-#define PIN_CS         5
+#define PIN_MOSI       6
+#define PIN_MISO       5
+#define PIN_SCK        4
+#define PIN_CS         7
 #define TRANSFER_SIZE  1024
 
 WORD_ALIGNED_ATTR uint8_t spi_rxBuf[TRANSFER_SIZE];
@@ -46,6 +67,11 @@ static char last_spi_msg[TRANSFER_SIZE + 1] = "(none)";
 static uint32_t spi_transaction_count = 0;
 static bool new_spi_data = false;
 
+/* Last known battery/state from SPI JSON (for BLE advertising) */
+static uint16_t last_battery_mv = 0;
+static uint8_t  last_recording = 0;
+static uint8_t  last_pwr_state = 0;
+
 /* Pending command from browser → STM32 (sent in next SPI tx) */
 static char pending_cmd[512] = "";
 static portMUX_TYPE cmd_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -55,6 +81,8 @@ static portMUX_TYPE cmd_mux = portMUX_INITIALIZER_UNLOCKED;
 #define WIFI_SSID      "QuailTracker"
 #define WIFI_CHANNEL   6
 #define MAX_CONNECTIONS 4
+
+static esp_netif_t *wifi_ap_netif = NULL;
 
 /* ── WebSocket Client Tracking ─────────────────────────────────── */
 
@@ -149,6 +177,8 @@ static esp_err_t ws_handler(httpd_req_t *req)
 
 static httpd_handle_t start_webserver(void)
 {
+    if (ws_server) return ws_server;  /* already running */
+
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     httpd_handle_t server = NULL;
 
@@ -174,25 +204,47 @@ static httpd_handle_t start_webserver(void)
     return server;
 }
 
-/* ── WiFi AP Init ──────────────────────────────────────────────── */
-
-static void wifi_init_softap(void)
+static void stop_webserver(void)
 {
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_t *ap = esp_netif_create_default_wifi_ap();
+    if (ws_server) {
+        httpd_stop(ws_server);
+        ws_server = NULL;
+        memset(ws_fds, 0, sizeof(ws_fds));
+        ESP_LOGI(TAG, "Web server stopped");
+    }
+}
 
-    /* Use 192.168.9.x subnet */
-    esp_netif_ip_info_t ip_info;
-    esp_netif_str_to_ip4("192.168.9.1", &ip_info.ip);
-    esp_netif_str_to_ip4("192.168.9.1", &ip_info.gw);
-    esp_netif_str_to_ip4("255.255.255.0", &ip_info.netmask);
-    esp_netif_dhcps_stop(ap);
-    esp_netif_set_ip_info(ap, &ip_info);
-    esp_netif_dhcps_start(ap);
+/* ── WiFi AP Start/Stop ────────────────────────────────────────── */
 
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+static void wifi_init_netif(void)
+{
+    /* One-time init of netif + event loop (can't be undone) */
+    static bool netif_inited = false;
+    if (!netif_inited) {
+        ESP_ERROR_CHECK(esp_netif_init());
+        ESP_ERROR_CHECK(esp_event_loop_create_default());
+        wifi_ap_netif = esp_netif_create_default_wifi_ap();
+
+        /* Use 192.168.9.x subnet */
+        esp_netif_ip_info_t ip_info;
+        esp_netif_str_to_ip4("192.168.9.1", &ip_info.ip);
+        esp_netif_str_to_ip4("192.168.9.1", &ip_info.gw);
+        esp_netif_str_to_ip4("255.255.255.0", &ip_info.netmask);
+        esp_netif_dhcps_stop(wifi_ap_netif);
+        esp_netif_set_ip_info(wifi_ap_netif, &ip_info);
+        esp_netif_dhcps_start(wifi_ap_netif);
+
+        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+        ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+        netif_inited = true;
+    }
+}
+
+static void wifi_start(void)
+{
+    if (wifi_started) return;
+
+    wifi_init_netif();
 
     wifi_config_t wifi_config = {
         .ap = {
@@ -208,19 +260,60 @@ static void wifi_init_softap(void)
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    ESP_LOGI(TAG, "WiFi AP: SSID=%s, http://192.168.9.1", WIFI_SSID);
+    wifi_started = true;
+    ESP_LOGI(TAG, "WiFi AP started: SSID=%s, http://192.168.9.1", WIFI_SSID);
+}
+
+static void wifi_stop(void)
+{
+    if (!wifi_started) return;
+
+    stop_webserver();
+    esp_wifi_stop();
+    wifi_started = false;
+    ESP_LOGI(TAG, "WiFi AP stopped");
+}
+
+/* ── STM32 Wake (pull CS pin low for 10ms) ─────────────────────── */
+
+static void stm32_wake(void)
+{
+    if (!stm32_sleeping) return;
+
+    ESP_LOGI(TAG, "Waking STM32 via GPIO5 (CS) pulse");
+
+    /* Temporarily reconfigure GPIO5 from SPI CS to GPIO output */
+    if (spi_initialized) {
+        spi_slave_free(SPI_HOST);
+        spi_initialized = false;
+    }
+
+    gpio_config_t io = {
+        .pin_bit_mask = (1ULL << PIN_CS),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io);
+
+    /* Pull LOW for 10ms to trigger EXTI0 on STM32 */
+    gpio_set_level(PIN_CS, 0);
+    vTaskDelay(pdMS_TO_TICKS(10));
+    gpio_set_level(PIN_CS, 1);
+
+    /* Wait for STM32 to wake and restore SPI */
+    vTaskDelay(pdMS_TO_TICKS(100));
+    stm32_sleeping = false;
 }
 
 /* ── STM32 Control Pins (high-Z until needed for flashing) ───── */
 
-#define PIN_STM32_BOOT0  4
-#define PIN_STM32_NRST   3
+#define PIN_STM32_NRST   2
+#define PIN_STM32_BOOT0  3
 
 static void stm32_pins_init(void)
 {
-    /* Configure BOOT0 and NRST as inputs (high-impedance) so they
-     * don't interfere with STM32 normal operation.  Only drive them
-     * as outputs when intentionally entering bootloader mode. */
     gpio_config_t io_conf = {
         .pin_bit_mask = (1ULL << PIN_STM32_BOOT0) | (1ULL << PIN_STM32_NRST),
         .mode = GPIO_MODE_INPUT,
@@ -232,10 +325,12 @@ static void stm32_pins_init(void)
     ESP_LOGI(TAG, "STM32 BOOT0/NRST pins set to high-Z");
 }
 
-/* ── SPI Slave Init ────────────────────────────────────────────── */
+/* ── SPI Slave Init/Deinit ─────────────────────────────────────── */
 
 static void spi_slave_init(void)
 {
+    if (spi_initialized) return;
+
     spi_bus_config_t busCfg = {
         .mosi_io_num = PIN_MOSI,
         .miso_io_num = PIN_MISO,
@@ -253,7 +348,19 @@ static void spi_slave_init(void)
     };
 
     ESP_ERROR_CHECK(spi_slave_initialize(SPI_HOST, &busCfg, &slaveCfg, SPI_DMA_CH_AUTO));
+    spi_initialized = true;
     ESP_LOGI(TAG, "SPI slave initialized");
+}
+
+/* Parse a simple integer value from JSON: "key":123 */
+static int json_get_int(const char *json, const char *key, int def)
+{
+    char search[32];
+    snprintf(search, sizeof(search), "\"%s\":", key);
+    const char *p = strstr(json, search);
+    if (!p) return def;
+    p += strlen(search);
+    return atoi(p);
 }
 
 /* ── SPI Slave Task ────────────────────────────────────────────── */
@@ -261,8 +368,12 @@ static void spi_slave_init(void)
 static void spi_task(void *arg)
 {
     while (1) {
+        if (!spi_initialized) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+
         memset(spi_txBuf, 0, TRANSFER_SIZE);
-        /* If there's a pending command from the browser, send it; otherwise PONG */
         portENTER_CRITICAL(&cmd_mux);
         if (pending_cmd[0]) {
             strncpy((char *)spi_txBuf, pending_cmd, TRANSFER_SIZE - 1);
@@ -279,7 +390,8 @@ static void spi_task(void *arg)
             .rx_buffer = spi_rxBuf,
         };
 
-        esp_err_t ret = spi_slave_transmit(SPI_HOST, &trans, portMAX_DELAY);
+        esp_err_t ret = spi_slave_transmit(SPI_HOST, &trans, pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(1));  /* yield to lower-priority tasks */
         if (ret == ESP_OK) {
             spi_transaction_count++;
 
@@ -290,7 +402,27 @@ static void spi_task(void *arg)
                 memcpy(last_spi_msg, spi_rxBuf, len);
                 last_spi_msg[len] = '\0';
                 new_spi_data = true;
-                ESP_LOGI(TAG, "SPI rx len=%d json=%d: %s", len, (int)strlen(last_spi_msg), last_spi_msg);
+
+                /* Extract battery/state for BLE advertising */
+                last_battery_mv = (uint16_t)json_get_int(last_spi_msg, "bat", 0);
+                last_recording = (uint8_t)json_get_int(last_spi_msg, "rec", 0);
+                last_pwr_state = (uint8_t)json_get_int(last_spi_msg, "pwrState", 0);
+
+                /* Check for sleep command from STM32 */
+                if (json_get_int(last_spi_msg, "sleeping", -1) == 1) {
+                    ESP_LOGI(TAG, "STM32 entering sleep — switching to LOW_POWER");
+                    stm32_sleeping = true;
+                    bridge_state = BRIDGE_LOW_POWER;
+                }
+
+                /* SPI activity means STM32 is awake — if we were in LOW_POWER
+                 * and WiFi isn't started, transition to NORMAL_POWER */
+                if (bridge_state == BRIDGE_LOW_POWER && !stm32_sleeping) {
+                    bridge_state = BRIDGE_NORMAL_POWER;
+                    ESP_LOGI(TAG, "SPI activity detected — entering NORMAL_POWER");
+                }
+
+                ESP_LOGI(TAG, "SPI rx len=%d", len);
             }
         }
     }
@@ -303,10 +435,74 @@ static void ws_push_task(void *arg)
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(500));
 
-        if (new_spi_data) {
+        if (new_spi_data && ws_server) {
             new_spi_data = false;
-            /* Forward the JSON status directly from STM32 to browser */
             ws_broadcast(last_spi_msg);
+        }
+
+        /* Update BLE advertising data periodically */
+        ble_beacon_update_data(last_battery_mv, last_recording, last_pwr_state);
+    }
+}
+
+/* ── BLE Callbacks ─────────────────────────────────────────────── */
+
+static void on_ble_connect(void)
+{
+    ESP_LOGI(TAG, "BLE client connected — transitioning to NORMAL_POWER");
+    bridge_state = BRIDGE_NORMAL_POWER;
+    disconnect_tick = 0;
+
+    /* Wake STM32 if it's sleeping */
+    if (stm32_sleeping) {
+        stm32_wake();
+    }
+}
+
+static void on_ble_disconnect(void)
+{
+    ESP_LOGI(TAG, "BLE client disconnected — starting 30s timeout");
+    disconnect_tick = xTaskGetTickCount();
+}
+
+/* ── Power Management Task ─────────────────────────────────────── */
+
+static void power_mgmt_task(void *arg)
+{
+    bridge_power_t prev_state = BRIDGE_LOW_POWER;
+
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+
+        /* Handle BLE disconnect timeout */
+        if (disconnect_tick != 0 && !ble_beacon_is_connected()) {
+            uint32_t elapsed = (xTaskGetTickCount() - disconnect_tick) * portTICK_PERIOD_MS;
+            if (elapsed >= BLE_DISCONNECT_TIMEOUT_MS) {
+                ESP_LOGI(TAG, "BLE disconnect timeout — switching to LOW_POWER");
+                bridge_state = BRIDGE_LOW_POWER;
+                disconnect_tick = 0;
+            }
+        }
+
+        /* If BLE reconnected, cancel timeout */
+        if (ble_beacon_is_connected() && disconnect_tick != 0) {
+            disconnect_tick = 0;
+        }
+
+        /* Handle state transitions */
+        if (bridge_state != prev_state) {
+            if (bridge_state == BRIDGE_NORMAL_POWER) {
+                /* Start WiFi + web server + SPI */
+                wifi_start();
+                start_webserver();
+                spi_slave_init();
+                ESP_LOGI(TAG, "NORMAL_POWER: WiFi + WebServer + SPI active");
+            } else {
+                /* Stop WiFi + web server (SPI stays for wake detection) */
+                wifi_stop();
+                ESP_LOGI(TAG, "LOW_POWER: BLE only");
+            }
+            prev_state = bridge_state;
         }
     }
 }
@@ -315,24 +511,35 @@ static void ws_push_task(void *arg)
 
 void app_main(void)
 {
-    printf("\n=== ESP32-C3 QuailTracker Bridge ===\n\n");
+    printf("\n=== ESP32-C3 QuailTracker Bridge v2 ===\n\n");
 
     /* FIRST: release STM32 BOOT0/NRST pins to high-Z */
     stm32_pins_init();
 
-    /* Initialize NVS (required for WiFi) */
+    /* Initialize NVS (required for WiFi + BLE) */
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         ESP_ERROR_CHECK(nvs_flash_init());
     }
 
-    wifi_init_softap();
+    /* Initialize network interface (needed before WiFi or BLE) */
+    wifi_init_netif();
+
+    /* Start BLE beacon (always active for device discovery) */
+    ble_beacon_init("QuailTracker", on_ble_connect, on_ble_disconnect);
+
+    /* Start in NORMAL_POWER on boot so WiFi AP is available for setup.
+     * Will transition to LOW_POWER after BLE disconnect timeout if no
+     * user is connected, or when STM32 sends sleep command. */
+    bridge_state = BRIDGE_NORMAL_POWER;
+    wifi_start();
     start_webserver();
     spi_slave_init();
 
-    xTaskCreate(spi_task, "spi_task", 4096, NULL, 5, NULL);
-    xTaskCreate(ws_push_task, "ws_push", 4096, NULL, 3, NULL);
+    xTaskCreate(spi_task, "spi_task", 4096, NULL, 3, NULL);
+    xTaskCreate(ws_push_task, "ws_push", 4096, NULL, 4, NULL);
+    xTaskCreate(power_mgmt_task, "pwr_mgmt", 4096, NULL, 2, NULL);
 
-    ESP_LOGI(TAG, "Bridge ready — WiFi AP + SPI + WebSocket");
+    ESP_LOGI(TAG, "Bridge ready — BLE Beacon + WiFi AP + SPI + WebSocket");
 }
