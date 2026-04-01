@@ -46,6 +46,10 @@ static char last_spi_msg[TRANSFER_SIZE + 1] = "(none)";
 static uint32_t spi_transaction_count = 0;
 static bool new_spi_data = false;
 
+/* Pending command from browser → STM32 (sent in next SPI tx) */
+static char pending_cmd[64] = "";
+static portMUX_TYPE cmd_mux = portMUX_INITIALIZER_UNLOCKED;
+
 /* ── WiFi AP Config ────────────────────────────────────────────── */
 
 #define WIFI_SSID      "QuailTracker"
@@ -124,13 +128,20 @@ static esp_err_t ws_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
-    /* Receive frame (we don't expect client-to-server messages yet) */
+    /* Receive command from browser */
     httpd_ws_frame_t ws_pkt = {0};
     ws_pkt.type = HTTPD_WS_TYPE_TEXT;
     uint8_t buf[128];
     ws_pkt.payload = buf;
     esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, sizeof(buf));
-    if (ret != ESP_OK) {
+    if (ret == ESP_OK && ws_pkt.len > 0 && ws_pkt.len < sizeof(buf)) {
+        buf[ws_pkt.len] = '\0';
+        portENTER_CRITICAL(&cmd_mux);
+        strncpy(pending_cmd, (char *)buf, sizeof(pending_cmd) - 1);
+        pending_cmd[sizeof(pending_cmd) - 1] = '\0';
+        portEXIT_CRITICAL(&cmd_mux);
+        ESP_LOGI(TAG, "WS cmd: %s", pending_cmd);
+    } else if (ret != ESP_OK) {
         ESP_LOGW(TAG, "WS recv error: %s", esp_err_to_name(ret));
     }
     return ESP_OK;
@@ -251,7 +262,15 @@ static void spi_task(void *arg)
 {
     while (1) {
         memset(spi_txBuf, 0, TRANSFER_SIZE);
-        memcpy(spi_txBuf, "PONG", 4);
+        /* If there's a pending command from the browser, send it; otherwise PONG */
+        portENTER_CRITICAL(&cmd_mux);
+        if (pending_cmd[0]) {
+            strncpy((char *)spi_txBuf, pending_cmd, TRANSFER_SIZE - 1);
+            pending_cmd[0] = '\0';
+        } else {
+            memcpy(spi_txBuf, "PONG", 4);
+        }
+        portEXIT_CRITICAL(&cmd_mux);
         memset(spi_rxBuf, 0, TRANSFER_SIZE);
 
         spi_slave_transaction_t trans = {

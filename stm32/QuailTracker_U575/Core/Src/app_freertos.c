@@ -220,6 +220,8 @@ extern SPI_HandleTypeDef hspi2;
 #define SPI2_CS_PORT  GPIOD
 #define SPI2_CS_PIN   GPIO_PIN_0
 #define SPI2_BUF_SIZE 512
+#define SPI2_POLL_MS  250  /* SPI command poll + status push interval */
+static uint32_t lastSpiPollTick = 0;
 
 /* Forward declarations for health functions */
 static void healthLoad(void);
@@ -2172,92 +2174,152 @@ static void StartBleTask(void *argument)
             if (prevGpsValid && !curGpsValid)
                 health.gpsFixLosses++;
             prevGpsValid = curGpsValid;
-            /* Refresh cached SD space (used by push_status/push_recording_state
-             * without blocking on fileMtx during active recording) */
+            /* Refresh cached SD space */
             extern void sd_space_refresh(void);
             sd_space_refresh();
+        }
 
-            /* Push status to ESP32-C3 over SPI2 */
-            {
-                uint8_t spi_tx[SPI2_BUF_SIZE];
-                uint8_t spi_rx[SPI2_BUF_SIZE];
-                memset(spi_tx, 0, SPI2_BUF_SIZE);
+        /* Fast SPI2 poll — push status + receive commands every 250ms */
+        if ((HAL_GetTick() - lastSpiPollTick) >= SPI2_POLL_MS) {
+            lastSpiPollTick = HAL_GetTick();
 
-                int32_t t = sht30TempC100;
-                int tSign = (t < 0) ? -1 : 1;
-                int tWhole = t / 100;
-                int tFrac = (t % 100) * tSign;
+            uint8_t spi_tx[SPI2_BUF_SIZE];
+            uint8_t spi_rx[SPI2_BUF_SIZE];
+            memset(spi_tx, 0, SPI2_BUF_SIZE);
 
-                /* Solar charger status from PB0 (CHRG) / PB1 (DONE) — active low */
-                int chrg = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_0);
-                int done = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_1);
-                const char *solar;
-                if (!chrg && done)       solar = "Charging";
-                else if (chrg && !done)  solar = "Complete";
-                else if (!chrg && !done) solar = "Fault";
-                else                     solar = "Standby";
+            uint32_t mv = batteryMv;
+            int32_t t = sht30TempC100;
+            int tSign = (t < 0) ? -1 : 1;
+            int tWhole = t / 100;
+            int tFrac = (t % 100) * tSign;
 
-                /* GPS time as HH:MM:SS string */
-                char gpsTimeStr[12] = "--:--:--";
-                if (gpsData.utc_time) {
-                    snprintf(gpsTimeStr, sizeof(gpsTimeStr), "%02lu:%02lu:%02lu",
-                             (unsigned long)(gpsData.utc_time / 10000),
-                             (unsigned long)((gpsData.utc_time / 100) % 100),
-                             (unsigned long)(gpsData.utc_time % 100));
+            int chrg = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_0);
+            int done_pin = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_1);
+            const char *solar;
+            if (!chrg && done_pin)       solar = "Charging";
+            else if (chrg && !done_pin)  solar = "Complete";
+            else if (!chrg && !done_pin) solar = "Fault";
+            else                         solar = "Standby";
+
+            char gpsTimeStr[12] = "--:--:--";
+            if (gpsData.utc_time) {
+                snprintf(gpsTimeStr, sizeof(gpsTimeStr), "%02lu:%02lu:%02lu",
+                         (unsigned long)(gpsData.utc_time / 10000),
+                         (unsigned long)((gpsData.utc_time / 100) % 100),
+                         (unsigned long)(gpsData.utc_time % 100));
+            }
+
+            int32_t latI = (int32_t)(gpsData.latitude * 100000);
+            int32_t lonI = (int32_t)(gpsData.longitude * 100000);
+            int32_t altI = (int32_t)(gpsData.altitude * 10);
+            int32_t tMin = health.tempMinC100;
+            int32_t tMax = health.tempMaxC100;
+            int32_t svLatI = (int32_t)(cfg.surveyLat * 100000);
+            int32_t svLonI = (int32_t)(cfg.surveyLon * 100000);
+
+            snprintf((char *)spi_tx, SPI2_BUF_SIZE,
+                "{\"bat\":%lu,\"temp\":%d.%02d,\"hum\":%u.%u,"
+                "\"rec\":%d,\"sd\":%d,\"gps\":%d,\"sat\":%d,"
+                "\"station\":\"%s\",\"fw\":\"%s\","
+                "\"lat5\":%ld,\"lon5\":%ld,\"alt1\":%ld,"
+                "\"gpsTime\":\"%s\",\"pps\":%d,\"ppsCnt\":%lu,"
+                "\"sdFree\":%lu,\"sdTotal\":%lu,"
+                "\"solar\":\"%s\","
+                "\"recBytes\":%lu,\"ovf\":%lu,\"clip\":%lu,"
+                "\"svLat5\":%ld,\"svLon5\":%ld,\"svCnt\":%lu,"
+                "\"hFiles\":%lu,\"hSecs\":%lu,\"hDet\":%lu,"
+                "\"hBatMin\":%lu,\"hBatMax\":%lu,"
+                "\"hTmpMin\":%ld,\"hTmpMax\":%ld,"
+                "\"hBoots\":%lu,\"hSdErr\":%lu,\"hGpsLoss\":%lu}",
+                (unsigned long)mv,
+                tWhole, tFrac,
+                (unsigned)(sht30HumRH100 / 100),
+                (unsigned)(sht30HumRH100 / 10 % 10),
+                (int)isRecording,
+                (int)sdMounted,
+                (int)gpsData.valid,
+                (int)gpsData.satellites,
+                cfg.stationId, FW_VERSION,
+                (long)latI, (long)lonI, (long)altI,
+                gpsTimeStr,
+                (int)ppsSynced, (unsigned long)ppsCount,
+                (unsigned long)dev.rec.sdFreeKb,
+                (unsigned long)dev.rec.sdTotalKb,
+                solar,
+                (unsigned long)totalDataBytes,
+                (unsigned long)ringOverruns,
+                (unsigned long)limiterClipCount,
+                (long)svLatI, (long)svLonI,
+                (unsigned long)cfg.surveyCount,
+                (unsigned long)health.filesWritten,
+                (unsigned long)health.recordingSecs,
+                (unsigned long)health.detections,
+                (unsigned long)health.battMinMv,
+                (unsigned long)health.battMaxMv,
+                (long)tMin, (long)tMax,
+                (unsigned long)health.bootCount,
+                (unsigned long)health.sdErrors,
+                (unsigned long)health.gpsFixLosses);
+
+            HAL_GPIO_WritePin(SPI2_CS_PORT, SPI2_CS_PIN, GPIO_PIN_RESET);
+            HAL_SPI_TransmitReceive(&hspi2, spi_tx, spi_rx, SPI2_BUF_SIZE, 100);
+            HAL_GPIO_WritePin(SPI2_CS_PORT, SPI2_CS_PIN, GPIO_PIN_SET);
+
+            /* Check for commands from ESP32 (browser → WebSocket → SPI) */
+            if (spi_rx[0] == '{') {
+                spi_rx[SPI2_BUF_SIZE - 1] = '\0';
+                char *rx = (char *)spi_rx;
+                if (strstr(rx, "rec_toggle")) {
+                    uint8_t c = isRecording ? CMD_STOP_REC : CMD_START_REC;
+                    osMessageQueuePut(audioCmdQueueHandle, &c, 0, 0);
+                    printf("SPI cmd: rec_toggle\r\n");
+                } else if (strstr(rx, "sd_mount")) {
+                    if (!sdMounted) {
+                        extern FATFS USERFatFS;
+                        extern char USERPath[];
+                        osMutexAcquire(fileMtxHandle, osWaitForever);
+                        if (f_mount(&USERFatFS, USERPath, 1) == FR_OK)
+                            sdMounted = 1;
+                        osMutexRelease(fileMtxHandle);
+                    }
+                    printf("SPI cmd: sd_mount\r\n");
+                } else if (strstr(rx, "sd_eject")) {
+                    if (sdMounted && !isRecording) {
+                        extern char USERPath[];
+                        osMutexAcquire(fileMtxHandle, osWaitForever);
+                        f_mount(NULL, USERPath, 0);
+                        USER_disk_deinit();
+                        sdMounted = 0;
+                        osMutexRelease(fileMtxHandle);
+                    }
+                    printf("SPI cmd: sd_eject\r\n");
+                } else if (strstr(rx, "sd_format")) {
+                    if (!isRecording) {
+                        osMutexAcquire(fileMtxHandle, osWaitForever);
+                        extern int formatSD(void);
+                        formatSD();
+                        osMutexRelease(fileMtxHandle);
+                    }
+                    printf("SPI cmd: sd_format\r\n");
+                } else if (strstr(rx, "survey_start")) {
+                    if (!surveyActive && gpsData.fix >= 1) {
+                        cfg.surveyLat = 0.0f;
+                        cfg.surveyLon = 0.0f;
+                        cfg.surveyAlt = 0.0f;
+                        cfg.surveyCount = 0;
+                        surveyActive = 1;
+                        surveyStartTick = HAL_GetTick();
+                    }
+                    printf("SPI cmd: survey_start\r\n");
+                } else if (strstr(rx, "survey_clear")) {
+                    surveyActive = 0;
+                    cfg.surveyLat = 0.0f;
+                    cfg.surveyLon = 0.0f;
+                    cfg.surveyAlt = 0.0f;
+                    cfg.surveyCount = 0;
+                    configSave();
+                    printf("SPI cmd: survey_clear\r\n");
                 }
-
-                /* Format lat/lon/alt as integers to avoid newlib-nano %f */
-                int32_t latI = (int32_t)(gpsData.latitude * 100000);
-                int32_t lonI = (int32_t)(gpsData.longitude * 100000);
-                int32_t altI = (int32_t)(gpsData.altitude * 10);
-
-                /* Health temp min/max as integer x100 */
-                int32_t tMin = health.tempMinC100;
-                int32_t tMax = health.tempMaxC100;
-
-                snprintf((char *)spi_tx, SPI2_BUF_SIZE,
-                    "{\"bat\":%lu,\"temp\":%d.%02d,\"hum\":%u.%u,"
-                    "\"rec\":%d,\"sd\":%d,\"gps\":%d,\"sat\":%d,"
-                    "\"station\":\"%s\",\"fw\":\"%s\","
-                    "\"lat5\":%ld,\"lon5\":%ld,\"alt1\":%ld,"
-                    "\"gpsTime\":\"%s\",\"pps\":%d,\"ppsCnt\":%lu,"
-                    "\"sdFree\":%lu,\"sdTotal\":%lu,"
-                    "\"solar\":\"%s\","
-                    "\"recFile\":\"%s\",\"recBytes\":%lu,\"ovf\":%lu,"
-                    "\"hFiles\":%lu,\"hSecs\":%lu,\"hDet\":%lu,"
-                    "\"hBatMin\":%lu,\"hBatMax\":%lu,"
-                    "\"hTmpMin\":%ld,\"hTmpMax\":%ld,"
-                    "\"hBoots\":%lu,\"hSdErr\":%lu,\"hGpsLoss\":%lu}",
-                    (unsigned long)mv,
-                    tWhole, tFrac,
-                    (unsigned)(sht30HumRH100 / 100),
-                    (unsigned)(sht30HumRH100 / 10 % 10),
-                    (int)isRecording,
-                    (int)sdMounted,
-                    (int)gpsData.valid,
-                    (int)gpsData.satellites,
-                    cfg.stationId, FW_VERSION,
-                    (long)latI, (long)lonI, (long)altI,
-                    gpsTimeStr,
-                    (int)ppsSynced, (unsigned long)ppsCount,
-                    (unsigned long)dev.rec.sdFreeKb,
-                    (unsigned long)dev.rec.sdTotalKb,
-                    solar,
-                    recFilename, (unsigned long)totalDataBytes,
-                    (unsigned long)ringOverruns,
-                    (unsigned long)health.filesWritten,
-                    (unsigned long)health.recordingSecs,
-                    (unsigned long)health.detections,
-                    (unsigned long)health.battMinMv,
-                    (unsigned long)health.battMaxMv,
-                    (long)tMin, (long)tMax,
-                    (unsigned long)health.bootCount,
-                    (unsigned long)health.sdErrors,
-                    (unsigned long)health.gpsFixLosses);
-
-                HAL_GPIO_WritePin(SPI2_CS_PORT, SPI2_CS_PIN, GPIO_PIN_RESET);
-                HAL_SPI_TransmitReceive(&hspi2, spi_tx, spi_rx, SPI2_BUF_SIZE, 100);
-                HAL_GPIO_WritePin(SPI2_CS_PORT, SPI2_CS_PIN, GPIO_PIN_SET);
             }
         }
 

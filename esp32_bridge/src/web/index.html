@@ -225,42 +225,64 @@
 
         <!-- ════════════════ Operations Tab ════════════════ -->
         <div class="tab" id="t-ops">
+            <!-- Recording -->
             <div class="card">
                 <div class="row">
-                    <span class="sect">Recording</span>
-                    <span class="badge bg" id="recBadgeOps">Idle</span>
+                    <span class="sect">Rec</span>
+                    <span class="badge bg" id="recBadgeOps">--</span>
                 </div>
-                <div class="row" style="margin-top:4px">
-                    <span class="lbl">File</span>
-                    <span class="val" id="recFile">--</span>
-                </div>
-                <div class="row">
+                <div class="row" style="margin-top:6px">
                     <span class="lbl">Size</span>
-                    <span class="val" id="recSize">--</span>
+                    <span class="val" id="recSize">0 B</span>
+                    <span class="spacer"></span>
+                    <span class="lbl">Buf</span>
+                    <span class="val" id="recBuf">0 / 0</span>
                     <span class="spacer"></span>
                     <span class="lbl">Ovf</span>
                     <span class="val" id="recOvf">0</span>
+                    <span class="spacer"></span>
+                    <span class="lbl">Clip</span>
+                    <span class="val" id="recClip">0</span>
                 </div>
                 <button class="btn btn-green" id="recBtn" onclick="sendCmd('rec_toggle')">
                     Start Recording
                 </button>
             </div>
+            <!-- SD Card -->
             <div class="card">
-                <div class="sect">SD Card</div>
+                <div class="row">
+                    <span class="sect">SD Card</span>
+                    <span class="spacer"></span>
+                    <span class="badge" id="sdBadge">--</span>
+                </div>
                 <div style="display:flex;gap:8px;margin-top:8px;">
                     <button class="btn btn-gray" style="flex:1" onclick="sendCmd('sd_mount')">Mount</button>
                     <button class="btn btn-gray" style="flex:1" onclick="sendCmd('sd_eject')">Eject</button>
+                    <button class="btn btn-red" style="flex:1" onclick="if(confirm('Format SD card? All data will be lost.'))sendCmd('sd_format')">Format</button>
                 </div>
             </div>
+            <!-- Location Survey -->
             <div class="card">
-                <div class="sect">Location Survey</div>
-                <div class="row" style="margin-top:4px">
-                    <span class="lbl">Survey</span>
+                <div class="row">
+                    <span class="sect">Location Survey</span>
+                    <span class="spacer"></span>
+                    <span class="badge bb" id="surveyBadge">No data</span>
+                </div>
+                <div class="row" style="margin-top:6px">
+                    <span class="lbl" style="min-width:52px">Current</span>
+                    <span class="val" id="surveyCurrentPos">---, ---</span>
+                    <span class="spacer"></span>
+                    <span class="val-sm" id="surveyCurrentTime">--:--:-- UTC</span>
+                </div>
+                <div class="row">
+                    <span class="lbl" style="min-width:52px">Survey</span>
                     <span class="val" id="surveyPos">---, ---</span>
+                    <span class="spacer"></span>
+                    <span class="val-sm" id="surveyCount">-- 0</span>
                 </div>
                 <div style="display:flex;gap:8px;margin-top:8px;">
-                    <button class="btn btn-gray" style="flex:1" onclick="sendCmd('survey_start')">Start Survey</button>
-                    <button class="btn btn-gray" style="flex:1" onclick="sendCmd('survey_clear')">Clear</button>
+                    <button class="btn btn-green" style="flex:1" onclick="sendCmd('survey_start')">Start Survey</button>
+                    <button class="btn btn-red" style="flex:1" onclick="sendCmd('survey_clear')">Clear</button>
                 </div>
             </div>
         </div>
@@ -429,8 +451,10 @@
                     var lat = (d.lat5 / 100000).toFixed(5);
                     var lon = (d.lon5 / 100000).toFixed(5);
                     document.getElementById('gpsPos').textContent = lat + ', ' + lon;
-                    document.getElementById('surveyPos').textContent = lat + ', ' + lon;
+                    document.getElementById('surveyCurrentPos').textContent = lat + ', ' + lon;
                 }
+                if (d.gpsTime !== undefined)
+                    document.getElementById('surveyCurrentTime').textContent = d.gpsTime + ' UTC';
                 if (d.gpsTime !== undefined)
                     document.getElementById('gpsTime').textContent = d.gpsTime + ' UTC';
                 if (d.pps !== undefined) {
@@ -449,16 +473,20 @@
                     btn.textContent = d.rec ? 'Stop Recording' : 'Start Recording';
                     btn.className = 'btn ' + (d.rec ? 'btn-red' : 'btn-green');
                 }
-                if (d.recFile !== undefined)
-                    document.getElementById('recFile').textContent = d.recFile || '--';
                 if (d.recBytes !== undefined) {
-                    var kb = (d.recBytes / 1024).toFixed(0);
-                    var mb = (d.recBytes / 1048576).toFixed(1);
-                    document.getElementById('recSize').textContent =
-                        d.recBytes > 1048576 ? mb + ' MB' : kb + ' KB';
+                    if (d.recBytes === 0) {
+                        document.getElementById('recSize').textContent = '0 B';
+                    } else {
+                        var mb = (d.recBytes / 1048576).toFixed(1);
+                        var kb = (d.recBytes / 1024).toFixed(0);
+                        document.getElementById('recSize').textContent =
+                            d.recBytes > 1048576 ? mb + ' MB' : kb + ' KB';
+                    }
                 }
                 if (d.ovf !== undefined)
                     document.getElementById('recOvf').textContent = d.ovf;
+                if (d.clip !== undefined)
+                    document.getElementById('recClip').textContent = d.clip;
 
                 /* SD Card */
                 if (d.sdTotal !== undefined && d.sdFree !== undefined && d.sd) {
@@ -473,6 +501,29 @@
                     document.getElementById('sdBar').style.width = '0%';
                     document.getElementById('sdPct').textContent = 'No SD';
                     document.getElementById('sdFree').textContent = '';
+                }
+                if (d.sd !== undefined) {
+                    var sdb = document.getElementById('sdBadge');
+                    sdb.textContent = d.sd ? 'Mounted' : 'Unmounted';
+                    sdb.className = 'badge ' + (d.sd ? 'bg' : 'bb');
+                }
+
+                /* Survey */
+                if (d.svLat5 !== undefined && d.svLon5 !== undefined) {
+                    var svb = document.getElementById('surveyBadge');
+                    if (d.svCnt > 0) {
+                        var svLat = (d.svLat5 / 100000).toFixed(5);
+                        var svLon = (d.svLon5 / 100000).toFixed(5);
+                        document.getElementById('surveyPos').textContent = svLat + ', ' + svLon;
+                        document.getElementById('surveyCount').textContent = '-- ' + d.svCnt;
+                        svb.textContent = d.svCnt + ' fixes';
+                        svb.className = 'badge bg';
+                    } else {
+                        document.getElementById('surveyPos').textContent = '---, ---';
+                        document.getElementById('surveyCount').textContent = '-- 0';
+                        svb.textContent = 'No data';
+                        svb.className = 'badge bb';
+                    }
                 }
 
                 /* Solar */
