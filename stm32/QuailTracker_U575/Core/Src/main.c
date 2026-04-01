@@ -511,6 +511,7 @@ void printMenu(void)
     printf("6. Eject SD Card\r\n");
     printf("7. Mount SD Card\r\n");
     printf("8. GPS Status / Control\r\n");
+    printf("9. Comms Status\r\n");
     printf("F. Toggle Format (%s)\r\n", dev.rec.format == REC_FMT_WAV ? "WAV" : "FLAC");
     printf("G. Toggle GPS Raw Output\r\n");
     printf("R. Toggle Recording\r\n");
@@ -606,6 +607,14 @@ void printStatus(void)
     }
     printf("  Humidity: %u.%u%%\r\n",
            (unsigned)(sht30HumRH100 / 100), (unsigned)(sht30HumRH100 / 10 % 10));
+
+    printf("Comms:\r\n");
+    printf("  ESP32:  %s\r\n", dev.comms.espReady ? "Ready" : "No response");
+    printf("  SPI:    %lu transactions\r\n", (unsigned long)dev.comms.spiTransactions);
+    {
+        static const char *pwr_names[] = {"SLEEP", "REC", "USER", "DEV"};
+        printf("  Power:  %s\r\n", pwr_names[dev.pwr.state & 3]);
+    }
 
     printf("============================\r\n");
 }
@@ -1503,7 +1512,7 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
-  /* PD10 — BLE_VCC EN (active high, BLE on at boot) */
+  /* PD10 — ESP_VCC EN (active high, ESP32 on at boot) */
   HAL_GPIO_WritePin(GPIOD, GPIO_PIN_10, GPIO_PIN_SET);
   GPIO_InitStruct.Pin = GPIO_PIN_10;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -1847,7 +1856,7 @@ wake_source_t enterStop2(uint32_t seconds)
      * Keep as outputs (don't change MODER) — floating PD12 turns on
      * the power switch, floating PD14 could wake GPS from backup. */
     uint32_t odr_d = GPIOD->ODR;
-    GPIOD->BSRR = (1u << (10+16))   /* PD10 BLE_VCC EN    → LOW */
+    GPIOD->BSRR = (1u << (10+16))   /* PD10 ESP_VCC EN    → LOW */
                  | (1u << (11+16))   /* PD11 PERIPH_VCC EN → LOW */
                  | (1u << (12+16))   /* PD12 GPS_VCC EN    → LOW */
                  | (1u << (14+16))   /* PD14 GPS_WAKE      → LOW */

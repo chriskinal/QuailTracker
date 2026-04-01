@@ -106,7 +106,7 @@ extern char deviceStationId[16];
 /* ---- Consolidated device state (single instance) ---- */
 device_state_t dev;
 
-/* Snapshot: copy dev under critical section for consistent BLE encoding */
+/* Snapshot: copy dev under critical section for consistent encoding */
 void device_state_snapshot(device_state_t *out)
 {
     taskENTER_CRITICAL();
@@ -137,11 +137,6 @@ void device_state_snapshot(device_state_t *out)
 #define batteryMv           dev.env.batteryMv
 #define sht30TempC100       dev.env.tempC100
 #define sht30HumRH100       dev.env.humRH100
-#define bleConnected        dev.ble.connected
-#define bleReady            dev.ble.ready
-#define bleName             dev.ble.name
-#define bleAddr             dev.ble.addr
-#define bleNameUpdatePending dev.ble.nameUpdatePending
 #define audioPeakLevel      dev.audio.peakLevel
 #define actRatio            dev.audio.actRatio
 #define limiterClipCount    dev.audio.clipCount
@@ -274,7 +269,6 @@ static char modelLabels[TFLITE_MAX_CLASSES][32];
 static float modelMelMin = -80.0f;
 static float modelMelMax = 0.0f;
 
-/* BLE detection streaming interval (0=off) */
 
 /* Detection CSV filename for today */
 static char detCsvFilename[56] = "";
@@ -700,7 +694,7 @@ skip_write:
 void StartCliTask(void *argument)
 {
   /* USER CODE BEGIN cliTask */
-  /* Let GPS + BLE tasks finish their init messages before showing menu */
+  /* Let GPS + bridge tasks finish their init messages before showing menu */
   osDelay(3000);
   printMenu();
 
@@ -919,6 +913,23 @@ void StartCliTask(void *argument)
         default:
           break;
         }
+        printMenu();
+        break;
+      }
+
+      case '9':
+      {
+        uint32_t age = dev.comms.lastSpiTick ?
+            (HAL_GetTick() - dev.comms.lastSpiTick) : 0;
+        printf("\r\n=== Comms Status ===\r\n");
+        printf("ESP32 Bridge: %s\r\n",
+               dev.comms.espReady ? "Ready" : "No response");
+        printf("SPI2:         %lu transactions\r\n",
+               (unsigned long)dev.comms.spiTransactions);
+        printf("Last SPI:     %lu ms ago\r\n", (unsigned long)age);
+        printf("WiFi AP:      Managed by ESP32\r\n");
+        printf("BLE Beacon:   Managed by ESP32\r\n");
+        printf("====================\r\n");
         printMenu();
         break;
       }
@@ -2038,8 +2049,15 @@ static void StartBridgeTask(void *argument)
                 (int)dev.pwr.rtcSynced);
 
             HAL_GPIO_WritePin(SPI2_CS_PORT, SPI2_CS_PIN, GPIO_PIN_RESET);
-            HAL_SPI_TransmitReceive(&hspi2, spi_tx, spi_rx, SPI2_BUF_SIZE, 100);
+            HAL_StatusTypeDef spiResult = HAL_SPI_TransmitReceive(&hspi2, spi_tx, spi_rx, SPI2_BUF_SIZE, 100);
             HAL_GPIO_WritePin(SPI2_CS_PORT, SPI2_CS_PIN, GPIO_PIN_SET);
+
+            /* Track ESP32 comms status */
+            if (spiResult == HAL_OK) {
+                dev.comms.espReady = 1;
+                dev.comms.spiTransactions++;
+                dev.comms.lastSpiTick = HAL_GetTick();
+            }
 
             /* Check for commands from ESP32 (browser → WebSocket → SPI) */
             if (spi_rx[0] == '{') {
@@ -2500,6 +2518,28 @@ void healthUpdateRecStop(uint32_t bytes, uint32_t durationSecs)
     health.recordingSecs += durationSecs;
     health.lastFileBytes = bytes;
     health.lastFileSecs = durationSecs;
+}
+
+/* ========================= SD Space Refresh ========================= */
+
+void sd_space_refresh(void)
+{
+    if (!sdMounted) {
+        dev.rec.sdTotalKb = 0;
+        dev.rec.sdFreeKb = 0;
+        return;
+    }
+    FATFS *fs;
+    DWORD fre_clust;
+    if (osMutexAcquire(fileMtxHandle, 200) == osOK) {
+        if (f_getfree("", &fre_clust, &fs) == FR_OK) {
+            DWORD tot_sect = (fs->n_fatent - 2) * fs->csize;
+            DWORD fre_sect = fre_clust * fs->csize;
+            dev.rec.sdTotalKb = (uint32_t)(tot_sect / 2);
+            dev.rec.sdFreeKb  = (uint32_t)(fre_sect / 2);
+        }
+        osMutexRelease(fileMtxHandle);
+    }
 }
 
 /* ========================= Power Management ========================= */

@@ -152,12 +152,12 @@ typedef struct {
     } env;
 
     struct {
-        volatile uint8_t connected;  /* was bleConnected */
-        uint8_t  ready;              /* was bleReady */
-        char     name[32];           /* was bleName */
-        char     addr[20];           /* was bleAddr */
-        volatile uint8_t nameUpdatePending;
-    } ble;
+        uint8_t  espReady;           /* 1 = ESP32 bridge responding on SPI */
+        uint8_t  wifiActive;         /* 1 = WiFi AP running */
+        uint8_t  bleConnected;       /* 1 = BLE client connected to ESP32 */
+        uint32_t spiTransactions;    /* total SPI exchanges */
+        uint32_t lastSpiTick;        /* HAL tick of last successful SPI */
+    } comms;
 
     struct {
         volatile int32_t peakLevel;  /* was audioPeakLevel */
