@@ -114,6 +114,32 @@
             width: 100%; margin-top: 4px;
             accent-color: #4FC3F7;
         }
+        .num {
+            width: 70px; padding: 6px 8px; border-radius: 6px;
+            border: 1px solid #444; background: #0d1b2a; color: #e0e0e0;
+            font-size: 14px; text-align: center;
+        }
+
+        /* Toggle switch */
+        .toggle { position: relative; display: inline-block; width: 44px; height: 24px; }
+        .toggle input { opacity: 0; width: 0; height: 0; }
+        .toggle .tsl {
+            position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+            background: #555; border-radius: 24px; transition: 0.3s;
+        }
+        .toggle .tsl:before {
+            content: ""; position: absolute; height: 18px; width: 18px; left: 3px; bottom: 3px;
+            background: #fff; border-radius: 50%; transition: 0.3s;
+        }
+        .toggle input:checked + .tsl { background: #4FC3F7; }
+        .toggle input:checked + .tsl:before { transform: translateX(20px); }
+
+        /* Preset buttons */
+        .preset {
+            display: inline-block; padding: 6px 14px; border-radius: 16px;
+            border: none; background: #2196F3; color: #fff;
+            font-size: 12px; font-weight: 600; cursor: pointer; margin: 4px 4px 4px 0;
+        }
 
         /* Bottom status bar */
         .status-bar {
@@ -367,12 +393,62 @@
 
         <!-- ════════════════ Schedule Tab ════════════════ -->
         <div class="tab" id="t-schedule">
+            <!-- Sunrise -->
             <div class="card">
-                <div class="sect">Schedule</div>
+                <div class="row">
+                    <span class="sect">Sunrise</span>
+                    <span class="spacer"></span>
+                    <label class="toggle"><input type="checkbox" id="schSunrise"><span class="tsl"></span></label>
+                    <span class="val-sm" style="margin-left:6px" id="schSunriseLbl">Off</span>
+                </div>
                 <div class="row" style="margin-top:8px">
-                    <span class="val-sm">Schedule configuration coming soon</span>
+                    <div style="flex:1">
+                        <div class="val-sm" style="color:#888">Before (min)</div>
+                        <input type="number" class="num" id="schSunBefore" min="0" max="120" value="30">
+                    </div>
+                    <div style="flex:1;margin-left:12px">
+                        <div class="val-sm" style="color:#888">After (min)</div>
+                        <input type="number" class="num" id="schSunAfter" min="0" max="240" value="60">
+                    </div>
                 </div>
             </div>
+            <!-- Sunset -->
+            <div class="card">
+                <div class="row">
+                    <span class="sect">Sunset</span>
+                    <span class="spacer"></span>
+                    <label class="toggle"><input type="checkbox" id="schSunset"><span class="tsl"></span></label>
+                    <span class="val-sm" style="margin-left:6px" id="schSunsetLbl">Off</span>
+                </div>
+                <div class="row" style="margin-top:8px">
+                    <div style="flex:1">
+                        <div class="val-sm" style="color:#888">Before (min)</div>
+                        <input type="number" class="num" id="schSetBefore" min="0" max="120" value="30">
+                    </div>
+                    <div style="flex:1;margin-left:12px">
+                        <div class="val-sm" style="color:#888">After (min)</div>
+                        <input type="number" class="num" id="schSetAfter" min="0" max="240" value="30">
+                    </div>
+                </div>
+            </div>
+            <!-- Recording Windows -->
+            <div class="card">
+                <div class="sect">Recording Windows</div>
+                <div style="margin-top:8px">
+                    <button class="preset" onclick="applyPreset('dawn_dusk')">Dawn/Dusk</button>
+                    <button class="preset" onclick="applyPreset('dawn')">Dawn Only</button>
+                    <button class="preset" onclick="applyPreset('nocturnal')">Nocturnal</button>
+                    <button class="preset" onclick="applyPreset('all_day')">All Day</button>
+                </div>
+                <div id="windowList" style="margin-top:8px"></div>
+                <button class="btn btn-gray" style="width:auto;padding:8px 16px;margin-top:8px" onclick="addWindow()">+ Add Window</button>
+            </div>
+            <!-- Load / Save -->
+            <div style="display:flex;gap:8px;margin-top:10px;padding:0 2px">
+                <button class="btn btn-blue" style="flex:1" onclick="loadSchedule()">Load</button>
+                <button class="btn btn-gray" style="flex:1" onclick="saveSchedule()">Save Schedule</button>
+            </div>
+            <div class="val-sm" style="text-align:center;margin-top:6px;color:#888" id="schStatus"></div>
         </div>
 
         <!-- ════════════════ Config Tab ════════════════ -->
@@ -453,6 +529,99 @@
                 winStep: parseInt(document.getElementById('cfgWinStep').value)
             };
             if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+        }
+
+        /* Schedule */
+        var schWindows = [];
+
+        function addWindow() {
+            schWindows.push({ start: '06:00', end: '09:00' });
+            renderWindows();
+        }
+
+        function removeWindow(i) {
+            schWindows.splice(i, 1);
+            renderWindows();
+        }
+
+        function renderWindows() {
+            var el = document.getElementById('windowList');
+            el.innerHTML = '';
+            for (var i = 0; i < schWindows.length; i++) {
+                var d = document.createElement('div');
+                d.className = 'row';
+                d.style.marginBottom = '6px';
+                d.innerHTML = '<input type="time" class="num" style="width:100px" value="' +
+                    schWindows[i].start + '" onchange="schWindows[' + i + '].start=this.value">' +
+                    '<span class="val-sm" style="margin:0 8px">to</span>' +
+                    '<input type="time" class="num" style="width:100px" value="' +
+                    schWindows[i].end + '" onchange="schWindows[' + i + '].end=this.value">' +
+                    '<span class="spacer"></span>' +
+                    '<button class="btn btn-red" style="width:auto;padding:4px 10px;margin:0;font-size:11px" onclick="removeWindow(' + i + ')">X</button>';
+                el.appendChild(d);
+            }
+        }
+
+        function applyPreset(name) {
+            var sr = document.getElementById('schSunrise');
+            var ss = document.getElementById('schSunset');
+            schWindows = [];
+            if (name === 'dawn_dusk') {
+                sr.checked = true; ss.checked = true;
+                document.getElementById('schSunBefore').value = 30;
+                document.getElementById('schSunAfter').value = 60;
+                document.getElementById('schSetBefore').value = 30;
+                document.getElementById('schSetAfter').value = 30;
+            } else if (name === 'dawn') {
+                sr.checked = true; ss.checked = false;
+                document.getElementById('schSunBefore').value = 30;
+                document.getElementById('schSunAfter').value = 90;
+            } else if (name === 'nocturnal') {
+                sr.checked = false; ss.checked = false;
+                schWindows = [{ start: '20:00', end: '06:00' }];
+            } else if (name === 'all_day') {
+                sr.checked = false; ss.checked = false;
+                schWindows = [{ start: '00:00', end: '23:59' }];
+            }
+            updateToggleLabels();
+            renderWindows();
+        }
+
+        function updateToggleLabels() {
+            document.getElementById('schSunriseLbl').textContent = document.getElementById('schSunrise').checked ? 'On' : 'Off';
+            document.getElementById('schSunsetLbl').textContent = document.getElementById('schSunset').checked ? 'On' : 'Off';
+        }
+
+        document.getElementById('schSunrise').addEventListener('change', updateToggleLabels);
+        document.getElementById('schSunset').addEventListener('change', updateToggleLabels);
+
+        function saveSchedule() {
+            var wins = [];
+            for (var i = 0; i < schWindows.length; i++) {
+                var s = schWindows[i].start.replace(':', '');
+                var e = schWindows[i].end.replace(':', '');
+                wins.push(parseInt(s), parseInt(e));
+            }
+            var obj = {
+                cmd: 'set_schedule',
+                sunEn: document.getElementById('schSunrise').checked ? 1 : 0,
+                sunB: parseInt(document.getElementById('schSunBefore').value),
+                sunA: parseInt(document.getElementById('schSunAfter').value),
+                setEn: document.getElementById('schSunset').checked ? 1 : 0,
+                setB: parseInt(document.getElementById('schSetBefore').value),
+                setA: parseInt(document.getElementById('schSetAfter').value),
+                nWin: schWindows.length,
+                wins: wins
+            };
+            if (ws && ws.readyState === 1) {
+                ws.send(JSON.stringify(obj));
+                document.getElementById('schStatus').textContent = 'Schedule saved';
+            }
+        }
+
+        function loadSchedule() {
+            sendCmd('get_schedule');
+            document.getElementById('schStatus').textContent = 'Schedule loaded';
         }
 
         function connect() {
@@ -661,6 +830,30 @@
                     document.getElementById('confVal').textContent = d.conf + '%';
                     document.getElementById('cfgWinStep').value = d.winStep;
                     window._detCfgLoaded = true;
+                }
+
+                /* Schedule — only set controls on first load */
+                if (d.sunEn !== undefined && !window._schLoaded) {
+                    document.getElementById('schSunrise').checked = !!d.sunEn;
+                    document.getElementById('schSunBefore').value = d.sunB;
+                    document.getElementById('schSunAfter').value = d.sunA;
+                    document.getElementById('schSunset').checked = !!d.setEn;
+                    document.getElementById('schSetBefore').value = d.setB;
+                    document.getElementById('schSetAfter').value = d.setA;
+                    updateToggleLabels();
+                    if (d.wins && d.wins.length > 0) {
+                        schWindows = [];
+                        for (var wi = 0; wi < d.wins.length; wi += 2) {
+                            var sh = ('0000' + d.wins[wi]).slice(-4);
+                            var eh = ('0000' + d.wins[wi+1]).slice(-4);
+                            schWindows.push({
+                                start: sh.substring(0,2) + ':' + sh.substring(2),
+                                end: eh.substring(0,2) + ':' + eh.substring(2)
+                            });
+                        }
+                        renderWindows();
+                    }
+                    window._schLoaded = true;
                 }
             };
         }

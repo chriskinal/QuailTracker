@@ -2215,6 +2215,17 @@ static void StartBleTask(void *argument)
             int32_t tMin = health.tempMinC100;
             int32_t tMax = health.tempMaxC100;
             int32_t svLatI = (int32_t)(cfg.surveyLat * 100000);
+
+            /* Build windows JSON array: "600,900,1800,2100" */
+            char winBuf[128] = "";
+            {
+                int pos = 0;
+                for (int i = 0; i < cfg.numWindows && i < 8; i++) {
+                    if (i > 0) winBuf[pos++] = ',';
+                    pos += snprintf(winBuf + pos, sizeof(winBuf) - pos,
+                                    "%u,%u", cfg.windows[i*2], cfg.windows[i*2+1]);
+                }
+            }
             int32_t svLonI = (int32_t)(cfg.surveyLon * 100000);
 
             snprintf((char *)spi_tx, SPI2_BUF_SIZE,
@@ -2234,7 +2245,10 @@ static void StartBleTask(void *argument)
                 "\"mdl\":%d,\"mdlSz\":%lu,\"mdlCls\":%d,"
                 "\"detWin\":%lu,\"detHit\":%lu,"
                 "\"detSp\":\"%s\",\"detPct\":%d,\"detTm\":\"%s\","
-                "\"mission\":%d,\"conf\":%d,\"winStep\":%d}",
+                "\"mission\":%d,\"conf\":%d,\"winStep\":%d,"
+                "\"sunEn\":%d,\"sunB\":%u,\"sunA\":%u,"
+                "\"setEn\":%d,\"setB\":%u,\"setA\":%u,"
+                "\"nWin\":%d,\"wins\":[%s]}",
                 (unsigned long)mv,
                 tWhole, tFrac,
                 (unsigned)(sht30HumRH100 / 100),
@@ -2274,7 +2288,15 @@ static void StartBleTask(void *argument)
                 detLastTime,
                 (int)cfg.missionMode,
                 (int)cfg.detConfThresh,
-                (int)cfg.detWindowStep);
+                (int)cfg.detWindowStep,
+                (int)cfg.sunriseEnabled,
+                (unsigned)cfg.sunriseBefore,
+                (unsigned)cfg.sunriseAfter,
+                (int)cfg.sunsetEnabled,
+                (unsigned)cfg.sunsetBefore,
+                (unsigned)cfg.sunsetAfter,
+                (int)cfg.numWindows,
+                winBuf);
 
             HAL_GPIO_WritePin(SPI2_CS_PORT, SPI2_CS_PIN, GPIO_PIN_RESET);
             HAL_SPI_TransmitReceive(&hspi2, spi_tx, spi_rx, SPI2_BUF_SIZE, 100);
@@ -2349,6 +2371,36 @@ static void StartBleTask(void *argument)
                 } else if (strstr(rx, "model_reload")) {
                     /* TODO: trigger model reload from SD */
                     printf("SPI cmd: model_reload\r\n");
+                } else if (strstr(rx, "set_schedule")) {
+                    char *p;
+                    if ((p = strstr(rx, "\"sunEn\":")) != NULL)
+                        cfg.sunriseEnabled = (uint8_t)atoi(p + 8);
+                    if ((p = strstr(rx, "\"sunB\":")) != NULL)
+                        cfg.sunriseBefore = (uint16_t)atoi(p + 7);
+                    if ((p = strstr(rx, "\"sunA\":")) != NULL)
+                        cfg.sunriseAfter = (uint16_t)atoi(p + 7);
+                    if ((p = strstr(rx, "\"setEn\":")) != NULL)
+                        cfg.sunsetEnabled = (uint8_t)atoi(p + 8);
+                    if ((p = strstr(rx, "\"setB\":")) != NULL)
+                        cfg.sunsetBefore = (uint16_t)atoi(p + 7);
+                    if ((p = strstr(rx, "\"setA\":")) != NULL)
+                        cfg.sunsetAfter = (uint16_t)atoi(p + 7);
+                    if ((p = strstr(rx, "\"nWin\":")) != NULL)
+                        cfg.numWindows = (uint8_t)atoi(p + 7);
+                    /* Parse wins array: [600,900,1800,2100] */
+                    if ((p = strstr(rx, "\"wins\":[")) != NULL) {
+                        p += 8;
+                        for (int i = 0; i < cfg.numWindows * 2 && i < 16; i++) {
+                            cfg.windows[i] = (uint16_t)atoi(p);
+                            char *next = strchr(p, ',');
+                            if (next) p = next + 1; else break;
+                        }
+                    }
+                    configSave();
+                    printf("SPI cmd: set_schedule sun=%d/%u/%u set=%d/%u/%u wins=%d\r\n",
+                           cfg.sunriseEnabled, cfg.sunriseBefore, cfg.sunriseAfter,
+                           cfg.sunsetEnabled, cfg.sunsetBefore, cfg.sunsetAfter,
+                           cfg.numWindows);
                 }
             }
         }
