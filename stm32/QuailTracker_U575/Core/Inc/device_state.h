@@ -157,6 +157,7 @@ typedef struct {
         uint8_t  bleConnected;       /* 1 = BLE client connected to ESP32 */
         uint32_t spiTransactions;    /* total SPI exchanges */
         uint32_t lastSpiTick;        /* HAL tick of last successful SPI */
+        char     espFwVersion[16];   /* ESP32 firmware version string */
     } comms;
 
     struct {

@@ -608,6 +608,10 @@ void printStatus(void)
     printf("  Humidity: %u.%u%%\r\n",
            (unsigned)(sht30HumRH100 / 100), (unsigned)(sht30HumRH100 / 10 % 10));
 
+    printf("Firmware:\r\n");
+    printf("  STM32:  %s\r\n", FW_VERSION);
+    printf("  ESP32:  %s\r\n",
+           dev.comms.espFwVersion[0] ? dev.comms.espFwVersion : "Unknown");
     printf("Comms:\r\n");
     printf("  ESP32:  %s\r\n", dev.comms.espReady ? "Ready" : "No response");
     printf("  SPI:    %lu transactions\r\n", (unsigned long)dev.comms.spiTransactions);

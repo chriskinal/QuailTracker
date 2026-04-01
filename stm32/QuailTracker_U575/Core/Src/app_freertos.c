@@ -922,6 +922,9 @@ void StartCliTask(void *argument)
         uint32_t age = dev.comms.lastSpiTick ?
             (HAL_GetTick() - dev.comms.lastSpiTick) : 0;
         printf("\r\n=== Comms Status ===\r\n");
+        printf("STM32 FW:     %s\r\n", FW_VERSION);
+        printf("ESP32 FW:     %s\r\n",
+               dev.comms.espFwVersion[0] ? dev.comms.espFwVersion : "Unknown");
         printf("ESP32 Bridge: %s\r\n",
                dev.comms.espReady ? "Ready" : "No response");
         printf("SPI2:         %lu transactions\r\n",
@@ -2059,10 +2062,26 @@ static void StartBridgeTask(void *argument)
                 dev.comms.lastSpiTick = HAL_GetTick();
             }
 
-            /* Check for commands from ESP32 (browser → WebSocket → SPI) */
+            /* Check for commands/status from ESP32 (browser → WebSocket → SPI) */
             if (spi_rx[0] == '{') {
                 spi_rx[SPI2_BUF_SIZE - 1] = '\0';
                 char *rx = (char *)spi_rx;
+
+                /* Parse ESP32 firmware version if present */
+                {
+                    char *fwp = strstr(rx, "\"espFw\":\"");
+                    if (fwp) {
+                        fwp += 9;
+                        char *end = strchr(fwp, '"');
+                        if (end) {
+                            int vlen = end - fwp;
+                            if (vlen > 15) vlen = 15;
+                            memcpy(dev.comms.espFwVersion, fwp, vlen);
+                            dev.comms.espFwVersion[vlen] = '\0';
+                        }
+                    }
+                }
+
                 if (strstr(rx, "rec_toggle")) {
                     uint8_t c = isRecording ? CMD_STOP_REC : CMD_START_REC;
                     osMessageQueuePut(audioCmdQueueHandle, &c, 0, 0);

@@ -173,7 +173,7 @@
                 <div class="row">
                     <span class="val" id="stationId" style="font-size:16px">--</span>
                     <span class="spacer"></span>
-                    <span class="val-sm" id="fwVer">--</span>
+                    <span class="val-sm" id="fwVer">STM32: -- | ESP32: --</span>
                 </div>
 
                 <div class="row" style="margin-top:4px">
@@ -868,8 +868,10 @@
                     document.getElementById('stationId').textContent = d.station;
                     document.getElementById('devName').textContent = d.station;
                 }
-                if (d.fw !== undefined) {
-                    document.getElementById('fwVer').textContent = d.fw;
+                if (d.fw !== undefined || d.espFw !== undefined) {
+                    var stm = d.fw || '--';
+                    var esp = d.espFw || '--';
+                    document.getElementById('fwVer').textContent = 'STM32: ' + stm + ' | ESP32: ' + esp;
                 }
 
                 /* Since Last Visit (health report) */

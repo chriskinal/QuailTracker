@@ -28,4 +28,7 @@ void ble_beacon_update_data(uint16_t battery_mv, uint8_t recording,
 /* Check if a BLE client is currently connected */
 bool ble_beacon_is_connected(void);
 
+/* Update the advertised device name (restarts advertising) */
+void ble_beacon_set_name(const char *name);
+
 #endif /* BLE_BEACON_H */

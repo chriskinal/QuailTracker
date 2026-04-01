@@ -31,9 +31,11 @@
 #include "esp_http_server.h"
 #include "nvs_flash.h"
 #include "esp_netif.h"
+#include "esp_mac.h"
 #include "ble_beacon.h"
 
 #define TAG "BRIDGE"
+#define ESP_FW_VERSION "0.2.0"
 
 /* ── Power State ───────────────────────────────────────────────── */
 
@@ -78,9 +80,13 @@ static portMUX_TYPE cmd_mux = portMUX_INITIALIZER_UNLOCKED;
 
 /* ── WiFi AP Config ────────────────────────────────────────────── */
 
-#define WIFI_SSID      "QuailTracker"
 #define WIFI_CHANNEL   6
 #define MAX_CONNECTIONS 4
+
+/* Device name — used for both WiFi SSID and BLE name.
+ * Default: "QT_XXXX" where XXXX = last 4 hex digits of MAC.
+ * Updated to station ID when learned from STM32 via SPI. */
+static char device_name[32] = "";
 
 static esp_netif_t *wifi_ap_netif = NULL;
 
@@ -248,20 +254,76 @@ static void wifi_start(void)
 
     wifi_config_t wifi_config = {
         .ap = {
-            .ssid = WIFI_SSID,
-            .ssid_len = strlen(WIFI_SSID),
             .channel = WIFI_CHANNEL,
             .authmode = WIFI_AUTH_OPEN,
             .max_connection = MAX_CONNECTIONS,
         },
     };
+    strncpy((char *)wifi_config.ap.ssid, device_name, sizeof(wifi_config.ap.ssid));
+    wifi_config.ap.ssid_len = strlen(device_name);
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
     wifi_started = true;
-    ESP_LOGI(TAG, "WiFi AP started: SSID=%s, http://192.168.9.1", WIFI_SSID);
+    ESP_LOGI(TAG, "WiFi AP started: SSID=%s, http://192.168.9.1", device_name);
+}
+
+/* Load device name from NVS. Returns true if found. */
+static bool load_device_name(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("bridge", NVS_READONLY, &h) != ESP_OK) return false;
+    size_t len = sizeof(device_name);
+    esp_err_t err = nvs_get_str(h, "name", device_name, &len);
+    nvs_close(h);
+    if (err == ESP_OK && device_name[0]) {
+        ESP_LOGI(TAG, "Loaded device name from NVS: %s", device_name);
+        return true;
+    }
+    return false;
+}
+
+/* Save device name to NVS */
+static void save_device_name(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("bridge", NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_str(h, "name", device_name);
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "Saved device name to NVS: %s", device_name);
+}
+
+/* Update WiFi SSID and BLE name to match station ID */
+static void update_device_name(const char *name)
+{
+    if (strcmp(device_name, name) == 0) return;  /* no change */
+
+    strncpy(device_name, name, sizeof(device_name) - 1);
+    device_name[sizeof(device_name) - 1] = '\0';
+
+    /* Persist to NVS so next boot uses this name immediately */
+    save_device_name();
+
+    /* Update BLE advertising name */
+    ble_beacon_set_name(device_name);
+
+    /* Restart WiFi AP with new SSID */
+    if (wifi_started) {
+        wifi_config_t wifi_config = {
+            .ap = {
+                .channel = WIFI_CHANNEL,
+                .authmode = WIFI_AUTH_OPEN,
+                .max_connection = MAX_CONNECTIONS,
+            },
+        };
+        strncpy((char *)wifi_config.ap.ssid, device_name, sizeof(wifi_config.ap.ssid));
+        wifi_config.ap.ssid_len = strlen(device_name);
+        esp_wifi_set_config(WIFI_IF_AP, &wifi_config);
+        ESP_LOGI(TAG, "WiFi SSID updated: %s", device_name);
+    }
 }
 
 static void wifi_stop(void)
@@ -363,6 +425,23 @@ static int json_get_int(const char *json, const char *key, int def)
     return atoi(p);
 }
 
+/* Parse a string value from JSON: "key":"value" into buf (max buflen-1 chars) */
+static bool json_get_str(const char *json, const char *key, char *buf, int buflen)
+{
+    char search[32];
+    snprintf(search, sizeof(search), "\"%s\":\"", key);
+    const char *p = strstr(json, search);
+    if (!p) return false;
+    p += strlen(search);
+    const char *end = strchr(p, '"');
+    if (!end) return false;
+    int len = end - p;
+    if (len >= buflen) len = buflen - 1;
+    memcpy(buf, p, len);
+    buf[len] = '\0';
+    return true;
+}
+
 /* ── SPI Slave Task ────────────────────────────────────────────── */
 
 static void spi_task(void *arg)
@@ -379,7 +458,8 @@ static void spi_task(void *arg)
             strncpy((char *)spi_txBuf, pending_cmd, TRANSFER_SIZE - 1);
             pending_cmd[0] = '\0';
         } else {
-            memcpy(spi_txBuf, "PONG", 4);
+            snprintf((char *)spi_txBuf, TRANSFER_SIZE,
+                     "{\"espFw\":\"%s\"}", ESP_FW_VERSION);
         }
         portEXIT_CRITICAL(&cmd_mux);
         memset(spi_rxBuf, 0, TRANSFER_SIZE);
@@ -407,6 +487,15 @@ static void spi_task(void *arg)
                 last_battery_mv = (uint16_t)json_get_int(last_spi_msg, "bat", 0);
                 last_recording = (uint8_t)json_get_int(last_spi_msg, "rec", 0);
                 last_pwr_state = (uint8_t)json_get_int(last_spi_msg, "pwrState", 0);
+
+                /* Update device name from station ID if changed */
+                {
+                    char station[16];
+                    if (json_get_str(last_spi_msg, "station", station, sizeof(station))
+                        && station[0]) {
+                        update_device_name(station);
+                    }
+                }
 
                 /* Check for sleep command from STM32 */
                 if (json_get_int(last_spi_msg, "sleeping", -1) == 1) {
@@ -437,6 +526,14 @@ static void ws_push_task(void *arg)
 
         if (new_spi_data && ws_server) {
             new_spi_data = false;
+            /* Inject ESP32 firmware version into JSON before broadcasting.
+             * Replace trailing '}' with ',"espFw":"x.y.z"}' */
+            int len = strlen(last_spi_msg);
+            if (len > 1 && last_spi_msg[len - 1] == '}') {
+                snprintf(last_spi_msg + len - 1,
+                         sizeof(last_spi_msg) - len + 1,
+                         ",\"espFw\":\"%s\"}", ESP_FW_VERSION);
+            }
             ws_broadcast(last_spi_msg);
         }
 
@@ -523,11 +620,19 @@ void app_main(void)
         ESP_ERROR_CHECK(nvs_flash_init());
     }
 
+    /* Load device name: NVS first, then fall back to MAC-based default */
+    if (!load_device_name()) {
+        uint8_t mac[6];
+        esp_read_mac(mac, ESP_MAC_WIFI_STA);
+        snprintf(device_name, sizeof(device_name), "QT_%02X%02X", mac[4], mac[5]);
+        ESP_LOGI(TAG, "No saved name, using default: %s", device_name);
+    }
+
     /* Initialize network interface (needed before WiFi or BLE) */
     wifi_init_netif();
 
     /* Start BLE beacon (always active for device discovery) */
-    ble_beacon_init("QuailTracker", on_ble_connect, on_ble_disconnect);
+    ble_beacon_init(device_name, on_ble_connect, on_ble_disconnect);
 
     /* Start in NORMAL_POWER on boot so WiFi AP is available for setup.
      * Will transition to LOW_POWER after BLE disconnect timeout if no

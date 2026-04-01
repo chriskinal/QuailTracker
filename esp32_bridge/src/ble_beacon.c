@@ -194,3 +194,14 @@ bool ble_beacon_is_connected(void)
 {
     return s_connected;
 }
+
+void ble_beacon_set_name(const char *name)
+{
+    ble_svc_gap_device_name_set(name);
+    /* Restart advertising with new name */
+    if (!s_connected) {
+        ble_gap_adv_stop();
+        ble_advertise();
+    }
+    ESP_LOGI(TAG, "BLE name updated: %s", name);
+}
