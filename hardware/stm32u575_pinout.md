@@ -1,4 +1,4 @@
-# STM32U575VGT6 Production Board — Pin Assignments (V3)
+# STM32U575VGT6 Production Board — Pin Assignments (V5)
 
 MCU: STM32U575VGT6, LQFP-100, non-SMPS (LDO) variant
 Datasheet: DS13737 Rev 10 (July 2024), **Figure 15 — LQFP100 pinout**
@@ -18,8 +18,10 @@ C5270988 is the non-SMPS variant — uses internal LDO, no external inductor.
 | PDM Mic Data | PE10 | 41 | AF3 | ADF1_SDI0 | Data in from IM72D128 |
 | GPS UART TX | PA9 | 68 | AF7 | USART1_TX | To ATGM336H RXD (pin 3) |
 | GPS UART RX | PA10 | 69 | AF7 | USART1_RX | From ATGM336H TXD (pin 2) |
-| BLE UART TX | PA2 | 25 | AF7 | USART2_TX | To PB-03F RX |
-| BLE UART RX | PA3 | 26 | AF7 | USART2_RX | From PB-03F TX |
+| ESP32 SPI SCK | PB13 | 52 | AF5 | SPI2_SCK | To ESP32-C3 GPIO4 |
+| ESP32 SPI MISO | PB14 | 53 | AF5 | SPI2_MISO | From ESP32-C3 GPIO5 |
+| ESP32 SPI MOSI | PB15 | 54 | AF5 | SPI2_MOSI | To ESP32-C3 GPIO6 |
+| ESP32 SPI CS | PB12 | 51 | GPIO | Output, active low | To ESP32-C3 GPIO7, also ROM bootloader NSS |
 | Debug UART TX | PD8 | 55 | AF7 | USART3_TX | Debug serial on H2 header |
 | Debug UART RX | PD9 | 56 | AF7 | USART3_RX | Debug serial on H2 header |
 | SD Card SCK | PA5 | 30 | AF5 | SPI1_SCK | SPI mode SD |
@@ -34,7 +36,7 @@ C5270988 is the non-SMPS variant — uses internal LDO, no external inductor.
 | GPS ON/OFF | PD14 | 61 | GPIO | Output | ATGM336H ON/OFF (pin 5) |
 | GPS RESET | PD15 | 62 | GPIO | Output, active low | ATGM336H nRESET (pin 9) |
 | GPS_VCC EN | PD12 | 59 | GPIO | Output | HIGH=GPS on, LOW=off |
-| BLE_VCC EN | PD10 | 57 | GPIO | Output | HIGH=BLE on, LOW=off |
+| ESP_VCC EN | PD10 | 57 | GPIO | Output | HIGH=ESP32 on, LOW=off |
 | PERIPH_VCC EN | PD11 | 58 | GPIO | Output | HIGH=SD+SHT30 on, LOW=off |
 | Status LED | PD13 | 60 | GPIO | Output | Via 1k R9 to LED1 |
 | Solar CHRG | PB0 | 35 | GPIO | Input, active low | CN3791 charging indicator (open drain + 10k pull-up) |
@@ -132,17 +134,27 @@ GPS module (U2, ATGM336H-5N31 LCC-18 SMD, 10.1x9.7mm):
 - J1 (U.FL): connects to RF_IN side of L1 — antenna coax attaches here
 - C17 (10uF): GPS_VCC decoupling on GPS pin 8
 
-### USART2 — BLE Module (PB-03F)
+### SPI2 — ESP32-C3 Super Mini Bridge
 
-PA2/PA3 are the boot-default USART2 pins. PB-03F uses AT commands over UART.
-Default baud rate: 115200. 3.3V logic.
+PB12-PB15 used for SPI2 — these pins match the STM32U575 ROM bootloader
+SPI2 pinout (AN2606 Section 95), enabling OTA firmware recovery of a bricked STM32.
 
-| PB-03F Pin | Signal | MCU Pin |
-|------------|--------|---------|
-| TX | BLE→MCU | PA3 / USART2_RX |
-| RX | MCU→BLE | PA2 / USART2_TX |
-| VCC | 3.3V | BLE_VCC (switched rail) |
-| GND | Ground | GND |
+STM32 is SPI master during normal operation, ESP32 is SPI slave.
+During OTA flash: ESP32 asserts BOOT0+NRST to enter ROM bootloader,
+then becomes SPI master to flash the STM32 using AN4286 protocol.
+
+| ESP32-C3 Pin | Signal | MCU Pin | Notes |
+|-------------|--------|---------|-------|
+| GPIO4 | SPI2_SCK | PB13 (pin 52) | 2 MHz clock |
+| GPIO5 | SPI2_MISO | PB14 (pin 53) | STM32→ESP32 data |
+| GPIO6 | SPI2_MOSI | PB15 (pin 54) | ESP32→STM32 data |
+| GPIO7 | SPI2_NSS | PB12 (pin 51) | Chip select, active low |
+| GPIO2 | STM32_NRST | NRST (pin 14) | Reset for OTA flash (normally hi-Z) |
+| GPIO3 | STM32_BOOT0 | PH3 (pin 94) | Boot mode for OTA flash (normally hi-Z) |
+| 3V3 | ESP_VCC | U5 output | Switched rail on PD10 |
+| GND | GND | GND plane | |
+
+**Antenna keep-out:** 2mm deep × module width, no copper either layer under ceramic antenna.
 
 ### SPI1 — SD Card
 
@@ -167,9 +179,9 @@ Divider current: ~2uA continuous (acceptable for battery life).
 
 Available GPIOs not assigned (configure as analog input for lowest leakage):
 
-PE0-PE6, PE7, PE8, PE11-PE15, PA0, PA1, PA11, PA12, PA15,
-PB2, PB4, PB5, PB8-PB10, PB12-PB15, PC1, PC2, PC3, PC5-PC9, PC10-PC12,
-PD0-PD7, PH0, PH1
+PE0-PE6, PE7, PE8, PE11-PE15, PA0, PA1, PA2, PA3, PA11, PA12, PA15,
+PB2, PB4, PB5, PB8-PB10, PC1, PC2, PC3, PC5-PC9, PC10-PC12,
+PD0-PD9, PH0, PH1
 
 Note: PB11 is NOT bonded out on LQFP100 (neither SMPS nor non-SMPS variant).
 
@@ -180,11 +192,11 @@ Note: PB11 is NOT bonded out on LQFP100 (neither SMPS nor non-SMPS variant).
 2. **MCU** — U1 (STM32U575VGT6), X1 (LSE crystal), R6 (BOOT0 pull-down)
 3. **Audio** — CN2 (JST PH 4-pin to mic breakout: CLK, DATA, VDD, GND)
 4. **GPS** — U2 (ATGM336H-5N31), U4 (TPS22916 load switch for GPS_VCC), L1 (47nH bias tee), J1 (U.FL antenna), C17 (10uF GPS_VCC decoupling)
-4a. **BLE Power** — U5 (TPS22916 load switch for BLE_VCC), C19 (1uF output cap)
+4a. **ESP32 Power** — U5 (TPS22916 load switch for ESP_VCC), C19 (1uF output cap)
 4b. **Peripheral Power** — U6 (TPS22916 load switch for PERIPH_VCC), C18 (1uF output cap)
 
 5. **Storage** — CARD1 (MicroSD slot), SPI1 on PA4-PA7
-6. **BLE** — COMM1 (PB-03F module), USART2 on PA2/PA3
+6. **ESP32 Bridge** — ESPMOD1 (ESP32-C3 Super Mini), SPI2 on PB12-PB15, NRST+BOOT0 for OTA
 7. **Sensor** — H1 (4-pin header to off-board SHT30), R3/R4 (I2C pull-ups)
 8. **Debug** — H2 (7-pin header: 3V3, GND, SWDIO, SWCLK, SWO, DBG_TX, DBG_RX)
 9. **Battery** — R7/R8 (1M divider to PC0), CN1 (JST 2-pin)
@@ -197,7 +209,7 @@ Note: PB11 is NOT bonded out on LQFP100 (neither SMPS nor non-SMPS variant).
 - Ground pour on bottom layer
 - VCAP cap (4.7uF) close to pin 48, short trace to VSS (pin 49)
 - ADF PDM traces (PE9/PE10) kept short — mic JST connector near MCU
-- BLE module (PB-03F) antenna area: no copper pour within 5mm of antenna
+- ESP32-C3 Super Mini antenna keep-out: 2mm deep × module width, no copper either layer
 - SD card slot at board edge
 - GPS module (U2) near board edge, U.FL connector (J1) at board edge for antenna cable
 - GPS RF traces (RF_IN, bias tee) kept short — L1 and J1 close to U2
