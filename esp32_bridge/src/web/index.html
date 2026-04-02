@@ -796,17 +796,25 @@
             }
             status.textContent = 'Uploading ' + (file.size / 1024).toFixed(0) + ' KB...';
             status.style.color = '#888';
+
+            /* Listen for flash progress on WebSocket */
+            window._stm32flashing = true;
+
             var xhr = new XMLHttpRequest();
             xhr.open('POST', '/ota_stm32', true);
             xhr.setRequestHeader('Content-Type', 'application/octet-stream');
-            xhr.timeout = 120000;  /* 2 min — erase + write takes time */
+            xhr.timeout = 120000;
             xhr.upload.onprogress = function(e) {
                 if (e.lengthComputable) {
                     var pct = Math.round(e.loaded * 100 / e.total);
                     status.textContent = 'Uploading... ' + pct + '%';
+                    if (pct >= 100) {
+                        status.textContent = 'Erasing STM32 flash...';
+                    }
                 }
             };
             xhr.onload = function() {
+                window._stm32flashing = false;
                 if (xhr.status === 200) {
                     status.textContent = 'STM32 flashed OK — device rebooting';
                     status.style.color = '#4CAF50';
@@ -816,10 +824,12 @@
                 }
             };
             xhr.onerror = function() {
+                window._stm32flashing = false;
                 status.textContent = 'Upload failed (connection lost)';
                 status.style.color = '#f44336';
             };
             xhr.ontimeout = function() {
+                window._stm32flashing = false;
                 status.textContent = 'Timeout — flash may still be in progress';
                 status.style.color = '#FF9800';
             };
@@ -843,6 +853,16 @@
             ws.onmessage = function(ev) {
               try {
                 var d = JSON.parse(ev.data);
+
+                /* STM32 flash progress via WebSocket */
+                if (d.stm32flash !== undefined && window._stm32flashing) {
+                    var el = document.getElementById('stm32OtaStatus');
+                    if (el) {
+                        el.textContent = 'Flashing STM32... ' + d.stm32flash + '%';
+                        el.style.color = '#2196F3';
+                    }
+                    return;
+                }
 
                 /* Timestamp */
                 var now = new Date();

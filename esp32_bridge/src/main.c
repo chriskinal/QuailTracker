@@ -268,8 +268,31 @@ extern bool spi_initialized;
 extern void spi_slave_init(void);
 static void spi_task(void *arg);
 
+/* STM32 flash progress — updated by stm32_flash, read by status endpoint */
+static volatile int stm32_flash_pct = -1;  /* -1 = not flashing */
+
 #include "esp_partition.h"
 #define STM32FW_PARTITION_LABEL "stm32fw"
+
+static void stm32_flash_progress(int pct)
+{
+    stm32_flash_pct = pct;
+    /* Push progress over WebSocket so browser updates in real time */
+    if (ws_server) {
+        char json[48];
+        snprintf(json, sizeof(json), "{\"stm32flash\":%d}", pct);
+        ws_broadcast(json);
+    }
+}
+
+static esp_err_t flash_status_handler(httpd_req_t *req)
+{
+    char buf[32];
+    snprintf(buf, sizeof(buf), "{\"pct\":%d}", stm32_flash_pct);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, buf);
+    return ESP_OK;
+}
 
 static esp_err_t stm32_ota_handler(httpd_req_t *req)
 {
@@ -325,6 +348,7 @@ static esp_err_t stm32_ota_handler(httpd_req_t *req)
         }
     }
     ESP_LOGI(TAG, "Firmware staged (%d bytes), starting STM32 flash", received);
+    stm32_flash_pct = 0;
 
     /* Stage 2: Stop SPI task, free SPI slave, flash STM32 from partition */
     spi_task_stop = true;
@@ -338,7 +362,7 @@ static esp_err_t stm32_ota_handler(httpd_req_t *req)
         spi_initialized = false;
     }
 
-    int rc = stm32_flash_from_partition(part, (uint32_t)received);
+    int rc = stm32_flash_from_partition(part, (uint32_t)received, stm32_flash_progress);
 
     /* Re-initialize SPI slave and restart task */
     spi_slave_init();
@@ -346,6 +370,7 @@ static esp_err_t stm32_ota_handler(httpd_req_t *req)
     xTaskCreate(spi_task, "spi_task", 4096, NULL, 3, &spi_task_handle);
 
     if (rc != STM32_FLASH_OK) {
+        stm32_flash_pct = -1;
         char errmsg[64];
         snprintf(errmsg, sizeof(errmsg), "Flash failed (error %d)", rc);
         ESP_LOGE(TAG, "%s", errmsg);
@@ -353,8 +378,10 @@ static esp_err_t stm32_ota_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
+    stm32_flash_pct = 100;
     ESP_LOGI(TAG, "STM32 flash complete, device rebooted");
     httpd_resp_sendstr(req, "OK");
+    stm32_flash_pct = -1;
     return ESP_OK;
 }
 
@@ -396,6 +423,13 @@ static httpd_handle_t start_webserver(void)
             .handler = stm32_ota_handler,
         };
         httpd_register_uri_handler(server, &stm32_ota);
+
+        httpd_uri_t flash_status = {
+            .uri = "/flash_status",
+            .method = HTTP_GET,
+            .handler = flash_status_handler,
+        };
+        httpd_register_uri_handler(server, &flash_status);
 
         ESP_LOGI(TAG, "Web server started on port %d", config.server_port);
     }
@@ -721,7 +755,7 @@ static void spi_task(void *arg)
                     }
                 }
 
-                ESP_LOGI(TAG, "SPI rx len=%d", len);
+                /* SPI rx logging removed — runs 4x/sec, too noisy */
             }
         }
     }

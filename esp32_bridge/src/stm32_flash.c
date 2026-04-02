@@ -379,7 +379,8 @@ static void exit_bootloader(void)
 
 /* ── Main flash routine — reads firmware from ESP32 flash partition ── */
 
-int stm32_flash_from_partition(const esp_partition_t *part, uint32_t fw_size)
+int stm32_flash_from_partition(const esp_partition_t *part, uint32_t fw_size,
+                               stm32_flash_progress_cb_t progress_cb)
 {
     int rc = STM32_FLASH_OK;
 
@@ -440,9 +441,15 @@ int stm32_flash_from_partition(const esp_partition_t *part, uint32_t fw_size)
 
             offset += WRITE_CHUNK_SIZE;
 
-            /* Feed watchdog + log every 16KB */
+            /* Yield every 4KB to let IDLE task feed watchdog */
+            if ((offset % (4 * 1024)) == 0)
+                vTaskDelay(1);
+
+            /* Progress callback + log every 16KB */
             if ((offset % (16 * 1024)) == 0 || offset >= fw_size) {
-                esp_task_wdt_reset();
+                int pct = (int)(offset * 100 / fw_size);
+                if (pct > 100) pct = 100;
+                if (progress_cb) progress_cb(pct);
                 ESP_LOGI(TAG, "Written %lu / %lu bytes (%lu%%)",
                          (unsigned long)(offset > fw_size ? fw_size : offset),
                          (unsigned long)fw_size,

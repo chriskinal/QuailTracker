@@ -19,7 +19,11 @@
  * @param part       ESP32 partition containing firmware data
  * @param fw_size    Firmware size in bytes within the partition
  */
-int stm32_flash_from_partition(const esp_partition_t *part, uint32_t fw_size);
+/* Progress callback: called with percentage 0-100 */
+typedef void (*stm32_flash_progress_cb_t)(int pct);
+
+int stm32_flash_from_partition(const esp_partition_t *part, uint32_t fw_size,
+                               stm32_flash_progress_cb_t progress_cb);
 
 /* Error codes */
 #define STM32_FLASH_OK           0
