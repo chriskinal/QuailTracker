@@ -540,6 +540,16 @@
                 <button class="btn btn-gray" style="flex:1" onclick="saveConfig()">Save</button>
             </div>
             <div class="val-sm" style="text-align:center;margin-top:6px;color:#888" id="cfgStatus"></div>
+
+            <!-- ESP32 OTA Update -->
+            <div class="card" style="margin-top:12px">
+                <div class="lbl" style="margin-bottom:6px">ESP32 Firmware Update</div>
+                <input type="file" id="otaFile" accept=".bin" style="font-size:12px;margin-bottom:8px">
+                <div style="display:flex;gap:8px;align-items:center">
+                    <button class="btn btn-blue" style="flex:1" onclick="doOta()">Upload &amp; Flash</button>
+                </div>
+                <div class="val-sm" style="text-align:center;margin-top:6px;color:#888" id="otaStatus"></div>
+            </div>
         </div>
     </div>
 
@@ -721,6 +731,45 @@
             window._detCfgLoaded = false;
             window._schLoaded = false;
             document.getElementById('cfgStatus').textContent = 'Loading...';
+        }
+
+        function doOta() {
+            var fileInput = document.getElementById('otaFile');
+            var status = document.getElementById('otaStatus');
+            if (!fileInput.files.length) {
+                status.textContent = 'Select a .bin file first';
+                return;
+            }
+            var file = fileInput.files[0];
+            if (!file.name.endsWith('.bin')) {
+                status.textContent = 'File must be a .bin firmware image';
+                return;
+            }
+            status.textContent = 'Uploading ' + (file.size / 1024).toFixed(0) + ' KB...';
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/ota', true);
+            xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+            xhr.upload.onprogress = function(e) {
+                if (e.lengthComputable) {
+                    var pct = Math.round(e.loaded * 100 / e.total);
+                    status.textContent = 'Uploading... ' + pct + '%';
+                }
+            };
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    status.textContent = 'Update complete — ESP32 rebooting...';
+                    status.style.color = '#4CAF50';
+                    setTimeout(function() { location.reload(); }, 5000);
+                } else {
+                    status.textContent = 'Update failed: ' + xhr.responseText;
+                    status.style.color = '#f44336';
+                }
+            };
+            xhr.onerror = function() {
+                status.textContent = 'Upload failed (connection lost)';
+                status.style.color = '#f44336';
+            };
+            xhr.send(file);
         }
 
         function connect() {
