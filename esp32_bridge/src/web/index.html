@@ -550,6 +550,16 @@
                 </div>
                 <div class="val-sm" style="text-align:center;margin-top:6px;color:#888" id="otaStatus"></div>
             </div>
+
+            <!-- STM32 OTA Update -->
+            <div class="card" style="margin-top:12px">
+                <div class="lbl" style="margin-bottom:6px">STM32 Firmware Update</div>
+                <input type="file" id="stm32OtaFile" accept=".bin" style="font-size:12px;margin-bottom:8px">
+                <div style="display:flex;gap:8px;align-items:center">
+                    <button class="btn btn-blue" style="flex:1" onclick="doStm32Ota()">Upload &amp; Flash STM32</button>
+                </div>
+                <div class="val-sm" style="text-align:center;margin-top:6px;color:#888" id="stm32OtaStatus"></div>
+            </div>
         </div>
     </div>
 
@@ -768,6 +778,50 @@
             xhr.onerror = function() {
                 status.textContent = 'Upload failed (connection lost)';
                 status.style.color = '#f44336';
+            };
+            xhr.send(file);
+        }
+
+        function doStm32Ota() {
+            var fileInput = document.getElementById('stm32OtaFile');
+            var status = document.getElementById('stm32OtaStatus');
+            if (!fileInput.files.length) {
+                status.textContent = 'Select a .bin file first';
+                return;
+            }
+            var file = fileInput.files[0];
+            if (!file.name.endsWith('.bin')) {
+                status.textContent = 'File must be a .bin firmware image';
+                return;
+            }
+            status.textContent = 'Uploading ' + (file.size / 1024).toFixed(0) + ' KB...';
+            status.style.color = '#888';
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/ota_stm32', true);
+            xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+            xhr.timeout = 120000;  /* 2 min — erase + write takes time */
+            xhr.upload.onprogress = function(e) {
+                if (e.lengthComputable) {
+                    var pct = Math.round(e.loaded * 100 / e.total);
+                    status.textContent = 'Uploading... ' + pct + '%';
+                }
+            };
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    status.textContent = 'STM32 flashed OK — device rebooting';
+                    status.style.color = '#4CAF50';
+                } else {
+                    status.textContent = 'Flash failed: ' + xhr.responseText;
+                    status.style.color = '#f44336';
+                }
+            };
+            xhr.onerror = function() {
+                status.textContent = 'Upload failed (connection lost)';
+                status.style.color = '#f44336';
+            };
+            xhr.ontimeout = function() {
+                status.textContent = 'Timeout — flash may still be in progress';
+                status.style.color = '#FF9800';
             };
             xhr.send(file);
         }

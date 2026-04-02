@@ -34,6 +34,7 @@
 #include "esp_mac.h"
 #include "esp_ota_ops.h"
 #include "ble_beacon.h"
+#include "stm32_flash.h"
 
 #define TAG "BRIDGE"
 #define ESP_FW_VERSION "0.2.0"
@@ -49,7 +50,9 @@ static volatile bridge_power_t bridge_state = BRIDGE_LOW_POWER;
 static volatile uint32_t disconnect_tick = 0;   /* tick when BLE disconnected */
 static volatile bool stm32_sleeping = false;     /* true = STM32 in Stop 2 */
 static bool wifi_started = false;
-static bool spi_initialized = false;
+bool spi_initialized = false;
+static TaskHandle_t spi_task_handle = NULL;
+static volatile bool spi_task_stop = false;
 
 #define BLE_DISCONNECT_TIMEOUT_MS 30000  /* 30s before stopping WiFi */
 
@@ -255,6 +258,106 @@ static esp_err_t ota_handler(httpd_req_t *req)
     return ESP_OK;  /* never reached */
 }
 
+/* ── STM32 Firmware Flash Handler ──────────────────────────────── */
+
+/* Stage 1: Receive firmware via HTTP into the "stm32fw" flash partition.
+ * Stage 2: Read back from flash and write to STM32 via SPI bootloader.
+ * This avoids needing 330KB+ of heap — flash is the staging buffer. */
+
+extern bool spi_initialized;
+extern void spi_slave_init(void);
+static void spi_task(void *arg);
+
+#include "esp_partition.h"
+#define STM32FW_PARTITION_LABEL "stm32fw"
+
+static esp_err_t stm32_ota_handler(httpd_req_t *req)
+{
+    ESP_LOGI(TAG, "STM32 flash started, content_len=%d", req->content_len);
+
+    if (req->content_len <= 0 || req->content_len > 512 * 1024) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid firmware size");
+        return ESP_FAIL;
+    }
+
+    /* Find the staging partition */
+    const esp_partition_t *part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, 0x80, STM32FW_PARTITION_LABEL);
+    if (!part) {
+        ESP_LOGE(TAG, "stm32fw partition not found");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No staging partition");
+        return ESP_FAIL;
+    }
+
+    /* Erase the staging partition */
+    esp_err_t err = esp_partition_erase_range(part, 0, part->size);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Partition erase failed: %s", esp_err_to_name(err));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Erase failed");
+        return ESP_FAIL;
+    }
+
+    /* Stage 1: Receive firmware and write to flash partition */
+    int total = req->content_len;
+    int received = 0;
+    char buf[1024];
+
+    while (received < total) {
+        int ret = httpd_req_recv(req, buf, sizeof(buf));
+        if (ret <= 0) {
+            if (ret == HTTPD_SOCK_ERR_TIMEOUT) continue;
+            ESP_LOGE(TAG, "Receive error at %d/%d", received, total);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Receive error");
+            return ESP_FAIL;
+        }
+
+        err = esp_partition_write(part, received, buf, ret);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Partition write failed at %d: %s", received, esp_err_to_name(err));
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Write failed");
+            return ESP_FAIL;
+        }
+
+        received += ret;
+        if ((received % (64 * 1024)) == 0 || received == total) {
+            ESP_LOGI(TAG, "Staged %d / %d bytes (%d%%)",
+                     received, total, received * 100 / total);
+        }
+    }
+    ESP_LOGI(TAG, "Firmware staged (%d bytes), starting STM32 flash", received);
+
+    /* Stage 2: Stop SPI task, free SPI slave, flash STM32 from partition */
+    spi_task_stop = true;
+    /* Wait for SPI task to exit (it checks the flag every iteration) */
+    for (int i = 0; i < 50 && spi_task_handle != NULL; i++)
+        vTaskDelay(pdMS_TO_TICKS(100));
+    ESP_LOGI(TAG, "SPI task stopped");
+
+    if (spi_initialized) {
+        spi_slave_free(SPI_HOST);
+        spi_initialized = false;
+    }
+
+    int rc = stm32_flash_from_partition(part, (uint32_t)received);
+
+    /* Re-initialize SPI slave and restart task */
+    spi_slave_init();
+    spi_task_stop = false;
+    xTaskCreate(spi_task, "spi_task", 4096, NULL, 3, &spi_task_handle);
+
+    if (rc != STM32_FLASH_OK) {
+        char errmsg[64];
+        snprintf(errmsg, sizeof(errmsg), "Flash failed (error %d)", rc);
+        ESP_LOGE(TAG, "%s", errmsg);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, errmsg);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "STM32 flash complete, device rebooted");
+    httpd_resp_sendstr(req, "OK");
+    return ESP_OK;
+}
+
 static httpd_handle_t start_webserver(void)
 {
     if (ws_server) return ws_server;  /* already running */
@@ -286,6 +389,13 @@ static httpd_handle_t start_webserver(void)
             .handler = ota_handler,
         };
         httpd_register_uri_handler(server, &ota);
+
+        httpd_uri_t stm32_ota = {
+            .uri = "/ota_stm32",
+            .method = HTTP_POST,
+            .handler = stm32_ota_handler,
+        };
+        httpd_register_uri_handler(server, &stm32_ota);
 
         ESP_LOGI(TAG, "Web server started on port %d", config.server_port);
     }
@@ -472,7 +582,7 @@ static void stm32_pins_init(void)
 
 /* ── SPI Slave Init/Deinit ─────────────────────────────────────── */
 
-static void spi_slave_init(void)
+void spi_slave_init(void)
 {
     if (spi_initialized) return;
 
@@ -530,6 +640,12 @@ static bool json_get_str(const char *json, const char *key, char *buf, int bufle
 static void spi_task(void *arg)
 {
     while (1) {
+        if (spi_task_stop) {
+            ESP_LOGI(TAG, "SPI task stopping");
+            spi_task_handle = NULL;
+            vTaskDelete(NULL);
+            return;
+        }
         if (!spi_initialized) {
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
@@ -748,7 +864,7 @@ void app_main(void)
     start_webserver();
     spi_slave_init();
 
-    xTaskCreate(spi_task, "spi_task", 4096, NULL, 3, NULL);
+    xTaskCreate(spi_task, "spi_task", 4096, NULL, 3, &spi_task_handle);
     xTaskCreate(ws_push_task, "ws_push", 4096, NULL, 4, NULL);
     xTaskCreate(power_mgmt_task, "pwr_mgmt", 4096, NULL, 2, NULL);
 
