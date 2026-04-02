@@ -587,11 +587,22 @@ static void spi_task(void *arg)
                     bridge_state = BRIDGE_LOW_POWER;
                 }
 
-                /* SPI activity means STM32 is awake — if we were in LOW_POWER
-                 * and WiFi isn't started, transition to NORMAL_POWER */
-                if (bridge_state == BRIDGE_LOW_POWER && !stm32_sleeping) {
-                    bridge_state = BRIDGE_NORMAL_POWER;
-                    ESP_LOGI(TAG, "SPI activity detected — entering NORMAL_POWER");
+                /* Match ESP32 power state to STM32 power state.
+                 * PWR_SCHEDULED_NONREC (0) = STM32 sleeping → ESP32 LOW_POWER
+                 * PWR_DEV_MODE (3) or PWR_USER_CONNECTED (2) = ESP32 NORMAL_POWER
+                 * PWR_SCHEDULED_REC (1) = recording, no user → ESP32 LOW_POWER */
+                if (!ble_beacon_is_connected()) {
+                    if (last_pwr_state == 2 || last_pwr_state == 3) {
+                        if (bridge_state == BRIDGE_LOW_POWER) {
+                            bridge_state = BRIDGE_NORMAL_POWER;
+                            ESP_LOGI(TAG, "STM32 user/dev mode — NORMAL_POWER");
+                        }
+                    } else {
+                        if (bridge_state == BRIDGE_NORMAL_POWER && disconnect_tick == 0) {
+                            bridge_state = BRIDGE_LOW_POWER;
+                            ESP_LOGI(TAG, "STM32 sleep/rec mode — LOW_POWER");
+                        }
+                    }
                 }
 
                 ESP_LOGI(TAG, "SPI rx len=%d", len);
@@ -654,14 +665,26 @@ static void power_mgmt_task(void *arg)
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
 
-        /* Handle BLE disconnect timeout */
-        if (disconnect_tick != 0 && !ble_beacon_is_connected()) {
+        /* Check if any WiFi clients are connected */
+        wifi_sta_list_t sta_list;
+        int wifi_clients = 0;
+        if (wifi_started && esp_wifi_ap_get_sta_list(&sta_list) == ESP_OK) {
+            wifi_clients = sta_list.num;
+        }
+
+        /* Handle BLE disconnect timeout — only if no WiFi clients connected */
+        if (disconnect_tick != 0 && !ble_beacon_is_connected() && wifi_clients == 0) {
             uint32_t elapsed = (xTaskGetTickCount() - disconnect_tick) * portTICK_PERIOD_MS;
             if (elapsed >= BLE_DISCONNECT_TIMEOUT_MS) {
                 ESP_LOGI(TAG, "BLE disconnect timeout — switching to LOW_POWER");
                 bridge_state = BRIDGE_LOW_POWER;
                 disconnect_tick = 0;
             }
+        }
+
+        /* Reset timeout while WiFi clients are connected */
+        if (wifi_clients > 0 && disconnect_tick != 0) {
+            disconnect_tick = xTaskGetTickCount();  /* keep extending */
         }
 
         /* If BLE reconnected, cancel timeout */

@@ -1423,13 +1423,13 @@ static void MX_SPI1_Init(void)
 
 /**
   * @brief SPI2 Init — ESP32-C3 bridge
-  * PD1=SCK, PC3=MOSI, PD3=MISO, PD0=CS (GPIO software)
+  * PB13=SCK, PB15=MOSI, PB14=MISO, PB12=CS (GPIO software)
+  * These pins match the STM32U575 ROM bootloader SPI2 pinout (AN2606).
   */
 static void MX_SPI2_Init(void)
 {
     __HAL_RCC_SPI2_CLK_ENABLE();
-    __HAL_RCC_GPIOC_CLK_ENABLE();
-    __HAL_RCC_GPIOD_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
 
     GPIO_InitTypeDef gpio = {0};
     gpio.Mode = GPIO_MODE_AF_PP;
@@ -1437,24 +1437,24 @@ static void MX_SPI2_Init(void)
     gpio.Speed = GPIO_SPEED_FREQ_HIGH;
     gpio.Alternate = GPIO_AF5_SPI2;
 
-    /* PD1 = SPI2_SCK */
-    gpio.Pin = GPIO_PIN_1;
-    HAL_GPIO_Init(GPIOD, &gpio);
+    /* PB13 = SPI2_SCK */
+    gpio.Pin = GPIO_PIN_13;
+    HAL_GPIO_Init(GPIOB, &gpio);
 
-    /* PD3 = SPI2_MISO */
-    gpio.Pin = GPIO_PIN_3;
-    HAL_GPIO_Init(GPIOD, &gpio);
+    /* PB14 = SPI2_MISO */
+    gpio.Pin = GPIO_PIN_14;
+    HAL_GPIO_Init(GPIOB, &gpio);
 
-    /* PC3 = SPI2_MOSI */
-    gpio.Pin = GPIO_PIN_3;
-    HAL_GPIO_Init(GPIOC, &gpio);
+    /* PB15 = SPI2_MOSI */
+    gpio.Pin = GPIO_PIN_15;
+    HAL_GPIO_Init(GPIOB, &gpio);
 
-    /* PD0 = CS (GPIO output, start high/deselected) */
-    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_0, GPIO_PIN_SET);
-    gpio.Pin = GPIO_PIN_0;
+    /* PB12 = CS (GPIO output, start high/deselected) */
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET);
+    gpio.Pin = GPIO_PIN_12;
     gpio.Mode = GPIO_MODE_OUTPUT_PP;
     gpio.Alternate = 0;
-    HAL_GPIO_Init(GPIOD, &gpio);
+    HAL_GPIO_Init(GPIOB, &gpio);
 
     /* SPI2: master, 8-bit, mode 0, 5 MHz (160MHz/32) */
     hspi2.Instance = SPI2;
@@ -1866,18 +1866,18 @@ wake_source_t enterStop2(uint32_t seconds)
                  | (1u << (14+16))   /* PD14 GPS_WAKE      → LOW */
                  | (1u << (15+16));  /* PD15 GPS_nRESET    → LOW */
 
-    /* --- Phase 2: Configure PD0 (SPI2 CS) as EXTI input for ESP32 wake ---
-     * Save PD0 MODER, then reconfigure as input with pull-up.
-     * ESP32 pulls PD0 LOW for 10ms to wake STM32. */
-    uint32_t pd0_moder_save = GPIOD->MODER & (0x3u << (0*2));
-    uint32_t pd0_pupdr_save = GPIOD->PUPDR & (0x3u << (0*2));
-    GPIOD->MODER &= ~(0x3u << (0*2));         /* PD0 = input */
-    GPIOD->PUPDR &= ~(0x3u << (0*2));
-    GPIOD->PUPDR |=  (0x1u << (0*2));         /* PD0 = pull-up */
+    /* --- Phase 2: Configure PB12 (SPI2 CS) as EXTI input for ESP32 wake ---
+     * Save PB12 MODER, then reconfigure as input with pull-up.
+     * ESP32 pulls PB12 LOW for 10ms to wake STM32. */
+    uint32_t pb12_moder_save = GPIOB->MODER & (0x3u << (12*2));
+    uint32_t pb12_pupdr_save = GPIOB->PUPDR & (0x3u << (12*2));
+    GPIOB->MODER &= ~(0x3u << (12*2));        /* PB12 = input */
+    GPIOB->PUPDR &= ~(0x3u << (12*2));
+    GPIOB->PUPDR |=  (0x1u << (12*2));        /* PB12 = pull-up */
 
-    /* Enable EXTI0 falling edge (PD0) for ESP32 wake */
-    EXTI->FTSR1 |= EXTI_FTSR1_FT0;           /* falling edge trigger */
-    EXTI->IMR1  |= EXTI_IMR1_IM0;             /* unmask EXTI line 0 */
+    /* Enable EXTI12 falling edge (PB12) for ESP32 wake */
+    EXTI->FTSR1 |= EXTI_FTSR1_FT12;          /* falling edge trigger */
+    EXTI->IMR1  |= EXTI_IMR1_IM12;            /* unmask EXTI line 12 */
 
     /* Disable SysTick + HAL timebase (TIM17) to stop periodic ticks */
     SysTick->CTRL &= ~(SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk);
@@ -1905,7 +1905,7 @@ wake_source_t enterStop2(uint32_t seconds)
         NVIC->ICER[i] = 0xFFFFFFFFu;       /* disable all IRQs */
     }
     NVIC_EnableIRQ(RTC_IRQn);               /* enable RTC wake */
-    NVIC_EnableIRQ(EXTI0_IRQn);             /* enable ESP32 CS wake */
+    NVIC_EnableIRQ(EXTI12_IRQn);            /* enable ESP32 CS wake */
 
     /* Clear ALL pending: SysTick, PendSV, NVIC, and EXTI (both edges) */
     SCB->ICSR  = SCB_ICSR_PENDSTCLR_Msk | SCB_ICSR_PENDSVCLR_Msk;
@@ -1923,7 +1923,7 @@ wake_source_t enterStop2(uint32_t seconds)
 
     /* Determine wake source: check EXTI FPR1 bit 0 before clearing */
     wake_source_t wakeSource = WAKE_RTC;
-    if (EXTI->FPR1 & EXTI_FPR1_FPIF0) {
+    if (EXTI->FPR1 & EXTI_FPR1_FPIF12) {
         wakeSource = WAKE_ESP32;
     }
 
@@ -1939,16 +1939,16 @@ wake_source_t enterStop2(uint32_t seconds)
     HAL_RTCEx_DeactivateWakeUpTimer(&hrtc);
     __HAL_RTC_WRITEPROTECTION_ENABLE(&hrtc);
 
-    /* Disable EXTI0 (PD0) — no longer needed as wake source */
-    EXTI->FTSR1 &= ~EXTI_FTSR1_FT0;
-    EXTI->IMR1  &= ~EXTI_IMR1_IM0;
-    EXTI->FPR1   = EXTI_FPR1_FPIF0;    /* clear pending */
+    /* Disable EXTI12 (PB12) — no longer needed as wake source */
+    EXTI->FTSR1 &= ~EXTI_FTSR1_FT12;
+    EXTI->IMR1  &= ~EXTI_IMR1_IM12;
+    EXTI->FPR1   = EXTI_FPR1_FPIF12;   /* clear pending */
 
-    /* Restore PD0 to its original mode (SPI2 CS output) */
-    GPIOD->PUPDR &= ~(0x3u << (0*2));
-    GPIOD->PUPDR |= pd0_pupdr_save;
-    GPIOD->MODER &= ~(0x3u << (0*2));
-    GPIOD->MODER |= pd0_moder_save;
+    /* Restore PB12 to its original mode (SPI2 CS output) */
+    GPIOB->PUPDR &= ~(0x3u << (12*2));
+    GPIOB->PUPDR |= pb12_pupdr_save;
+    GPIOB->MODER &= ~(0x3u << (12*2));
+    GPIOB->MODER |= pb12_moder_save;
 
     /* Clear UART error flags accumulated during sleep (ORE from RX pins
      * disconnected from AF) and drain stale RDR before restoring GPIOs. */

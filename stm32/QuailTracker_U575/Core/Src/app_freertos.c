@@ -188,8 +188,8 @@ static uint8_t prevGpsValid = 0;  /* for GPS fix loss detection */
 
 /* SPI2 bridge to ESP32-C3 */
 extern SPI_HandleTypeDef hspi2;
-#define SPI2_CS_PORT  GPIOD
-#define SPI2_CS_PIN   GPIO_PIN_0
+#define SPI2_CS_PORT  GPIOB
+#define SPI2_CS_PIN   GPIO_PIN_12
 #define SPI2_BUF_SIZE 1024
 #define SPI2_POLL_MS  250  /* SPI command poll + status push interval */
 static uint32_t lastSpiPollTick = 0;

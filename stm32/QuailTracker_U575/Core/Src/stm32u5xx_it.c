@@ -241,10 +241,10 @@ void RTC_IRQHandler(void)
     HAL_RTCEx_WakeUpTimerIRQHandler(&hrtc);
 }
 
-void EXTI0_IRQHandler(void)
+void EXTI12_IRQHandler(void)
 {
-    /* ESP32 CS wake — clear pending, wake source checked in enterStop2() */
-    HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_0);
+    /* ESP32 CS wake (PB12) — clear pending, wake source checked in enterStop2() */
+    HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_12);
 }
 
 void EXTI4_IRQHandler(void)
