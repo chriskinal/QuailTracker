@@ -36,7 +36,7 @@ C5270988 is the non-SMPS variant — uses internal LDO, no external inductor.
 | GPS ON/OFF | PD14 | 61 | GPIO | Output | ATGM336H ON/OFF (pin 5) |
 | GPS RESET | PD15 | 62 | GPIO | Output, active low | ATGM336H nRESET (pin 9) |
 | GPS_VCC EN | PD12 | 59 | GPIO | Output | HIGH=GPS on, LOW=off |
-| ESP_VCC EN | PD10 | 57 | GPIO | Output | HIGH=ESP32 on, LOW=off |
+| (Available) | PD10 | 57 | - | Unassigned | Was BLE_VCC EN, load switch removed |
 | PERIPH_VCC EN | PD11 | 58 | GPIO | Output | HIGH=SD+SHT30 on, LOW=off |
 | Status LED | PD13 | 60 | GPIO | Output | Via 1k R9 to LED1 |
 | Solar CHRG | PB0 | 35 | GPIO | Input, active low | CN3791 charging indicator (open drain + 10k pull-up) |
@@ -151,10 +151,12 @@ then becomes SPI master to flash the STM32 using AN4286 protocol.
 | GPIO7 | SPI2_NSS | PB12 (pin 51) | Chip select, active low |
 | GPIO2 | STM32_NRST | NRST (pin 14) | Reset for OTA flash (normally hi-Z) |
 | GPIO3 | STM32_BOOT0 | PH3 (pin 94) | Boot mode for OTA flash (normally hi-Z) |
-| 3V3 | ESP_VCC | U5 output | Switched rail on PD10 |
+| 3V3 | 3V3 | Always-on LDO output | Must be always-on — see deadlock note below |
 | GND | GND | GND plane | |
 
 **Antenna keep-out:** 2mm deep × module width, no copper either layer under ceramic antenna.
+
+**Power deadlock:** The ESP32 MUST be on the always-on 3V3 rail. When unpowered, the ESP32 GPIO2 (NRST) ESD protection diode clamps the STM32 NRST line low, preventing boot. A switched rail creates a deadlock: STM32 can't boot to enable the switch, ESP32 can't release NRST without power. Series resistors (1k–10k tested) do not resolve this.
 
 ### SPI1 — SD Card
 
@@ -181,7 +183,7 @@ Available GPIOs not assigned (configure as analog input for lowest leakage):
 
 PE0-PE6, PE7, PE8, PE11-PE15, PA0, PA1, PA2, PA3, PA11, PA12, PA15,
 PB2, PB4, PB5, PB8-PB10, PC1, PC2, PC3, PC5-PC9, PC10-PC12,
-PD0-PD9, PH0, PH1
+PD0-PD10, PH0, PH1
 
 Note: PB11 is NOT bonded out on LQFP100 (neither SMPS nor non-SMPS variant).
 
@@ -192,7 +194,7 @@ Note: PB11 is NOT bonded out on LQFP100 (neither SMPS nor non-SMPS variant).
 2. **MCU** — U1 (STM32U575VGT6), X1 (LSE crystal), R6 (BOOT0 pull-down)
 3. **Audio** — CN2 (JST PH 4-pin to mic breakout: CLK, DATA, VDD, GND)
 4. **GPS** — U2 (ATGM336H-5N31), U4 (TPS22916 load switch for GPS_VCC), L1 (47nH bias tee), J1 (U.FL antenna), C17 (10uF GPS_VCC decoupling)
-4a. **ESP32 Power** — U5 (TPS22916 load switch for ESP_VCC), C19 (1uF output cap)
+4a. **ESP32 Power** — Direct from 3V3 rail (always-on), 100nF decoupling cap near ESP32
 4b. **Peripheral Power** — U6 (TPS22916 load switch for PERIPH_VCC), C18 (1uF output cap)
 
 5. **Storage** — CARD1 (MicroSD slot), SPI1 on PA4-PA7

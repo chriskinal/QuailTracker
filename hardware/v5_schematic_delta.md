@@ -14,6 +14,8 @@ Changes from V4:
 | Item | Description | Reason |
 |------|-------------|--------|
 | COMM1 | PB-03F BLE module | Replaced by ESP32-C3 |
+| U5 | TPS22919 load switch (was BLE_VCC / ESP_VCC) | ESP32 on always-on 3V3 — switched rail causes boot deadlock |
+| C19 | 1uF output cap for U5 | U5 deleted |
 | USART2 wiring | PA2 (TX) / PA3 (RX) to PB-03F | No longer needed — ESP32 uses SPI |
 
 ---
@@ -38,10 +40,10 @@ Castellated module, mounted as SMD component. Ceramic antenna overhangs board ed
 | ESP32 Pin | Net | Source |
 |-----------|-----|--------|
 | 5V / VIN | - | Not used (powered via 3V3) |
-| 3V3 | **ESP_VCC** | From U5 (TPS22916 load switch on PD10) |
+| 3V3 | **3V3** | Always-on 3.3V rail (direct from LDO) |
 | GND | **GND** | Ground plane |
 
-**Note:** The ESP32-C3 Super Mini has no exposed RST pin on the headers. Power cycling via PD10 (ESP_VCC load switch) is the only way to hard-reset the ESP32 externally.
+**Note:** The ESP32 must be on the always-on 3V3 rail, not a switched rail. When unpowered, the ESP32 GPIO2 (NRST) ESD protection diode clamps the STM32 NRST line low, preventing boot. Series resistors (tested 1k–10k) do not resolve this. The ESP32-C3 Super Mini has no exposed RST/EN pin, so there is no external hard-reset mechanism — the ESP32 stays powered whenever the battery is connected.
 
 ### ESP32 Antenna Keep-Out
 
@@ -57,8 +59,7 @@ The ceramic antenna extends past the castellated pads. On the production PCB:
 
 | Net | Change | Details |
 |-----|--------|---------|
-| **ESP_VCC** (was BLE_VCC) | Renamed | Same load switch U5 (TPS22916), same enable pin PD10. Now powers ESP32 instead of PB-03F. |
-| **3V3** | Remove: COMM1.VCC | PB-03F no longer present. Add: nothing (ESP32 powered via ESP_VCC) |
+| **3V3** | Remove: COMM1.VCC (PB-03F). Add: ESPMOD1.3V3 | ESP32 powered directly from always-on 3V3 rail. |
 | **GND** | Remove: COMM1.GND | Add: ESPMOD1.GND |
 
 ---
@@ -80,7 +81,7 @@ These are existing nets from V3/V4. Just add the ESP32 pin to the net label.
 |-----|---------|---------------------|
 | **NRST** | ESPMOD1.GPIO2 | U1.pin14, C10, SW1. ESP32 normally hi-Z, drives low for OTA reset. |
 | **BOOT0** | ESPMOD1.GPIO3 | U1.pin94 (PH3), R6 (10k pull-down), SW2. ESP32 normally hi-Z, drives high for OTA bootloader entry. |
-| **ESP_VCC** | ESPMOD1.3V3 | U5.VOUT, C19. Same net as V4 BLE_VCC, renamed. |
+| **3V3** | ESPMOD1.3V3 | Always-on rail. ESP32 must be on this rail (see power note above). |
 | **GND** | ESPMOD1.GND | Existing ground plane. |
 
 ---
@@ -115,7 +116,7 @@ These pins were used by V3/V4 for the PB-03F or old SPI2 routing and are now ava
 | 52 | PB13 | Unassigned | SPI2_SCK (ESP32 clock) |
 | 53 | PB14 | Unassigned | SPI2_MISO (ESP32 data in) |
 | 54 | PB15 | Unassigned | SPI2_MOSI (ESP32 data out) |
-| 57 | PD10 | BLE_VCC EN | ESP_VCC EN (renamed) |
+| 57 | PD10 | BLE_VCC EN | Unassigned (load switch removed) |
 
 ---
 
@@ -125,7 +126,8 @@ These pins were used by V3/V4 for the PB-03F or old SPI2 routing and are now ava
 |------------|----|----|
 | COMM1 | PB-03F BLE module | **Deleted** |
 | ESPMOD1 | - | **New** — ESP32-C3 Super Mini module |
-| U5 | TPS22916 (BLE_VCC switch) | TPS22916 (ESP_VCC switch) — same part, renamed net |
+| U5 | TPS22916 (BLE_VCC switch) | **Deleted** — ESP32 on always-on 3V3 |
+| C19 | 1uF (BLE_VCC output cap) | **Deleted** — U5 removed |
 
 ---
 
@@ -134,7 +136,7 @@ These pins were used by V3/V4 for the PB-03F or old SPI2 routing and are now ava
 - **ESPMOD1 placement:** Board edge or near edge, antenna side facing outward or over keep-out zone. Castellated pads for SMD assembly.
 - **SPI2 traces (PB12-PB15 to ESP32):** Keep reasonably short (<30mm). Match lengths not critical at 2-5 MHz SPI clock.
 - **NRST/BOOT0 traces:** Can be longer — only used during OTA flash, not timing-critical.
-- **ESP_VCC load switch (U5):** Same placement as V4 BLE_VCC switch. Output cap C19 close to ESP32 3V3 input.
+- **ESP32 power:** Direct connection to 3V3 rail. Add 100nF decoupling cap close to ESP32 3V3 pin.
 - **Antenna keep-out:** 2mm deep, full module width, no copper either layer. Verified under microscope on actual Super Mini module.
 - **Solar charger (L2, M1, D1):** Keep away from ESP32 antenna area — switching noise can degrade WiFi/BLE performance.
 
@@ -145,6 +147,6 @@ These pins were used by V3/V4 for the PB-03F or old SPI2 routing and are now ava
 | Action | Designator | Part | LCSC | Notes |
 |--------|------------|------|------|-------|
 | **Remove** | COMM1 | PB-03F BLE module | - | No longer used |
+| **Remove** | U5 | TPS22919 load switch | - | ESP32 boot deadlock — must be on always-on 3V3 |
+| **Remove** | C19 | 1uF output cap | - | U5 removed |
 | **Add** | ESPMOD1 | ESP32-C3 Super Mini | - | Castellated module, hand-solder or custom JLCPCB assembly |
-
-All other BOM items unchanged from V4. The TPS22916 load switch (U5) and its output cap (C19) are retained — only the net name changes from BLE_VCC to ESP_VCC.
