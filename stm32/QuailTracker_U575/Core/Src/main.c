@@ -607,6 +607,9 @@ void printStatus(void)
     }
     printf("  Humidity: %u.%u%%\r\n",
            (unsigned)(sht30HumRH100 / 100), (unsigned)(sht30HumRH100 / 10 % 10));
+    printf("  Pressure: %lu.%02lu hPa\r\n",
+           (unsigned long)(dev.env.pressurePa / 100),
+           (unsigned long)(dev.env.pressurePa % 100));
 
     printf("Firmware:\r\n");
     printf("  STM32:  %s\r\n", FW_VERSION);
@@ -1685,46 +1688,149 @@ static void MX_I2C1_Init(void)
         printf("I2C1: Filter FAILED\r\n");
         return;
     }
-    printf("I2C1: OK (100kHz, SHT30 @ 0x44)\r\n");
+    printf("I2C1: OK (100kHz, BME280 @ 0x76)\r\n");
 }
 
-/* ---- SHT30 CRC-8 (poly 0x31, init 0xFF) ---- */
-static uint8_t sht30Crc(const uint8_t *data, uint8_t len)
+/* ---- BME280 temperature/humidity/pressure sensor ---- */
+
+#define BME280_ADDR  (0x76 << 1)  /* SDO pin to GND */
+
+/* Compensation parameters (loaded once from chip NVM) */
+static struct {
+    uint16_t dig_T1;
+    int16_t  dig_T2, dig_T3;
+    uint16_t dig_P1;
+    int16_t  dig_P2, dig_P3, dig_P4, dig_P5, dig_P6, dig_P7, dig_P8, dig_P9;
+    uint8_t  dig_H1, dig_H3;
+    int16_t  dig_H2, dig_H4, dig_H5;
+    int8_t   dig_H6;
+    uint8_t  loaded;
+} bme_cal;
+
+static int32_t bme_t_fine;  /* shared between temp and pressure/humidity compensation */
+
+static void bme280LoadCal(void)
 {
-    uint8_t crc = 0xFF;
-    for (uint8_t i = 0; i < len; i++) {
-        crc ^= data[i];
-        for (uint8_t b = 0; b < 8; b++)
-            crc = (crc & 0x80) ? ((crc << 1) ^ 0x31) : (crc << 1);
-    }
-    return crc;
+    if (bme_cal.loaded) return;
+
+    uint8_t buf[26];
+    uint8_t reg = 0x88;
+    if (HAL_I2C_Master_Transmit(&hi2c1, BME280_ADDR, &reg, 1, 100) != HAL_OK) return;
+    if (HAL_I2C_Master_Receive(&hi2c1, BME280_ADDR, buf, 26, 100) != HAL_OK) return;
+
+    bme_cal.dig_T1 = (uint16_t)(buf[1] << 8 | buf[0]);
+    bme_cal.dig_T2 = (int16_t)(buf[3] << 8 | buf[2]);
+    bme_cal.dig_T3 = (int16_t)(buf[5] << 8 | buf[4]);
+    bme_cal.dig_P1 = (uint16_t)(buf[7] << 8 | buf[6]);
+    bme_cal.dig_P2 = (int16_t)(buf[9] << 8 | buf[8]);
+    bme_cal.dig_P3 = (int16_t)(buf[11] << 8 | buf[10]);
+    bme_cal.dig_P4 = (int16_t)(buf[13] << 8 | buf[12]);
+    bme_cal.dig_P5 = (int16_t)(buf[15] << 8 | buf[14]);
+    bme_cal.dig_P6 = (int16_t)(buf[17] << 8 | buf[16]);
+    bme_cal.dig_P7 = (int16_t)(buf[19] << 8 | buf[18]);
+    bme_cal.dig_P8 = (int16_t)(buf[21] << 8 | buf[20]);
+    bme_cal.dig_P9 = (int16_t)(buf[23] << 8 | buf[22]);
+
+    /* dig_H1 at 0xA1 */
+    reg = 0xA1;
+    if (HAL_I2C_Master_Transmit(&hi2c1, BME280_ADDR, &reg, 1, 100) != HAL_OK) return;
+    if (HAL_I2C_Master_Receive(&hi2c1, BME280_ADDR, &bme_cal.dig_H1, 1, 100) != HAL_OK) return;
+
+    /* dig_H2..H6 at 0xE1-0xE7 */
+    uint8_t hbuf[7];
+    reg = 0xE1;
+    if (HAL_I2C_Master_Transmit(&hi2c1, BME280_ADDR, &reg, 1, 100) != HAL_OK) return;
+    if (HAL_I2C_Master_Receive(&hi2c1, BME280_ADDR, hbuf, 7, 100) != HAL_OK) return;
+
+    bme_cal.dig_H2 = (int16_t)(hbuf[1] << 8 | hbuf[0]);
+    bme_cal.dig_H3 = hbuf[2];
+    bme_cal.dig_H4 = (int16_t)((int16_t)hbuf[3] << 4 | (hbuf[4] & 0x0F));
+    bme_cal.dig_H5 = (int16_t)((int16_t)hbuf[5] << 4 | (hbuf[4] >> 4));
+    bme_cal.dig_H6 = (int8_t)hbuf[6];
+
+    bme_cal.loaded = 1;
 }
 
-/* Read SHT30 single-shot, high repeatability, no clock stretch.
- * Updates sht30TempC100 and sht30HumRH100.  Silently keeps old values on error. */
+static int32_t bme280CompTemp(int32_t adc_T)
+{
+    int32_t var1 = ((((adc_T >> 3) - ((int32_t)bme_cal.dig_T1 << 1))) *
+                    ((int32_t)bme_cal.dig_T2)) >> 11;
+    int32_t var2 = (((((adc_T >> 4) - ((int32_t)bme_cal.dig_T1)) *
+                      ((adc_T >> 4) - ((int32_t)bme_cal.dig_T1))) >> 12) *
+                    ((int32_t)bme_cal.dig_T3)) >> 14;
+    bme_t_fine = var1 + var2;
+    return (bme_t_fine * 5 + 128) >> 8;  /* 0.01 °C */
+}
+
+static uint32_t bme280CompPress(int32_t adc_P)
+{
+    int64_t var1 = ((int64_t)bme_t_fine) - 128000;
+    int64_t var2 = var1 * var1 * (int64_t)bme_cal.dig_P6;
+    var2 = var2 + ((var1 * (int64_t)bme_cal.dig_P5) << 17);
+    var2 = var2 + (((int64_t)bme_cal.dig_P4) << 35);
+    var1 = ((var1 * var1 * (int64_t)bme_cal.dig_P3) >> 8) +
+           ((var1 * (int64_t)bme_cal.dig_P2) << 12);
+    var1 = (((((int64_t)1) << 47) + var1)) * ((int64_t)bme_cal.dig_P1) >> 33;
+    if (var1 == 0) return 0;
+    int64_t p = 1048576 - adc_P;
+    p = (((p << 31) - var2) * 3125) / var1;
+    var1 = (((int64_t)bme_cal.dig_P9) * (p >> 13) * (p >> 13)) >> 25;
+    var2 = (((int64_t)bme_cal.dig_P8) * p) >> 19;
+    p = ((p + var1 + var2) >> 8) + (((int64_t)bme_cal.dig_P7) << 4);
+    return (uint32_t)(p >> 8);  /* Pa */
+}
+
+static uint32_t bme280CompHum(int32_t adc_H)
+{
+    int32_t v = bme_t_fine - 76800;
+    v = (((((adc_H << 14) - (((int32_t)bme_cal.dig_H4) << 20) -
+            (((int32_t)bme_cal.dig_H5) * v)) + 16384) >> 15) *
+         (((((((v * ((int32_t)bme_cal.dig_H6)) >> 10) *
+              (((v * ((int32_t)bme_cal.dig_H3)) >> 11) + 32768)) >> 10) +
+            2097152) * ((int32_t)bme_cal.dig_H2) + 8192) >> 14));
+    v = v - (((((v >> 15) * (v >> 15)) >> 7) * ((int32_t)bme_cal.dig_H1)) >> 4);
+    if (v < 0) v = 0;
+    if (v > 419430400) v = 419430400;
+    return (uint32_t)(v >> 12);  /* Q22.10 format → divide by 1024 for %RH */
+}
+
+/* Read BME280 forced mode.
+ * Updates sht30TempC100, sht30HumRH100, and dev.env.pressurePa.
+ * Function name kept as sht30Read for compatibility with existing callers. */
 void sht30Read(void)
 {
-    uint8_t cmd[2] = { 0x24, 0x00 };
-    if (HAL_I2C_Master_Transmit(&hi2c1, 0x44 << 1, cmd, 2, 100) != HAL_OK)
-        return;
+    bme280LoadCal();
+    if (!bme_cal.loaded) return;
 
-    HAL_Delay(16);  /* 15 ms max for high repeatability */
+    /* Configure: humidity oversampling x1 (must be set before ctrl_meas) */
+    uint8_t cfg[2];
+    cfg[0] = 0xF2; cfg[1] = 0x01;  /* ctrl_hum: osrs_h = x1 */
+    HAL_I2C_Master_Transmit(&hi2c1, BME280_ADDR, cfg, 2, 100);
 
-    uint8_t rx[6];
-    if (HAL_I2C_Master_Receive(&hi2c1, 0x44 << 1, rx, 6, 100) != HAL_OK)
-        return;
+    /* Configure: temp x1, pressure x1, forced mode */
+    cfg[0] = 0xF4; cfg[1] = 0x25;  /* ctrl_meas: osrs_t=x1, osrs_p=x1, mode=forced */
+    HAL_I2C_Master_Transmit(&hi2c1, BME280_ADDR, cfg, 2, 100);
 
-    /* Verify CRC on both words */
-    if (sht30Crc(rx, 2) != rx[2] || sht30Crc(rx + 3, 2) != rx[5])
-        return;
+    HAL_Delay(10);  /* Forced mode measurement time ~8ms */
 
-    uint16_t rawT = ((uint16_t)rx[0] << 8) | rx[1];
-    uint16_t rawH = ((uint16_t)rx[3] << 8) | rx[4];
+    /* Read all data registers 0xF7-0xFE (8 bytes: press[3], temp[3], hum[2]) */
+    uint8_t reg = 0xF7;
+    uint8_t rx[8];
+    if (HAL_I2C_Master_Transmit(&hi2c1, BME280_ADDR, &reg, 1, 100) != HAL_OK) return;
+    if (HAL_I2C_Master_Receive(&hi2c1, BME280_ADDR, rx, 8, 100) != HAL_OK) return;
 
-    /* temp = -45 + 175 * rawT / 65535  →  in 0.01 °C units */
-    sht30TempC100 = (int16_t)(-4500 + (int32_t)17500 * rawT / 65535);
-    /* hum = 100 * rawH / 65535  →  in 0.01 %RH units */
-    sht30HumRH100 = (uint16_t)((uint32_t)10000 * rawH / 65535);
+    int32_t adc_P = ((int32_t)rx[0] << 12) | ((int32_t)rx[1] << 4) | (rx[2] >> 4);
+    int32_t adc_T = ((int32_t)rx[3] << 12) | ((int32_t)rx[4] << 4) | (rx[5] >> 4);
+    int32_t adc_H = ((int32_t)rx[6] << 8) | rx[7];
+
+    /* Compensate — must do temp first (sets bme_t_fine) */
+    int32_t tempC100 = bme280CompTemp(adc_T);
+    uint32_t pressPa = bme280CompPress(adc_P);
+    uint32_t humQ10  = bme280CompHum(adc_H);
+
+    sht30TempC100 = (int16_t)tempC100;
+    sht30HumRH100 = (uint16_t)(humQ10 * 100 / 1024);  /* Q22.10 → 0.01 %RH */
+    dev.env.pressurePa = pressPa;
 }
 
 static void MX_RTC_Init(void)

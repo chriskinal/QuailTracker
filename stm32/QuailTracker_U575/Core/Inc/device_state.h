@@ -147,8 +147,9 @@ typedef struct {
 
     struct {
         uint32_t batteryMv;
-        int16_t  tempC100;        /* was sht30TempC100 */
-        uint16_t humRH100;        /* was sht30HumRH100 */
+        int16_t  tempC100;        /* 0.01 °C units */
+        uint16_t humRH100;        /* 0.01 %RH units */
+        uint32_t pressurePa;     /* pressure in Pascals (101325 = 1 atm) */
     } env;
 
     struct {
