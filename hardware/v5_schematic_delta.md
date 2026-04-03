@@ -30,8 +30,8 @@ Castellated module, mounted as SMD component. Ceramic antenna overhangs board ed
 | MISO | GPIO5 | **SPI2_MISO** | PB14 | 53 | SPI data (STM32→ESP32) |
 | MOSI | GPIO6 | **SPI2_MOSI** | PB15 | 54 | SPI data (ESP32→STM32) |
 | SS | GPIO7 | **SPI2_NSS** | PB12 | 51 | SPI chip select |
-| GPIO2 | GPIO2 | **STM32_NRST** | NRST | 14 | STM32 reset (for OTA flash) |
-| GPIO3 | GPIO3 | **STM32_BOOT0** | PH3 | 94 | STM32 boot mode (for OTA flash) |
+| GPIO2 | GPIO2 | **NRST** | NRST | 14 | Existing net — shared with C10, SW1 |
+| GPIO3 | GPIO3 | **BOOT0** | PH3 | 94 | Existing net — shared with R6, SW2 |
 
 ### ESP32 Power
 
@@ -71,12 +71,17 @@ The ceramic antenna extends past the castellated pads. On the production PCB:
 | **SPI2_MISO** | SPI2 master-in slave-out | U1.pin53 (PB14), ESPMOD1.GPIO5 |
 | **SPI2_MOSI** | SPI2 master-out slave-in | U1.pin54 (PB15), ESPMOD1.GPIO6 |
 | **SPI2_NSS** | SPI2 chip select | U1.pin51 (PB12), ESPMOD1.GPIO7 |
-| **STM32_NRST** | STM32 reset (shared with existing NRST net) | U1.pin14 (NRST), ESPMOD1.GPIO2 |
-| **STM32_BOOT0** | STM32 boot mode select | U1.pin94 (PH3/BOOT0), ESPMOD1.GPIO3 |
 
-**Note:** STM32_NRST connects to the existing NRST net (which already has C10 100nF decoupling and SW1 reset button). The ESP32 GPIO2 is normally high-impedance (input mode) and only drives low during OTA flash operations.
+## Existing Nets — New Connections
 
-**Note:** STM32_BOOT0 connects to the existing BOOT0 net (which has R6 10k pull-down). ESP32 GPIO3 is normally high-impedance. During OTA flash, ESP32 drives it HIGH to enter bootloader, then releases to high-Z.
+These are existing nets from V3/V4. Just add the ESP32 pin to the net label.
+
+| Net | Add Pin | Existing Pins on Net |
+|-----|---------|---------------------|
+| **NRST** | ESPMOD1.GPIO2 | U1.pin14, C10, SW1. ESP32 normally hi-Z, drives low for OTA reset. |
+| **BOOT0** | ESPMOD1.GPIO3 | U1.pin94 (PH3), R6 (10k pull-down), SW2. ESP32 normally hi-Z, drives high for OTA bootloader entry. |
+| **ESP_VCC** | ESPMOD1.3V3 | U5.VOUT, C19. Same net as V4 BLE_VCC, renamed. |
+| **GND** | ESPMOD1.GND | Existing ground plane. |
 
 ---
 
