@@ -33,6 +33,8 @@
 #include "esp_netif.h"
 #include "esp_mac.h"
 #include "esp_ota_ops.h"
+#include "lwip/sockets.h"
+#include "lwip/netdb.h"
 #include "ble_beacon.h"
 #include "stm32_flash.h"
 
@@ -159,6 +161,16 @@ static esp_err_t root_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html");
     httpd_resp_send(req, (const char *)src_web_index_html, src_web_index_html_len);
+    return ESP_OK;
+}
+
+/* Catch-all: any URL redirects to root page.
+ * User instruction: connect to WiFi, open any URL (e.g. qt.com). */
+static esp_err_t catchall_redirect_handler(httpd_req_t *req)
+{
+    httpd_resp_set_status(req, "302 Found");
+    httpd_resp_set_hdr(req, "Location", "http://192.168.9.1/");
+    httpd_resp_sendstr(req, "");
     return ESP_OK;
 }
 
@@ -397,7 +409,8 @@ static httpd_handle_t start_webserver(void)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = 8;
-    config.stack_size = 8192;  /* OTA needs more stack for receive + write */
+    config.stack_size = 8192;
+    config.uri_match_fn = httpd_uri_match_wildcard;  /* enable wildcard URI matching */
     httpd_handle_t server = NULL;
 
     if (httpd_start(&server, &config) == ESP_OK) {
@@ -436,6 +449,15 @@ static httpd_handle_t start_webserver(void)
             .handler = flash_status_handler,
         };
         httpd_register_uri_handler(server, &flash_status);
+
+        /* Catch-all: any unknown URL → redirect to root.
+         * Must be registered LAST — wildcard matches everything. */
+        httpd_uri_t catchall = {
+            .uri = "/*",
+            .method = HTTP_GET,
+            .handler = catchall_redirect_handler,
+        };
+        httpd_register_uri_handler(server, &catchall);
 
         ESP_LOGI(TAG, "Web server started on port %d", config.server_port);
     }
@@ -817,6 +839,73 @@ static void on_ble_disconnect(void)
 
 /* ── Power Management Task ─────────────────────────────────────── */
 
+/* ── Captive Portal DNS Server ──────────────────────────────────── */
+
+/* Minimal DNS server: responds to ALL queries with 192.168.9.1.
+ * This makes the phone think it needs to "log in", triggering the
+ * captive portal popup which loads our web UI automatically. */
+static void dns_task(void *arg)
+{
+    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sock < 0) {
+        ESP_LOGE(TAG, "DNS: socket failed");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    struct sockaddr_in saddr = {
+        .sin_family = AF_INET,
+        .sin_port = htons(53),
+        .sin_addr.s_addr = htonl(INADDR_ANY),
+    };
+    if (bind(sock, (struct sockaddr *)&saddr, sizeof(saddr)) < 0) {
+        ESP_LOGE(TAG, "DNS: bind failed");
+        close(sock);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_LOGI(TAG, "DNS captive portal started on port 53");
+
+    uint8_t buf[512];
+    while (1) {
+        struct sockaddr_in client;
+        socklen_t clen = sizeof(client);
+        int len = recvfrom(sock, buf, sizeof(buf), 0, (struct sockaddr *)&client, &clen);
+        if (len < 12) continue;  /* too short for DNS header */
+
+        /* Build response: copy query, set response flags, append answer */
+        uint8_t resp[512];
+        memcpy(resp, buf, len);
+
+        /* Set QR=1 (response), AA=1 (authoritative), RA=1 */
+        resp[2] = 0x84;  /* QR=1, Opcode=0, AA=1, TC=0, RD=0 */
+        resp[3] = 0x00;  /* RA=0, Z=0, RCODE=0 (no error) */
+
+        /* Answer count = 1 */
+        resp[6] = 0x00;
+        resp[7] = 0x01;
+
+        /* Append answer: pointer to name in query + type A + class IN + TTL + IP */
+        int pos = len;
+        resp[pos++] = 0xC0;  /* pointer to name at offset 12 */
+        resp[pos++] = 0x0C;
+        resp[pos++] = 0x00; resp[pos++] = 0x01;  /* type A */
+        resp[pos++] = 0x00; resp[pos++] = 0x01;  /* class IN */
+        resp[pos++] = 0x00; resp[pos++] = 0x00;
+        resp[pos++] = 0x00; resp[pos++] = 0x0A;  /* TTL = 10s */
+        resp[pos++] = 0x00; resp[pos++] = 0x04;  /* data length = 4 */
+        resp[pos++] = 192;                        /* 192.168.9.1 */
+        resp[pos++] = 168;
+        resp[pos++] = 9;
+        resp[pos++] = 1;
+
+        sendto(sock, resp, pos, 0, (struct sockaddr *)&client, clen);
+    }
+}
+
+/* ── Power Management Task ─────────────────────────────────────── */
+
 static void power_mgmt_task(void *arg)
 {
     bridge_power_t prev_state = BRIDGE_LOW_POWER;
@@ -939,6 +1028,7 @@ void app_main(void)
     xTaskCreate(spi_task, "spi_task", 4096, NULL, 3, &spi_task_handle);
     xTaskCreate(ws_push_task, "ws_push", 4096, NULL, 4, NULL);
     xTaskCreate(power_mgmt_task, "pwr_mgmt", 4096, NULL, 2, NULL);
+    xTaskCreate(dns_task, "dns", 4096, NULL, 2, NULL);
 
     ESP_LOGI(TAG, "Bridge ready — BLE Beacon + WiFi AP + SPI + WebSocket");
 }
