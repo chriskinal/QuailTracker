@@ -32,6 +32,7 @@
 #include "nvs_flash.h"
 #include "esp_netif.h"
 #include "esp_mac.h"
+#include "esp_sleep.h"
 #include "esp_ota_ops.h"
 #include "lwip/sockets.h"
 #include "lwip/netdb.h"
@@ -53,11 +54,12 @@ static volatile uint32_t disconnect_tick = 0;   /* tick when BLE disconnected */
 static volatile bool stm32_sleeping = false;     /* true = STM32 in Stop 2 */
 static bool wifi_started = false;
 
-/* WiFi duty cycle for low-power mode: on 15s, off 45s.
+/* WiFi duty cycle for low-power mode: on 20s, deep sleep 40s.
+ * During deep sleep the ESP32 draws ~5µA instead of 44mA.
  * Disabled by default — WiFi stays on continuously. */
 static bool wifi_duty_cycle = false;
-#define WIFI_DUTY_ON_MS   15000
-#define WIFI_DUTY_OFF_MS  45000
+#define WIFI_DUTY_ON_MS   20000
+#define WIFI_DUTY_SLEEP_S 40
 bool spi_initialized = false;
 static TaskHandle_t spi_task_handle = NULL;
 static volatile bool spi_task_stop = false;
@@ -197,13 +199,14 @@ static esp_err_t esp_config_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-/* Catch-all: any URL redirects to root page.
- * User instruction: connect to WiFi, open any URL (e.g. qt.com). */
-static esp_err_t catchall_redirect_handler(httpd_req_t *req)
+/* Catch-all: return 204 for everything not matched by registered handlers.
+ * This satisfies ALL captive portal probes (Android, iOS, Windows) so
+ * the phone accepts the connection without showing a portal popup.
+ * User types any URL → DNS resolves to us → root handler serves the page. */
+static esp_err_t catchall_handler(httpd_req_t *req)
 {
-    httpd_resp_set_status(req, "302 Found");
-    httpd_resp_set_hdr(req, "Location", "http://192.168.9.1/");
-    httpd_resp_sendstr(req, "");
+    httpd_resp_set_status(req, "204 No Content");
+    httpd_resp_send(req, NULL, 0);
     return ESP_OK;
 }
 
@@ -497,12 +500,12 @@ static httpd_handle_t start_webserver(void)
         };
         httpd_register_uri_handler(server, &esp_cfg_post);
 
-        /* Catch-all: any unknown URL → redirect to root.
+        /* Catch-all: return 204 for unknown URLs (satisfies captive portal probes).
          * Must be registered LAST — wildcard matches everything. */
         httpd_uri_t catchall = {
             .uri = "/*",
             .method = HTTP_GET,
-            .handler = catchall_redirect_handler,
+            .handler = catchall_handler,
         };
         httpd_register_uri_handler(server, &catchall);
 
@@ -957,7 +960,6 @@ static void dns_task(void *arg)
 static void power_mgmt_task(void *arg)
 {
     uint32_t duty_cycle_tick = xTaskGetTickCount();
-    bool duty_wifi_on = true;
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -969,33 +971,21 @@ static void power_mgmt_task(void *arg)
             wifi_clients = sta_list.num;
         }
 
-        /* WiFi duty cycle: on 15s / off 45s when enabled and no clients.
-         * WiFi stays on continuously when duty cycle is disabled or
-         * when any client is connected. */
-        if (wifi_duty_cycle && wifi_clients == 0) {
-            uint32_t elapsed = (xTaskGetTickCount() - duty_cycle_tick) * portTICK_PERIOD_MS;
-            if (duty_wifi_on && elapsed >= WIFI_DUTY_ON_MS) {
-                wifi_stop();
-                duty_wifi_on = false;
-                duty_cycle_tick = xTaskGetTickCount();
-            } else if (!duty_wifi_on && elapsed >= WIFI_DUTY_OFF_MS) {
-                wifi_start();
-                start_webserver();
-                duty_wifi_on = true;
-                duty_cycle_tick = xTaskGetTickCount();
-            }
-        }
-
-        /* If duty cycle disabled or client connected, ensure WiFi is on */
-        if (!duty_wifi_on && (!wifi_duty_cycle || wifi_clients > 0)) {
-            wifi_start();
-            start_webserver();
-            duty_wifi_on = true;
-        }
-
         /* Reset duty cycle timer while client is connected */
         if (wifi_clients > 0) {
             duty_cycle_tick = xTaskGetTickCount();
+        }
+
+        /* WiFi duty cycle: on 20s, then deep sleep 40s.
+         * Deep sleep draws ~5µA vs 44mA with WiFi off + CPU idle.
+         * On wake, ESP32 reboots — WiFi/NVS/BLE all reinitialize. */
+        if (wifi_duty_cycle && wifi_clients == 0) {
+            uint32_t elapsed = (xTaskGetTickCount() - duty_cycle_tick) * portTICK_PERIOD_MS;
+            if (elapsed >= WIFI_DUTY_ON_MS) {
+                ESP_LOGI(TAG, "Duty cycle: entering deep sleep for %ds", WIFI_DUTY_SLEEP_S);
+                esp_deep_sleep(WIFI_DUTY_SLEEP_S * 1000000ULL);
+                /* Does not return — ESP32 reboots on wake */
+            }
         }
     }
 }
