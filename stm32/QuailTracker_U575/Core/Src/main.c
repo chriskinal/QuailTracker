@@ -84,8 +84,9 @@ I2C_HandleTypeDef hi2c1;
 int32_t audioBuffer[AUDIO_BUF_SIZE];      /* Left channel DMA buffer */
 int32_t audioBufferR[AUDIO_BUF_SIZE];     /* Right channel DMA buffer */
 
-/* Conversion buffer: 512 samples -> 512 int32 samples (24-bit in int32) */
+/* Conversion buffers: 512 samples each (left and right channels) */
 int32_t pcmBuffer[AUDIO_BUF_SIZE / 2];
+int32_t pcmBufferR[AUDIO_BUF_SIZE / 2];  /* Right channel processing buffer */
 
 /* PCM ring buffer — written by DMA ISR, read by audio task.
  * Must be in main.c so ISR callbacks can access it directly.
@@ -240,7 +241,7 @@ void WAV_WriteHeader(FIL *fp, uint32_t sampleRate, uint32_t dataSize)
 {
     uint8_t hdr[44];
     uint32_t fileSize = dataSize + 36;
-    uint16_t channels = 1;
+    uint16_t channels = 2;  /* stereo for TDOA */
     uint16_t bitsPerSample = 24;
     uint32_t byteRate = sampleRate * channels * bitsPerSample / 8;
     uint16_t blockAlign = channels * bitsPerSample / 8;
@@ -573,7 +574,7 @@ void printStatus(void)
     printf("  Format: %s\r\n", dev.rec.format == REC_FMT_WAV ? "WAV" : "FLAC");
     printf("  Active: %s\r\n", isRecording ? "Yes" : "No");
     if (isRecording) {
-        uint32_t seconds = totalDataBytes / (SAMPLE_RATE * 3);
+        uint32_t seconds = totalDataBytes / (SAMPLE_RATE * 6);
         printf("  Duration: %lus\r\n", (unsigned long)seconds);
         printf("  Size: %lu bytes\r\n", (unsigned long)totalDataBytes);
     }
@@ -756,6 +757,13 @@ void startRecording(void)
 
     totalDataBytes = 0;
     dev.audio.clipCount = 0;
+
+    /* Sync both ring buffers — discard any accumulated data so L and R
+     * start from the same point in time.  Without this, the right channel
+     * can lag by hundreds of ms due to DMA callback timing differences. */
+    ringTail = ringHead;
+    ringTailR = ringHeadR;
+
     isRecording = 1;
     recStartTick = HAL_GetTick();
     fileCounter++;
@@ -795,7 +803,7 @@ void stopRecording(void)
 
         f_close(&wavFile);
 
-        uint32_t seconds = totalDataBytes / (SAMPLE_RATE * 3);
+        uint32_t seconds = totalDataBytes / (SAMPLE_RATE * 6);
         printf("Recording stopped: %lu bytes (%lus)\r\n",
             (unsigned long)totalDataBytes, (unsigned long)seconds);
     } else {
@@ -836,7 +844,7 @@ void stopRecording(void)
     /* Update health stats with completed recording */
     {
         uint32_t secs = (dev.rec.format == REC_FMT_WAV)
-            ? totalDataBytes / (SAMPLE_RATE * 3)
+            ? totalDataBytes / (SAMPLE_RATE * 6)
             : (uint32_t)(flacEncoder.totalSamples / SAMPLE_RATE);
         extern void healthUpdateRecStop(uint32_t bytes, uint32_t durationSecs);
         healthUpdateRecStop(totalDataBytes, secs);
@@ -880,7 +888,7 @@ void chunkRecording(void)
 
     uint32_t seconds = 0;
     if (dev.rec.format == REC_FMT_WAV) {
-        seconds = totalDataBytes / (SAMPLE_RATE * 3);
+        seconds = totalDataBytes / (SAMPLE_RATE * 6);
     } else {
         seconds = (uint32_t)(flacEncoder.totalSamples / SAMPLE_RATE);
     }
@@ -1064,6 +1072,7 @@ int main(void)
 
     printf("MDF1: ");
     uint8_t ok = 1;
+    /* Arm both filters — they wait for TRGO in SYNC mode */
     if (HAL_MDF_AcqStart_DMA(&MdfHandle0, &MdfFilterConfig0, &dmaConfigL) != HAL_OK) {
         printf("L-FAILED ");
         ok = 0;
@@ -1073,8 +1082,10 @@ int main(void)
         ok = 0;
     }
     if (ok) {
+        /* Fire TRGO — both filters start simultaneously */
+        HAL_MDF_GenerateTrgo(&MdfHandle0);
         audioStarted = 1;
-        printf("OK stereo (48kHz, Sinc4, gain=%d)\r\n", (int)MdfFilterConfig0.Gain);
+        printf("OK stereo SYNC (48kHz, Sinc4, gain=%d)\r\n", (int)MdfFilterConfig0.Gain);
     } else {
         printf("\r\n");
     }
@@ -1251,7 +1262,9 @@ static void MX_MDF1_Init(void)
     MdfHandle0.Init.CommonParam.OutputClock.Activation = ENABLE;
     MdfHandle0.Init.CommonParam.OutputClock.Pins = MDF_OUTPUT_CLOCK_0;
     MdfHandle0.Init.CommonParam.OutputClock.Divider = 1;
-    MdfHandle0.Init.CommonParam.OutputClock.Trigger.Activation = DISABLE;
+    MdfHandle0.Init.CommonParam.OutputClock.Trigger.Activation = ENABLE;
+    MdfHandle0.Init.CommonParam.OutputClock.Trigger.Source = MDF_CLOCK_TRIG_TRGO;
+    MdfHandle0.Init.CommonParam.OutputClock.Trigger.Edge = MDF_CLOCK_TRIG_RISING_EDGE;
     MdfHandle0.Init.SerialInterface.Activation = ENABLE;
     MdfHandle0.Init.SerialInterface.Mode = MDF_SITF_LF_MASTER_SPI_MODE;
     MdfHandle0.Init.SerialInterface.ClockSource = MDF_SITF_CCK0_SOURCE;
@@ -1281,7 +1294,8 @@ static void MX_MDF1_Init(void)
         return;
     }
 
-    /* Filter configurations — identical for both channels */
+    /* Filter configurations — identical for both channels, SYNC mode.
+     * Both filters wait for TRGO trigger, ensuring sample-aligned start. */
     MdfFilterConfig0.DataSource = MDF_DATA_SOURCE_BSMX;
     MdfFilterConfig0.Delay = 0;
     MdfFilterConfig0.CicMode = MDF_ONE_FILTER_SINC4;
@@ -1291,14 +1305,16 @@ static void MX_MDF1_Init(void)
     MdfFilterConfig0.HighPassFilter.Activation = ENABLE;
     MdfFilterConfig0.HighPassFilter.CutOffFrequency = MDF_HPF_CUTOFF_0_000625FPCM;
     MdfFilterConfig0.SoundActivity.Activation = DISABLE;
-    MdfFilterConfig0.AcquisitionMode = MDF_MODE_ASYNC_CONT;
+    MdfFilterConfig0.AcquisitionMode = MDF_MODE_SYNC_CONT;
+    MdfFilterConfig0.Trigger.Source = MDF_FILTER_TRIG_TRGO;
+    MdfFilterConfig0.Trigger.Edge = MDF_FILTER_TRIG_RISING_EDGE;
     MdfFilterConfig0.FifoThreshold = MDF_FIFO_THRESHOLD_NOT_EMPTY;
     MdfFilterConfig0.DiscardSamples = 0;
 
     /* Copy same config for right channel */
     memcpy(&MdfFilterConfig1, &MdfFilterConfig0, sizeof(MdfFilterConfig1));
 
-    printf("MDF1: Stereo init OK (L=falling, R=rising, PE9/PE10)\r\n");
+    printf("MDF1: Stereo init OK (L=falling, R=rising, PE9/PD3, SYNC)\r\n");
 }
 
 /**
@@ -2037,6 +2053,7 @@ wake_source_t enterStop2(uint32_t seconds)
         dmaR.MsbOnly = DISABLE;
         if (HAL_MDF_AcqStart_DMA(&MdfHandle0, &MdfFilterConfig0, &dmaL) == HAL_OK &&
             HAL_MDF_AcqStart_DMA(&MdfHandle1, &MdfFilterConfig1, &dmaR) == HAL_OK) {
+            HAL_MDF_GenerateTrgo(&MdfHandle0);
             audioStarted = 1;
         }
     }

@@ -89,6 +89,7 @@ typedef struct {
 #define SAMPLE_RATE    48000
 
 extern int32_t pcmBuffer[];
+extern int32_t pcmBufferR[];
 
 /* PCM ring buffer — defined in main.c, written by DMA ISR callbacks */
 #define PCM_RING_SIZE  16384
@@ -226,6 +227,10 @@ static int32_t  hpfPrevOut = 0;
 static uint32_t hpfAlpha   = 0;   /* computed from bpfLow, Q16 */
 static int32_t  lpfPrevOut = 0;
 static uint32_t lpfAlpha   = 0;   /* computed from bpfHigh, Q16 */
+/* Right channel filter state (independent, same coefficients) */
+static int32_t  hpfPrevInR  = 0;
+static int32_t  hpfPrevOutR = 0;
+static int32_t  lpfPrevOutR = 0;
 
 /* Compute Q16 HPF alpha from cutoff frequency: alpha = e^(-2*pi*fc/fs) * 65536 */
 static uint32_t computeHpfAlpha(uint16_t fc) {
@@ -430,6 +435,7 @@ void StartAudioTask(void *argument)
         hpfAlpha = computeHpfAlpha(cfg.bpfLow);
         lpfAlpha = computeLpfAlpha(cfg.bpfHigh);
         hpfPrevIn = 0; hpfPrevOut = 0; lpfPrevOut = 0;
+        hpfPrevInR = 0; hpfPrevOutR = 0; lpfPrevOutR = 0;
         /* Reset activity filter state */
         actMean = 0; actMad = 0;
         actAbove = 0; actTotal = 0;
@@ -446,21 +452,22 @@ void StartAudioTask(void *argument)
      * The ISR copies DMA data into the ring immediately on each half-complete,
      * so no data is lost even if this task is blocked on f_sync for 100ms+. */
     if (isRecording) {
-      /* Select L or R ring buffer based on channel toggle */
-      volatile uint32_t *pHead = audioChannelRight ? &ringHeadR : &ringHead;
-      uint32_t *pTail = audioChannelRight ? &ringTailR : &ringTail;
-      int32_t *pRing = audioChannelRight ? pcmRingR : pcmRing;
-
-      while ((*pHead - *pTail) >= (AUDIO_BUF_SIZE / 2)) {
+      /* Wait for both L and R ring buffers to have data */
+      while ((ringHead - ringTail) >= (AUDIO_BUF_SIZE / 2) &&
+             (ringHeadR - ringTailR) >= (AUDIO_BUF_SIZE / 2)) {
         const int blockLen = AUDIO_BUF_SIZE / 2;
 
-        /* Step 1: Copy from ring buffer into pcmBuffer */
-        uint32_t t = *pTail;
+        /* Step 1: Copy from both ring buffers */
+        uint32_t tL = ringTail;
+        uint32_t tR = ringTailR;
         for (int i = 0; i < blockLen; i++) {
-          pcmBuffer[i] = pRing[t & PCM_RING_MASK];
-          t++;
+          pcmBuffer[i]  = pcmRing[tL & PCM_RING_MASK];
+          pcmBufferR[i] = pcmRingR[tR & PCM_RING_MASK];
+          tL++;
+          tR++;
         }
-        *pTail = t;
+        ringTail  = tL;
+        ringTailR = tR;
 
         /* Step 2a: Apply HPF if configured (bpfLow) */
         if (hpfAlpha > 0) {
@@ -482,13 +489,39 @@ void StartAudioTask(void *argument)
           }
         }
 
-        /* Step 3: Peak limiter + peak level tracking */
+        /* Step 2c: Apply same HPF to right channel */
+        if (hpfAlpha > 0) {
+          for (int i = 0; i < blockLen; i++) {
+            int32_t in = pcmBufferR[i];
+            int32_t out = (int32_t)(((int64_t)hpfAlpha * (hpfPrevOutR + in - hpfPrevInR)) >> 16);
+            hpfPrevInR = in;
+            hpfPrevOutR = out;
+            pcmBufferR[i] = out;
+          }
+        }
+
+        /* Step 2d: Apply same LPF to right channel */
+        if (lpfAlpha > 0) {
+          for (int i = 0; i < blockLen; i++) {
+            int32_t in = pcmBufferR[i];
+            lpfPrevOutR = (int32_t)(((int64_t)lpfAlpha * in + (int64_t)(65536 - lpfAlpha) * lpfPrevOutR) >> 16);
+            pcmBufferR[i] = lpfPrevOutR;
+          }
+        }
+
+        /* Step 3: Peak limiter + peak level tracking (both channels) */
         int32_t blockPeak = 0;
         for (int i = 0; i < blockLen; i++) {
           int32_t s = pcmBuffer[i];
           if (s > PEAK_LIMITER_THRESHOLD) { s = PEAK_LIMITER_THRESHOLD; limiterClipCount++; }
           else if (s < -PEAK_LIMITER_THRESHOLD) { s = -PEAK_LIMITER_THRESHOLD; limiterClipCount++; }
           pcmBuffer[i] = s;
+
+          int32_t sR = pcmBufferR[i];
+          if (sR > PEAK_LIMITER_THRESHOLD) { sR = PEAK_LIMITER_THRESHOLD; }
+          else if (sR < -PEAK_LIMITER_THRESHOLD) { sR = -PEAK_LIMITER_THRESHOLD; }
+          pcmBufferR[i] = sR;
+
           int32_t a = s < 0 ? -s : s;
           if (a > blockPeak) blockPeak = a;
         }
@@ -605,17 +638,21 @@ void StartAudioTask(void *argument)
         /* Step 6: Encode + write (skip if detect-only mode) */
         if (cfg.missionMode == MISSION_DETECT) goto skip_write;
         if (dev.rec.format == REC_FMT_WAV) {
-          /* Pack int32 samples into 24-bit LE (3 bytes/sample) for WAV */
-          static uint8_t packed[512 * 3];
+          /* Pack interleaved stereo 24-bit LE: L0,R0,L1,R1,... (6 bytes/frame) */
+          static uint8_t packed[512 * 6];  /* stereo: 2 channels × 3 bytes × blockLen */
           for (int i = 0; i < blockLen; i++) {
-            uint32_t v = (uint32_t)pcmBuffer[i];
-            packed[i * 3 + 0] = (uint8_t)(v);
-            packed[i * 3 + 1] = (uint8_t)(v >> 8);
-            packed[i * 3 + 2] = (uint8_t)(v >> 16);
+            uint32_t vL = (uint32_t)pcmBuffer[i];
+            uint32_t vR = (uint32_t)pcmBufferR[i];
+            packed[i * 6 + 0] = (uint8_t)(vL);
+            packed[i * 6 + 1] = (uint8_t)(vL >> 8);
+            packed[i * 6 + 2] = (uint8_t)(vL >> 16);
+            packed[i * 6 + 3] = (uint8_t)(vR);
+            packed[i * 6 + 4] = (uint8_t)(vR >> 8);
+            packed[i * 6 + 5] = (uint8_t)(vR >> 16);
           }
           osMutexAcquire(fileMtxHandle, osWaitForever);
           UINT bw;
-          FRESULT fres = f_write(&wavFile, packed, blockLen * 3, &bw);
+          FRESULT fres = f_write(&wavFile, packed, blockLen * 6, &bw);
           if (fres != FR_OK) {
             printf("f_write FAILED: %d at %lu bytes\r\n", fres, (unsigned long)totalDataBytes);
             f_close(&wavFile);
@@ -623,8 +660,8 @@ void StartAudioTask(void *argument)
           }
           totalDataBytes += bw;
 
-          /* Sync every ~1 second */
-          if ((totalDataBytes % (SAMPLE_RATE * 3)) < (uint32_t)(blockLen * 3)) {
+          /* Sync every ~1 second (stereo: 2ch × 3 bytes × 48000 = 288000 bytes/sec) */
+          if ((totalDataBytes % (SAMPLE_RATE * 6)) < (uint32_t)(blockLen * 6)) {
             f_sync(&wavFile);
           }
           osMutexRelease(fileMtxHandle);
@@ -670,15 +707,13 @@ skip_write:
       static int32_t monHpfPrevIn = 0, monHpfPrevOut = 0;
       int32_t alpha = computeHpfAlpha(cfg.bpfLow);
       {
-      volatile uint32_t *pHead2 = audioChannelRight ? &ringHeadR : &ringHead;
-      uint32_t *pTail2 = audioChannelRight ? &ringTailR : &ringTail;
-      int32_t *pRing2 = audioChannelRight ? pcmRingR : pcmRing;
-      while ((*pHead2 - *pTail2) >= (AUDIO_BUF_SIZE / 2)) {
+      /* Drain BOTH ring buffers — left for peak monitoring, right to keep it current */
+      while ((ringHead - ringTail) >= (AUDIO_BUF_SIZE / 2)) {
         const int blockLen = AUDIO_BUF_SIZE / 2;
-        uint32_t t = *pTail2;
+        uint32_t t = ringTail;
         int32_t blockPeak = 0;
         for (int i = 0; i < blockLen; i++) {
-          int32_t raw = pRing2[t & PCM_RING_MASK];
+          int32_t raw = pcmRing[t & PCM_RING_MASK];
           t++;
           if (alpha > 0) {
             int32_t out = (int32_t)(((int64_t)alpha * (monHpfPrevOut + raw - monHpfPrevIn)) >> 16);
@@ -689,9 +724,11 @@ skip_write:
           int32_t a = raw < 0 ? -raw : raw;
           if (a > blockPeak) blockPeak = a;
         }
-        *pTail2 = t;
+        ringTail = t;
         if (blockPeak > audioPeakLevel) audioPeakLevel = blockPeak;
       }
+      /* Drain right ring to keep it current (discard data, no peak tracking) */
+      ringTailR = ringHeadR;
       }
     }
   }
