@@ -50,6 +50,12 @@ static volatile bridge_power_t bridge_state = BRIDGE_LOW_POWER;
 static volatile uint32_t disconnect_tick = 0;   /* tick when BLE disconnected */
 static volatile bool stm32_sleeping = false;     /* true = STM32 in Stop 2 */
 static bool wifi_started = false;
+
+/* WiFi duty cycle for low-power mode: on 15s, off 45s.
+ * Disabled by default — WiFi stays on continuously. */
+static bool wifi_duty_cycle = false;
+#define WIFI_DUTY_ON_MS   15000
+#define WIFI_DUTY_OFF_MS  45000
 bool spi_initialized = false;
 static TaskHandle_t spi_task_handle = NULL;
 static volatile bool spi_task_stop = false;
@@ -741,11 +747,14 @@ static void spi_task(void *arg)
                  * PWR_SCHEDULED_NONREC (0) = STM32 sleeping → ESP32 LOW_POWER
                  * PWR_DEV_MODE (3) or PWR_USER_CONNECTED (2) = ESP32 NORMAL_POWER
                  * PWR_SCHEDULED_REC (1) = recording, no user → ESP32 LOW_POWER */
+                /* Enable WiFi duty cycle in scheduled modes, disable in dev/user mode */
+                wifi_duty_cycle = (last_pwr_state == 0 || last_pwr_state == 1);
+
                 if (!ble_beacon_is_connected()) {
                     if (last_pwr_state == 2 || last_pwr_state == 3) {
                         if (bridge_state == BRIDGE_LOW_POWER) {
                             bridge_state = BRIDGE_NORMAL_POWER;
-                            ESP_LOGI(TAG, "STM32 user/dev mode — NORMAL_POWER");
+                            ESP_LOGI(TAG, "STM32 user/dev mode — NORMAL_POWER, duty cycle OFF");
                         }
                     } else {
                         if (bridge_state == BRIDGE_NORMAL_POWER && disconnect_tick == 0) {
@@ -811,6 +820,8 @@ static void on_ble_disconnect(void)
 static void power_mgmt_task(void *arg)
 {
     bridge_power_t prev_state = BRIDGE_LOW_POWER;
+    uint32_t duty_cycle_tick = 0;
+    bool duty_wifi_on = true;
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -834,7 +845,7 @@ static void power_mgmt_task(void *arg)
 
         /* Reset timeout while WiFi clients are connected */
         if (wifi_clients > 0 && disconnect_tick != 0) {
-            disconnect_tick = xTaskGetTickCount();  /* keep extending */
+            disconnect_tick = xTaskGetTickCount();
         }
 
         /* If BLE reconnected, cancel timeout */
@@ -845,17 +856,44 @@ static void power_mgmt_task(void *arg)
         /* Handle state transitions */
         if (bridge_state != prev_state) {
             if (bridge_state == BRIDGE_NORMAL_POWER) {
-                /* Start WiFi + web server + SPI */
                 wifi_start();
                 start_webserver();
                 spi_slave_init();
+                duty_cycle_tick = xTaskGetTickCount();
+                duty_wifi_on = true;
                 ESP_LOGI(TAG, "NORMAL_POWER: WiFi + WebServer + SPI active");
             } else {
-                /* Stop WiFi + web server (SPI stays for wake detection) */
                 wifi_stop();
                 ESP_LOGI(TAG, "LOW_POWER: BLE only");
             }
             prev_state = bridge_state;
+        }
+
+        /* WiFi duty cycle: on 15s / off 45s when no clients connected.
+         * When a client connects, WiFi stays on until they disconnect. */
+        if (wifi_duty_cycle && bridge_state == BRIDGE_NORMAL_POWER && wifi_clients == 0) {
+            uint32_t elapsed = (xTaskGetTickCount() - duty_cycle_tick) * portTICK_PERIOD_MS;
+            if (duty_wifi_on && elapsed >= WIFI_DUTY_ON_MS) {
+                wifi_stop();
+                duty_wifi_on = false;
+                duty_cycle_tick = xTaskGetTickCount();
+            } else if (!duty_wifi_on && elapsed >= WIFI_DUTY_OFF_MS) {
+                wifi_start();
+                start_webserver();
+                duty_wifi_on = true;
+                duty_cycle_tick = xTaskGetTickCount();
+            }
+        }
+
+        /* If a client connected during duty cycle, ensure WiFi stays on */
+        if (wifi_duty_cycle && wifi_clients > 0 && !duty_wifi_on) {
+            wifi_start();
+            start_webserver();
+            duty_wifi_on = true;
+        }
+        /* Reset duty cycle timer when client is connected */
+        if (wifi_duty_cycle && wifi_clients > 0) {
+            duty_cycle_tick = xTaskGetTickCount();
         }
     }
 }
