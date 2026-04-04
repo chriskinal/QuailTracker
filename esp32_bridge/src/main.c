@@ -48,7 +48,7 @@ typedef enum {
     BRIDGE_NORMAL_POWER,  /* BLE + WiFi + SPI */
 } bridge_power_t;
 
-static volatile bridge_power_t bridge_state = BRIDGE_LOW_POWER;
+static volatile bridge_power_t bridge_state = BRIDGE_NORMAL_POWER;
 static volatile uint32_t disconnect_tick = 0;   /* tick when BLE disconnected */
 static volatile bool stm32_sleeping = false;     /* true = STM32 in Stop 2 */
 static bool wifi_started = false;
@@ -161,6 +161,39 @@ static esp_err_t root_handler(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "text/html");
     httpd_resp_send(req, (const char *)src_web_index_html, src_web_index_html_len);
+    return ESP_OK;
+}
+
+static int json_get_int(const char *json, const char *key, int def);
+void save_duty_cycle(void);
+
+/* ESP32 config: GET returns JSON, POST sets values */
+static esp_err_t esp_config_get_handler(httpd_req_t *req)
+{
+    char buf[64];
+    snprintf(buf, sizeof(buf), "{\"dutyCycle\":%d}", wifi_duty_cycle ? 1 : 0);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, buf);
+    return ESP_OK;
+}
+
+static esp_err_t esp_config_post_handler(httpd_req_t *req)
+{
+    char buf[128];
+    int len = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (len <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "No data");
+        return ESP_FAIL;
+    }
+    buf[len] = '\0';
+
+    int val = json_get_int(buf, "dutyCycle", -1);
+    if (val >= 0) {
+        wifi_duty_cycle = (val != 0);
+        save_duty_cycle();
+    }
+
+    httpd_resp_sendstr(req, "OK");
     return ESP_OK;
 }
 
@@ -450,6 +483,20 @@ static httpd_handle_t start_webserver(void)
         };
         httpd_register_uri_handler(server, &flash_status);
 
+        httpd_uri_t esp_cfg_get = {
+            .uri = "/config_esp",
+            .method = HTTP_GET,
+            .handler = esp_config_get_handler,
+        };
+        httpd_register_uri_handler(server, &esp_cfg_get);
+
+        httpd_uri_t esp_cfg_post = {
+            .uri = "/config_esp",
+            .method = HTTP_POST,
+            .handler = esp_config_post_handler,
+        };
+        httpd_register_uri_handler(server, &esp_cfg_post);
+
         /* Catch-all: any unknown URL → redirect to root.
          * Must be registered LAST — wildcard matches everything. */
         httpd_uri_t catchall = {
@@ -549,6 +596,30 @@ static void save_device_name(void)
     nvs_commit(h);
     nvs_close(h);
     ESP_LOGI(TAG, "Saved device name to NVS: %s", device_name);
+}
+
+/* Load WiFi duty cycle setting from NVS */
+static void load_duty_cycle(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("bridge", NVS_READONLY, &h) != ESP_OK) return;
+    uint8_t val = 0;
+    if (nvs_get_u8(h, "duty", &val) == ESP_OK) {
+        wifi_duty_cycle = (val != 0);
+        ESP_LOGI(TAG, "Loaded duty cycle from NVS: %s", wifi_duty_cycle ? "ON" : "OFF");
+    }
+    nvs_close(h);
+}
+
+/* Save WiFi duty cycle setting to NVS */
+void save_duty_cycle(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("bridge", NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u8(h, "duty", wifi_duty_cycle ? 1 : 0);
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "Saved duty cycle to NVS: %s", wifi_duty_cycle ? "ON" : "OFF");
 }
 
 /* Update WiFi SSID and BLE name to match station ID */
@@ -758,32 +829,9 @@ static void spi_task(void *arg)
                     }
                 }
 
-                /* Check for sleep command from STM32 */
+                /* Track STM32 sleep state for wake functionality */
                 if (json_get_int(last_spi_msg, "sleeping", -1) == 1) {
-                    ESP_LOGI(TAG, "STM32 entering sleep — switching to LOW_POWER");
                     stm32_sleeping = true;
-                    bridge_state = BRIDGE_LOW_POWER;
-                }
-
-                /* Match ESP32 power state to STM32 power state.
-                 * PWR_SCHEDULED_NONREC (0) = STM32 sleeping → ESP32 LOW_POWER
-                 * PWR_DEV_MODE (3) or PWR_USER_CONNECTED (2) = ESP32 NORMAL_POWER
-                 * PWR_SCHEDULED_REC (1) = recording, no user → ESP32 LOW_POWER */
-                /* Enable WiFi duty cycle in scheduled modes, disable in dev/user mode */
-                wifi_duty_cycle = (last_pwr_state == 0 || last_pwr_state == 1);
-
-                if (!ble_beacon_is_connected()) {
-                    if (last_pwr_state == 2 || last_pwr_state == 3) {
-                        if (bridge_state == BRIDGE_LOW_POWER) {
-                            bridge_state = BRIDGE_NORMAL_POWER;
-                            ESP_LOGI(TAG, "STM32 user/dev mode — NORMAL_POWER, duty cycle OFF");
-                        }
-                    } else {
-                        if (bridge_state == BRIDGE_NORMAL_POWER && disconnect_tick == 0) {
-                            bridge_state = BRIDGE_LOW_POWER;
-                            ESP_LOGI(TAG, "STM32 sleep/rec mode — LOW_POWER");
-                        }
-                    }
                 }
 
                 /* SPI rx logging removed — runs 4x/sec, too noisy */
@@ -908,8 +956,7 @@ static void dns_task(void *arg)
 
 static void power_mgmt_task(void *arg)
 {
-    bridge_power_t prev_state = BRIDGE_LOW_POWER;
-    uint32_t duty_cycle_tick = 0;
+    uint32_t duty_cycle_tick = xTaskGetTickCount();
     bool duty_wifi_on = true;
 
     while (1) {
@@ -922,45 +969,10 @@ static void power_mgmt_task(void *arg)
             wifi_clients = sta_list.num;
         }
 
-        /* Handle BLE disconnect timeout — only if no WiFi clients connected */
-        if (disconnect_tick != 0 && !ble_beacon_is_connected() && wifi_clients == 0) {
-            uint32_t elapsed = (xTaskGetTickCount() - disconnect_tick) * portTICK_PERIOD_MS;
-            if (elapsed >= BLE_DISCONNECT_TIMEOUT_MS) {
-                ESP_LOGI(TAG, "BLE disconnect timeout — switching to LOW_POWER");
-                bridge_state = BRIDGE_LOW_POWER;
-                disconnect_tick = 0;
-            }
-        }
-
-        /* Reset timeout while WiFi clients are connected */
-        if (wifi_clients > 0 && disconnect_tick != 0) {
-            disconnect_tick = xTaskGetTickCount();
-        }
-
-        /* If BLE reconnected, cancel timeout */
-        if (ble_beacon_is_connected() && disconnect_tick != 0) {
-            disconnect_tick = 0;
-        }
-
-        /* Handle state transitions */
-        if (bridge_state != prev_state) {
-            if (bridge_state == BRIDGE_NORMAL_POWER) {
-                wifi_start();
-                start_webserver();
-                spi_slave_init();
-                duty_cycle_tick = xTaskGetTickCount();
-                duty_wifi_on = true;
-                ESP_LOGI(TAG, "NORMAL_POWER: WiFi + WebServer + SPI active");
-            } else {
-                wifi_stop();
-                ESP_LOGI(TAG, "LOW_POWER: BLE only");
-            }
-            prev_state = bridge_state;
-        }
-
-        /* WiFi duty cycle: on 15s / off 45s when no clients connected.
-         * When a client connects, WiFi stays on until they disconnect. */
-        if (wifi_duty_cycle && bridge_state == BRIDGE_NORMAL_POWER && wifi_clients == 0) {
+        /* WiFi duty cycle: on 15s / off 45s when enabled and no clients.
+         * WiFi stays on continuously when duty cycle is disabled or
+         * when any client is connected. */
+        if (wifi_duty_cycle && wifi_clients == 0) {
             uint32_t elapsed = (xTaskGetTickCount() - duty_cycle_tick) * portTICK_PERIOD_MS;
             if (duty_wifi_on && elapsed >= WIFI_DUTY_ON_MS) {
                 wifi_stop();
@@ -974,14 +986,15 @@ static void power_mgmt_task(void *arg)
             }
         }
 
-        /* If a client connected during duty cycle, ensure WiFi stays on */
-        if (wifi_duty_cycle && wifi_clients > 0 && !duty_wifi_on) {
+        /* If duty cycle disabled or client connected, ensure WiFi is on */
+        if (!duty_wifi_on && (!wifi_duty_cycle || wifi_clients > 0)) {
             wifi_start();
             start_webserver();
             duty_wifi_on = true;
         }
-        /* Reset duty cycle timer when client is connected */
-        if (wifi_duty_cycle && wifi_clients > 0) {
+
+        /* Reset duty cycle timer while client is connected */
+        if (wifi_clients > 0) {
             duty_cycle_tick = xTaskGetTickCount();
         }
     }
@@ -1010,6 +1023,8 @@ void app_main(void)
         snprintf(device_name, sizeof(device_name), "QT_%02X%02X", mac[4], mac[5]);
         ESP_LOGI(TAG, "No saved name, using default: %s", device_name);
     }
+
+    load_duty_cycle();
 
     /* Initialize network interface (needed before WiFi or BLE) */
     wifi_init_netif();
