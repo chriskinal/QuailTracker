@@ -14,8 +14,8 @@ C5270988 is the non-SMPS variant — uses internal LDO, no external inductor.
 
 | Function | GPIO | LQFP100 Pin | AF | Peripheral | Notes |
 |----------|------|-------------|-----|------------|-------|
-| PDM Mic Clock | PE9 | 40 | AF3 | ADF1_CCK0 | Clock out to IM72D128 |
-| PDM Mic Data | PE10 | 41 | AF3 | ADF1_SDI0 | Data in from IM72D128 |
+| PDM Mic Clock | PE9 | 38 | AF6 | MDF1_CCK0 | Clock out to both IM72D128 mics |
+| PDM Mic Data | PD3 | 84 | AF6 | MDF1_SDI0 | Data in from both mics (L=falling, R=rising) |
 | GPS UART TX | PA9 | 68 | AF7 | USART1_TX | To ATGM336H RXD (pin 3) |
 | GPS UART RX | PA10 | 69 | AF7 | USART1_RX | From ATGM336H TXD (pin 2) |
 | ESP32 SPI SCK | PB13 | 52 | AF5 | SPI2_SCK | To ESP32-C3 GPIO4 |
@@ -93,15 +93,19 @@ Low-power modes (Stop 2, Standby, Shutdown) are similar between LDO and SMPS.
 
 ## Peripheral Details
 
-### ADF1 — PDM Microphone (IM72D128)
+### MDF1 — Stereo PDM Microphones (2× IM72D128)
 
-Selected PE9/PE10 over PB3/PB4 because:
-- PB3 = JTDO/TRACESWO after reset — now used for SWO debug trace output
-- PB4 = NJTRST after reset (same issue)
-- PE9/PE10 are clean GPIOs, adjacent pins, no boot-time conflicts
+MDF1 replaces ADF1 for stereo recording. MDF1 has 6 hardware filters,
+enabling simultaneous L/R capture from two PDM mics on one data line.
 
-ADF1 provides hardware decimation filtering for the PDM bitstream.
-Supports LPBAM for autonomous audio capture in Stop 2 mode.
+- PE9 (MDF1_CCK0, AF6): PDM clock output, shared by both mics
+- PD3 (MDF1_SDI0, AF6): PDM data input, carries interleaved L/R bitstream
+- Filter0: BITSTREAM0_FALLING = Left mic (L/R pin → GND)
+- Filter1: BITSTREAM0_RISING = Right mic (L/R pin → VDD)
+- Both filters: Sinc4, decimation 64, HPF enabled, 48kHz per channel
+
+Pin mapping confirmed by CubeMX for STM32U575VGT6 LQFP-100.
+Note: ADF1 (PE10, AF3) only supports one filter — not usable for stereo.
 
 ### USART1 — GPS (ATGM336H-5N31)
 
@@ -181,9 +185,9 @@ Divider current: ~2uA continuous (acceptable for battery life).
 
 Available GPIOs not assigned (configure as analog input for lowest leakage):
 
-PE0-PE6, PE7, PE8, PE11-PE15, PA0, PA1, PA2, PA3, PA11, PA12, PA15,
+PE0-PE8, PE10-PE15, PA0, PA1, PA2, PA3, PA11, PA12, PA15,
 PB2, PB4, PB5, PB8-PB10, PC1, PC2, PC3, PC5-PC9, PC10-PC12,
-PD0-PD10, PH0, PH1
+PD0-PD2, PD4-PD10, PH0, PH1
 
 Note: PB11 is NOT bonded out on LQFP100 (neither SMPS nor non-SMPS variant).
 
@@ -210,7 +214,7 @@ Note: PB11 is NOT bonded out on LQFP100 (neither SMPS nor non-SMPS variant).
 - 2-layer board, 1.6mm FR4, JLCPCB economic assembly
 - Ground pour on bottom layer
 - VCAP cap (4.7uF) close to pin 48, short trace to VSS (pin 49)
-- ADF PDM traces (PE9/PE10) kept short — mic JST connector near MCU
+- MDF1 PDM traces: PE9 (clock) and PD3 (data) routed to mic connector CN2
 - ESP32-C3 Super Mini antenna keep-out: 2mm deep × module width, no copper either layer
 - SD card slot at board edge
 - GPS module (U2) near board edge, U.FL connector (J1) at board edge for antenna cable

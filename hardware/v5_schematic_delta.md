@@ -5,7 +5,9 @@ Changes from V4:
 2. Add ESP32-C3 Super Mini module on SPI2 (PB12-PB15)
 3. ESP32 handles BLE beacon, WiFi AP, web UI, and STM32 OTA flashing
 4. SPI2 pins chosen to match STM32U575 ROM bootloader for field recovery
-5. Rename BLE_VCC → ESP_VCC (same load switch, same pin PD10)
+5. Remove U5 load switch — ESP32 on always-on 3V3 (boot deadlock fix)
+6. Switch ADF1 → MDF1 for stereo PDM: PE9 clock (unchanged), PD3 data (was PE10)
+7. Replace SHT30 with BME280 (adds pressure for TDOA distance estimation)
 
 ---
 
@@ -112,11 +114,14 @@ These pins were used by V3/V4 for the PB-03F or old SPI2 routing and are now ava
 |-------------|------|-------------|-------------|
 | 25 | PA2 | USART2_TX (BLE) | Unassigned (available) |
 | 26 | PA3 | USART2_RX (BLE) | Unassigned (available) |
+| 38 | PE9 | ADF1_CCK0 (AF3) | MDF1_CCK0 (AF6) — same pin, different peripheral |
+| 39 | PE10 | ADF1_SDI0 (AF3) | Unassigned (available) — data moved to PD3 |
 | 51 | PB12 | Unassigned | SPI2_NSS (ESP32 CS) |
 | 52 | PB13 | Unassigned | SPI2_SCK (ESP32 clock) |
 | 53 | PB14 | Unassigned | SPI2_MISO (ESP32 data in) |
 | 54 | PB15 | Unassigned | SPI2_MOSI (ESP32 data out) |
 | 57 | PD10 | BLE_VCC EN | Unassigned (load switch removed) |
+| 84 | PD3 | Unassigned | MDF1_SDI0 (AF6) — stereo PDM data from both mics |
 
 ---
 
