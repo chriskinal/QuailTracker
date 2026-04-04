@@ -70,6 +70,7 @@ static void hf_hex32(uint32_t v) {
 extern DMA_NodeTypeDef Node_GPDMA1_Channel0;
 extern DMA_QListTypeDef List_GPDMA1_Channel0;
 extern DMA_HandleTypeDef handle_GPDMA1_Channel0;
+extern DMA_HandleTypeDef handle_GPDMA1_Channel1;
 extern TIM_HandleTypeDef htim17;
 
 /* USER CODE BEGIN EV */
@@ -217,6 +218,11 @@ void GPDMA1_Channel0_IRQHandler(void)
   /* USER CODE BEGIN GPDMA1_Channel0_IRQn 1 */
 
   /* USER CODE END GPDMA1_Channel0_IRQn 1 */
+}
+
+void GPDMA1_Channel1_IRQHandler(void)
+{
+  HAL_DMA_IRQHandler(&handle_GPDMA1_Channel1);
 }
 
 /**

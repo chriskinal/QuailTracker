@@ -49,11 +49,21 @@
 
 /* Private variables ---------------------------------------------------------*/
 
-MDF_HandleTypeDef AdfHandle0;
-MDF_FilterConfigTypeDef AdfFilterConfig0;
-DMA_NodeTypeDef Node_GPDMA1_Channel0;
+/* Stereo MDF1: Filter0 = Left (falling edge), Filter1 = Right (rising edge) */
+MDF_HandleTypeDef MdfHandle0;           /* Left channel */
+MDF_HandleTypeDef MdfHandle1;           /* Right channel */
+MDF_FilterConfigTypeDef MdfFilterConfig0;
+MDF_FilterConfigTypeDef MdfFilterConfig1;
+DMA_NodeTypeDef Node_GPDMA1_Channel0;      /* Left DMA linked-list node */
 DMA_QListTypeDef List_GPDMA1_Channel0;
 DMA_HandleTypeDef handle_GPDMA1_Channel0;
+DMA_NodeTypeDef Node_GPDMA1_Channel1;      /* Right DMA linked-list node */
+DMA_QListTypeDef List_GPDMA1_Channel1;
+DMA_HandleTypeDef handle_GPDMA1_Channel1;
+
+/* Keep old names as aliases for code that references them */
+#define AdfHandle0       MdfHandle0
+#define AdfFilterConfig0 MdfFilterConfig0
 
 UART_HandleTypeDef husart1;
 UART_HandleTypeDef husart3;
@@ -71,7 +81,8 @@ I2C_HandleTypeDef hi2c1;
 #define AUDIO_BUF_SIZE 1024
 #define SAMPLE_RATE    48000
 
-int32_t audioBuffer[AUDIO_BUF_SIZE];
+int32_t audioBuffer[AUDIO_BUF_SIZE];      /* Left channel DMA buffer */
+int32_t audioBufferR[AUDIO_BUF_SIZE];     /* Right channel DMA buffer */
 
 /* Conversion buffer: 512 samples -> 512 int32 samples (24-bit in int32) */
 int32_t pcmBuffer[AUDIO_BUF_SIZE / 2];
@@ -81,9 +92,13 @@ int32_t pcmBuffer[AUDIO_BUF_SIZE / 2];
  * Power-of-2 size for fast masking.  16384 samples = 341ms at 48kHz. */
 #define PCM_RING_SIZE  16384
 #define PCM_RING_MASK  (PCM_RING_SIZE - 1)
-int32_t pcmRing[PCM_RING_SIZE];
-volatile uint32_t ringHead = 0;   /* ISR writes here */
-uint32_t ringTail = 0;            /* audio task reads here */
+int32_t pcmRing[PCM_RING_SIZE];          /* Left channel ring */
+volatile uint32_t ringHead = 0;
+uint32_t ringTail = 0;
+
+int32_t pcmRingR[PCM_RING_SIZE];        /* Right channel ring */
+volatile uint32_t ringHeadR = 0;
+uint32_t ringTailR = 0;
 
 /* FLAC encoder instance (shared with app_freertos.c audio task) */
 flac_enc_t flacEncoder;
@@ -171,7 +186,7 @@ static void MX_SPI1_Init(void);
 static void MX_SPI2_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART3_UART_Init(void);
-static void MX_ADF1_Init(void);
+static void MX_MDF1_Init(void);
 /* USER CODE BEGIN PFP */
 static void MX_ADC1_Init(void);
 static void MX_RTC_Init(void);
@@ -977,7 +992,7 @@ int main(void)
   MX_USART1_UART_Init();
   HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 7: usart1 ok */
   MX_USART3_UART_Init();
-  MX_ADF1_Init();
+  MX_MDF1_Init();
   HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 9: adf ok */
   /* USER CODE BEGIN 2 */
   /* Quick LED heartbeat — 3 blinks to confirm all inits passed */
@@ -1025,22 +1040,38 @@ int main(void)
   MX_I2C1_Init();
   sht30Read();  /* initial reading */
 
-  /* Start ADF1 DMA acquisition before scheduler */
+  /* Start MDF1 stereo DMA acquisition before scheduler */
   {
-    AdfFilterConfig0.DecimationRatio = 64;
-    AdfFilterConfig0.Gain = 6;
+    MdfFilterConfig0.DecimationRatio = 64;
+    MdfFilterConfig0.Gain = 6;
+    MdfFilterConfig1.DecimationRatio = 64;
+    MdfFilterConfig1.Gain = 6;
 
-    MDF_DmaConfigTypeDef dmaConfig = {0};
-    dmaConfig.Address = (uint32_t)audioBuffer;
-    dmaConfig.DataLength = AUDIO_BUF_SIZE * 4;
-    dmaConfig.MsbOnly = DISABLE;
+    MDF_DmaConfigTypeDef dmaConfigL = {0};
+    dmaConfigL.Address = (uint32_t)audioBuffer;
+    dmaConfigL.DataLength = AUDIO_BUF_SIZE * 4;
+    dmaConfigL.MsbOnly = DISABLE;
 
-    printf("ADF1: ");
-    if (HAL_MDF_AcqStart_DMA(&AdfHandle0, &AdfFilterConfig0, &dmaConfig) != HAL_OK) {
-        printf("FAILED\r\n");
-    } else {
+    MDF_DmaConfigTypeDef dmaConfigR = {0};
+    dmaConfigR.Address = (uint32_t)audioBufferR;
+    dmaConfigR.DataLength = AUDIO_BUF_SIZE * 4;
+    dmaConfigR.MsbOnly = DISABLE;
+
+    printf("MDF1: ");
+    uint8_t ok = 1;
+    if (HAL_MDF_AcqStart_DMA(&MdfHandle0, &MdfFilterConfig0, &dmaConfigL) != HAL_OK) {
+        printf("L-FAILED ");
+        ok = 0;
+    }
+    if (HAL_MDF_AcqStart_DMA(&MdfHandle1, &MdfFilterConfig1, &dmaConfigR) != HAL_OK) {
+        printf("R-FAILED ");
+        ok = 0;
+    }
+    if (ok) {
         audioStarted = 1;
-        printf("OK (48kHz, Sinc4, gain=%d)\r\n", (int)AdfFilterConfig0.Gain);
+        printf("OK stereo (48kHz, Sinc4, gain=%d)\r\n", (int)MdfFilterConfig0.Gain);
+    } else {
+        printf("\r\n");
     }
   }
 
@@ -1202,63 +1233,67 @@ static void SystemPower_Config(void)
   * @param None
   * @retval None
   */
-static void MX_ADF1_Init(void)
+/* MDF1 Stereo Init — two filters on same SDI0, opposite clock edges.
+ * Filter0 = Left mic (L/R=GND, data on falling edge)
+ * Filter1 = Right mic (L/R=VDD, data on rising edge)
+ * PE9 = MDF1_CCK0 (clock), PD3 = MDF1_SDI0 (data), both AF6.
+ * Pin mapping confirmed by CubeMX for STM32U575VGT6 LQFP-100. */
+static void MX_MDF1_Init(void)
 {
+    /* Filter0 — Left channel (falling edge) */
+    MdfHandle0.Instance = MDF1_Filter0;
+    MdfHandle0.Init.CommonParam.ProcClockDivider = 52;  /* 160MHz/52 = 3.077MHz PDM clock */
+    MdfHandle0.Init.CommonParam.OutputClock.Activation = ENABLE;
+    MdfHandle0.Init.CommonParam.OutputClock.Pins = MDF_OUTPUT_CLOCK_0;
+    MdfHandle0.Init.CommonParam.OutputClock.Divider = 1;
+    MdfHandle0.Init.CommonParam.OutputClock.Trigger.Activation = DISABLE;
+    MdfHandle0.Init.SerialInterface.Activation = ENABLE;
+    MdfHandle0.Init.SerialInterface.Mode = MDF_SITF_LF_MASTER_SPI_MODE;
+    MdfHandle0.Init.SerialInterface.ClockSource = MDF_SITF_CCK0_SOURCE;
+    MdfHandle0.Init.SerialInterface.Threshold = 4;
+    MdfHandle0.Init.FilterBistream = MDF_BITSTREAM0_FALLING;
+    if (HAL_MDF_Init(&MdfHandle0) != HAL_OK) {
+        printf("MDF1 Filter0 (L): Init FAILED\r\n");
+        return;
+    }
 
-  /* USER CODE BEGIN ADF1_Init 0 */
+    /* Filter1 — Right channel (rising edge).
+     * Serial interface disabled — Filter1 reads from SITF0 via bitstream mixer.
+     * Only Filter0 owns the serial interface and output clock. */
+    MdfHandle1.Instance = MDF1_Filter1;
+    MdfHandle1.Init.CommonParam.ProcClockDivider = 52;
+    MdfHandle1.Init.CommonParam.OutputClock.Activation = DISABLE;
+    MdfHandle1.Init.CommonParam.OutputClock.Pins = MDF_OUTPUT_CLOCK_0;
+    MdfHandle1.Init.CommonParam.OutputClock.Divider = 1;
+    MdfHandle1.Init.CommonParam.OutputClock.Trigger.Activation = DISABLE;
+    MdfHandle1.Init.SerialInterface.Activation = DISABLE;
+    MdfHandle1.Init.SerialInterface.Mode = MDF_SITF_LF_MASTER_SPI_MODE;
+    MdfHandle1.Init.SerialInterface.ClockSource = MDF_SITF_CCK0_SOURCE;
+    MdfHandle1.Init.SerialInterface.Threshold = 4;
+    MdfHandle1.Init.FilterBistream = MDF_BITSTREAM0_RISING;
+    if (HAL_MDF_Init(&MdfHandle1) != HAL_OK) {
+        printf("MDF1 Filter1 (R): Init FAILED\r\n");
+        return;
+    }
 
-  /* USER CODE END ADF1_Init 0 */
+    /* Filter configurations — identical for both channels */
+    MdfFilterConfig0.DataSource = MDF_DATA_SOURCE_BSMX;
+    MdfFilterConfig0.Delay = 0;
+    MdfFilterConfig0.CicMode = MDF_ONE_FILTER_SINC4;
+    MdfFilterConfig0.DecimationRatio = 64;
+    MdfFilterConfig0.Gain = 0;
+    MdfFilterConfig0.ReshapeFilter.Activation = DISABLE;
+    MdfFilterConfig0.HighPassFilter.Activation = ENABLE;
+    MdfFilterConfig0.HighPassFilter.CutOffFrequency = MDF_HPF_CUTOFF_0_000625FPCM;
+    MdfFilterConfig0.SoundActivity.Activation = DISABLE;
+    MdfFilterConfig0.AcquisitionMode = MDF_MODE_ASYNC_CONT;
+    MdfFilterConfig0.FifoThreshold = MDF_FIFO_THRESHOLD_NOT_EMPTY;
+    MdfFilterConfig0.DiscardSamples = 0;
 
-  /* USER CODE BEGIN ADF1_Init 1 */
+    /* Copy same config for right channel */
+    memcpy(&MdfFilterConfig1, &MdfFilterConfig0, sizeof(MdfFilterConfig1));
 
-  /* USER CODE END ADF1_Init 1 */
-
-  /**
-    AdfHandle0 structure initialization and HAL_MDF_Init function call
-  */
-  AdfHandle0.Instance = ADF1_Filter0;
-  AdfHandle0.Init.CommonParam.ProcClockDivider = 52;
-  AdfHandle0.Init.CommonParam.OutputClock.Activation = ENABLE;
-  AdfHandle0.Init.CommonParam.OutputClock.Pins = MDF_OUTPUT_CLOCK_0;
-  AdfHandle0.Init.CommonParam.OutputClock.Divider = 1;
-  AdfHandle0.Init.CommonParam.OutputClock.Trigger.Activation = DISABLE;
-  AdfHandle0.Init.SerialInterface.Activation = ENABLE;
-  AdfHandle0.Init.SerialInterface.Mode = MDF_SITF_LF_MASTER_SPI_MODE;
-  AdfHandle0.Init.SerialInterface.ClockSource = MDF_SITF_CCK0_SOURCE;
-  AdfHandle0.Init.SerialInterface.Threshold = 4;
-  AdfHandle0.Init.FilterBistream = MDF_BITSTREAM0_FALLING;
-  if (HAL_MDF_Init(&AdfHandle0) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /**
-    AdfFilterConfig0 structure initialization
-
-    WARNING : only structure is filled, no specific init function call for filter
-  */
-  AdfFilterConfig0.DataSource = MDF_DATA_SOURCE_BSMX;
-  AdfFilterConfig0.Delay = 0;
-  AdfFilterConfig0.CicMode = MDF_ONE_FILTER_SINC4;
-  AdfFilterConfig0.DecimationRatio = 64;
-  AdfFilterConfig0.Gain = 0;
-  AdfFilterConfig0.ReshapeFilter.Activation = DISABLE;  /* RSFLT tested: Sinc5/dec=16+RSFLT raised
-                                                        * noise floor by 33dB (from -44dB to -11dB).
-                                                        * Low CIC decimation lets too much quantization
-                                                        * noise fold into passband. Not viable at our
-                                                        * 3MHz PDM clock without higher sample rate. */
-  AdfFilterConfig0.HighPassFilter.Activation = ENABLE; /* Remove DC offset from PDM mic.
-                                                        * Cutoff = 0.000625 × Fpcm = 30Hz at 48kHz.
-                                                        * Per ST AN5795 recommendation. */
-  AdfFilterConfig0.HighPassFilter.CutOffFrequency = MDF_HPF_CUTOFF_0_000625FPCM;
-  AdfFilterConfig0.SoundActivity.Activation = DISABLE;
-  AdfFilterConfig0.AcquisitionMode = MDF_MODE_ASYNC_CONT;
-  AdfFilterConfig0.FifoThreshold = MDF_FIFO_THRESHOLD_NOT_EMPTY;
-  AdfFilterConfig0.DiscardSamples = 0;
-  /* USER CODE BEGIN ADF1_Init 2 */
-
-  /* USER CODE END ADF1_Init 2 */
-
+    printf("MDF1: Stereo init OK (L=falling, R=rising, PE9/PE10)\r\n");
 }
 
 /**
@@ -1279,6 +1314,8 @@ static void MX_GPDMA1_Init(void)
   /* GPDMA1 interrupt Init */
     HAL_NVIC_SetPriority(GPDMA1_Channel0_IRQn, 5, 0);
     HAL_NVIC_EnableIRQ(GPDMA1_Channel0_IRQn);
+    HAL_NVIC_SetPriority(GPDMA1_Channel1_IRQn, 5, 0);
+    HAL_NVIC_EnableIRQ(GPDMA1_Channel1_IRQn);
 
   /* USER CODE BEGIN GPDMA1_Init 1 */
 
@@ -1927,10 +1964,10 @@ wake_source_t enterStop2(uint32_t seconds)
 
     uint8_t wasAudioStarted = audioStarted;
 
-    /* Stop ADF1 DMA if running */
+    /* Stop MDF1 stereo DMA if running */
     if (audioStarted) {
-        extern MDF_HandleTypeDef AdfHandle0;
-        HAL_MDF_AcqStop_DMA(&AdfHandle0);
+        HAL_MDF_AcqStop_DMA(&MdfHandle0);
+        HAL_MDF_AcqStop_DMA(&MdfHandle1);
         audioStarted = 0;
     }
 
@@ -2084,16 +2121,20 @@ wake_source_t enterStop2(uint32_t seconds)
     __HAL_UART_ENABLE_IT(&husart1, UART_IT_RXNE);
     __HAL_UART_ENABLE_IT(&husart3, UART_IT_RXNE);
 
-    /* Restart ADF1 DMA if it was running */
+    /* Restart MDF1 stereo DMA if it was running */
     if (wasAudioStarted) {
-        extern MDF_HandleTypeDef AdfHandle0;
-        extern MDF_FilterConfigTypeDef AdfFilterConfig0;
         extern int32_t audioBuffer[];
-        MDF_DmaConfigTypeDef dmaConfig = {0};
-        dmaConfig.Address = (uint32_t)audioBuffer;
-        dmaConfig.DataLength = AUDIO_BUF_SIZE * 4;
-        dmaConfig.MsbOnly = DISABLE;
-        if (HAL_MDF_AcqStart_DMA(&AdfHandle0, &AdfFilterConfig0, &dmaConfig) == HAL_OK) {
+        extern int32_t audioBufferR[];
+        MDF_DmaConfigTypeDef dmaL = {0};
+        dmaL.Address = (uint32_t)audioBuffer;
+        dmaL.DataLength = AUDIO_BUF_SIZE * 4;
+        dmaL.MsbOnly = DISABLE;
+        MDF_DmaConfigTypeDef dmaR = {0};
+        dmaR.Address = (uint32_t)audioBufferR;
+        dmaR.DataLength = AUDIO_BUF_SIZE * 4;
+        dmaR.MsbOnly = DISABLE;
+        if (HAL_MDF_AcqStart_DMA(&MdfHandle0, &MdfFilterConfig0, &dmaL) == HAL_OK &&
+            HAL_MDF_AcqStart_DMA(&MdfHandle1, &MdfFilterConfig1, &dmaR) == HAL_OK) {
             audioStarted = 1;
         }
     }
@@ -2101,7 +2142,7 @@ wake_source_t enterStop2(uint32_t seconds)
     return wakeSource;
 }
 
-/* ADF1 DMA callbacks — copy PCM data into ring buffer directly from ISR.
+/* MDF1 stereo DMA callbacks — copy PCM data into L/R ring buffers from ISR.
  * This runs in ~5µs at 160MHz (512 shift+store ops) and guarantees data is
  * captured before the circular DMA overwrites the buffer.  The previous
  * approach (boolean flags + task-level copy) lost data when f_sync blocked
@@ -2109,42 +2150,70 @@ wake_source_t enterStop2(uint32_t seconds)
  * and the DMA buffer got overwritten before the task could read it. */
 void HAL_MDF_AcqHalfCpltCallback(MDF_HandleTypeDef *hmdf)
 {
-    dmaCallbackCount++;
-    dmaCallbackTick = HAL_GetTick();
-    absSampleCount += AUDIO_BUF_SIZE / 2;
+    if (hmdf->Instance == MDF1_Filter0) {
+        /* Left channel — first half of DMA buffer */
+        dmaCallbackCount++;
+        dmaCallbackTick = HAL_GetTick();
+        absSampleCount += AUDIO_BUF_SIZE / 2;
 
-    uint32_t h = ringHead;
-    if ((h - ringTail) + (AUDIO_BUF_SIZE / 2) > PCM_RING_SIZE) {
-        ringOverruns++;
-    } else {
-        const int32_t *src = &audioBuffer[0];
-        for (int i = 0; i < AUDIO_BUF_SIZE / 2; i++) {
-            pcmRing[h & PCM_RING_MASK] = (int32_t)(src[i] >> 8);
-            h++;
+        uint32_t h = ringHead;
+        if ((h - ringTail) + (AUDIO_BUF_SIZE / 2) > PCM_RING_SIZE) {
+            ringOverruns++;
+        } else {
+            const int32_t *src = &audioBuffer[0];
+            for (int i = 0; i < AUDIO_BUF_SIZE / 2; i++) {
+                pcmRing[h & PCM_RING_MASK] = (int32_t)(src[i] >> 8);
+                h++;
+            }
+            ringHead = h;
         }
-        ringHead = h;
+        osSemaphoreRelease(audioDmaSemHandle);
+    } else if (hmdf->Instance == MDF1_Filter1) {
+        /* Right channel — first half of DMA buffer */
+        uint32_t h = ringHeadR;
+        if ((h - ringTailR) + (AUDIO_BUF_SIZE / 2) <= PCM_RING_SIZE) {
+            const int32_t *src = &audioBufferR[0];
+            for (int i = 0; i < AUDIO_BUF_SIZE / 2; i++) {
+                pcmRingR[h & PCM_RING_MASK] = (int32_t)(src[i] >> 8);
+                h++;
+            }
+            ringHeadR = h;
+        }
     }
-    osSemaphoreRelease(audioDmaSemHandle);
 }
 
 void HAL_MDF_AcqCpltCallback(MDF_HandleTypeDef *hmdf)
 {
-    dmaCallbackCount++;
-    dmaCallbackTick = HAL_GetTick();
-    absSampleCount += AUDIO_BUF_SIZE / 2;
+    if (hmdf->Instance == MDF1_Filter0) {
+        /* Left channel — second half of DMA buffer */
+        dmaCallbackCount++;
+        dmaCallbackTick = HAL_GetTick();
+        absSampleCount += AUDIO_BUF_SIZE / 2;
 
-    uint32_t h = ringHead;
-    if ((h - ringTail) + (AUDIO_BUF_SIZE / 2) > PCM_RING_SIZE) {
-        ringOverruns++;
-    } else {
-        const int32_t *src = &audioBuffer[AUDIO_BUF_SIZE / 2];
-        for (int i = 0; i < AUDIO_BUF_SIZE / 2; i++) {
-            pcmRing[h & PCM_RING_MASK] = (int32_t)(src[i] >> 8);
-            h++;
+        uint32_t h = ringHead;
+        if ((h - ringTail) + (AUDIO_BUF_SIZE / 2) > PCM_RING_SIZE) {
+            ringOverruns++;
+        } else {
+            const int32_t *src = &audioBuffer[AUDIO_BUF_SIZE / 2];
+            for (int i = 0; i < AUDIO_BUF_SIZE / 2; i++) {
+                pcmRing[h & PCM_RING_MASK] = (int32_t)(src[i] >> 8);
+                h++;
+            }
+            ringHead = h;
         }
-        ringHead = h;
+        osSemaphoreRelease(audioDmaSemHandle);
+    } else if (hmdf->Instance == MDF1_Filter1) {
+        /* Right channel — second half of DMA buffer */
+        uint32_t h = ringHeadR;
+        if ((h - ringTailR) + (AUDIO_BUF_SIZE / 2) <= PCM_RING_SIZE) {
+            const int32_t *src = &audioBufferR[AUDIO_BUF_SIZE / 2];
+            for (int i = 0; i < AUDIO_BUF_SIZE / 2; i++) {
+                pcmRingR[h & PCM_RING_MASK] = (int32_t)(src[i] >> 8);
+                h++;
+            }
+            ringHeadR = h;
+        }
     }
-    osSemaphoreRelease(audioDmaSemHandle);
 }
 
 void HAL_GPIO_EXTI_Rising_Callback(uint16_t GPIO_Pin)

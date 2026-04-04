@@ -1866,10 +1866,12 @@ static void StartBridgeTask(void *argument)
     configLoad();
 
     /* Apply persisted config to runtime state */
-    extern MDF_FilterConfigTypeDef AdfFilterConfig0;
-    extern MDF_HandleTypeDef AdfHandle0;
-    AdfFilterConfig0.Gain = (int32_t)cfg.gain;
-    HAL_MDF_SetGain(&AdfHandle0, (int32_t)cfg.gain);
+    extern MDF_FilterConfigTypeDef MdfFilterConfig0, MdfFilterConfig1;
+    extern MDF_HandleTypeDef MdfHandle0, MdfHandle1;
+    MdfFilterConfig0.Gain = (int32_t)cfg.gain;
+    MdfFilterConfig1.Gain = (int32_t)cfg.gain;
+    HAL_MDF_SetGain(&MdfHandle0, (int32_t)cfg.gain);
+    HAL_MDF_SetGain(&MdfHandle1, (int32_t)cfg.gain);
     dev.rec.format = cfg.recFormat;
 
     /* Initialize power management state — default to dev mode (everything on) */
