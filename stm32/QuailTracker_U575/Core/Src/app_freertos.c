@@ -96,6 +96,10 @@ extern int32_t pcmBuffer[];
 extern int32_t pcmRing[];
 extern volatile uint32_t ringHead;
 extern uint32_t ringTail;
+extern int32_t pcmRingR[];
+extern volatile uint32_t ringHeadR;
+extern uint32_t ringTailR;
+extern volatile uint8_t audioChannelRight;
 
 extern FIL wavFile;
 #define REC_FMT_FLAC 0
@@ -442,16 +446,21 @@ void StartAudioTask(void *argument)
      * The ISR copies DMA data into the ring immediately on each half-complete,
      * so no data is lost even if this task is blocked on f_sync for 100ms+. */
     if (isRecording) {
-      while ((ringHead - ringTail) >= (AUDIO_BUF_SIZE / 2)) {
+      /* Select L or R ring buffer based on channel toggle */
+      volatile uint32_t *pHead = audioChannelRight ? &ringHeadR : &ringHead;
+      uint32_t *pTail = audioChannelRight ? &ringTailR : &ringTail;
+      int32_t *pRing = audioChannelRight ? pcmRingR : pcmRing;
+
+      while ((*pHead - *pTail) >= (AUDIO_BUF_SIZE / 2)) {
         const int blockLen = AUDIO_BUF_SIZE / 2;
 
         /* Step 1: Copy from ring buffer into pcmBuffer */
-        uint32_t t = ringTail;
+        uint32_t t = *pTail;
         for (int i = 0; i < blockLen; i++) {
-          pcmBuffer[i] = pcmRing[t & PCM_RING_MASK];
+          pcmBuffer[i] = pRing[t & PCM_RING_MASK];
           t++;
         }
-        ringTail = t;
+        *pTail = t;
 
         /* Step 2a: Apply HPF if configured (bpfLow) */
         if (hpfAlpha > 0) {
@@ -660,12 +669,16 @@ skip_write:
        * using separate state so recording init doesn't conflict. */
       static int32_t monHpfPrevIn = 0, monHpfPrevOut = 0;
       int32_t alpha = computeHpfAlpha(cfg.bpfLow);
-      while ((ringHead - ringTail) >= (AUDIO_BUF_SIZE / 2)) {
+      {
+      volatile uint32_t *pHead2 = audioChannelRight ? &ringHeadR : &ringHead;
+      uint32_t *pTail2 = audioChannelRight ? &ringTailR : &ringTail;
+      int32_t *pRing2 = audioChannelRight ? pcmRingR : pcmRing;
+      while ((*pHead2 - *pTail2) >= (AUDIO_BUF_SIZE / 2)) {
         const int blockLen = AUDIO_BUF_SIZE / 2;
-        uint32_t t = ringTail;
+        uint32_t t = *pTail2;
         int32_t blockPeak = 0;
         for (int i = 0; i < blockLen; i++) {
-          int32_t raw = pcmRing[t & PCM_RING_MASK];
+          int32_t raw = pRing2[t & PCM_RING_MASK];
           t++;
           if (alpha > 0) {
             int32_t out = (int32_t)(((int64_t)alpha * (monHpfPrevOut + raw - monHpfPrevIn)) >> 16);
@@ -676,8 +689,9 @@ skip_write:
           int32_t a = raw < 0 ? -raw : raw;
           if (a > blockPeak) blockPeak = a;
         }
-        ringTail = t;
+        *pTail2 = t;
         if (blockPeak > audioPeakLevel) audioPeakLevel = blockPeak;
+      }
       }
     }
   }
@@ -1075,6 +1089,19 @@ void StartCliTask(void *argument)
                 dev.pwr.state = PWR_SCHEDULED_REC;  /* start evaluating */
                 printf("Schedule: ON — autonomous recording enabled\r\n");
             }
+        }
+        printMenu();
+        break;
+      }
+
+      case 'c':
+      case 'C':
+      {
+        if (isRecording) {
+            printf("Stop recording first!\r\n");
+        } else {
+            audioChannelRight = !audioChannelRight;
+            printf("Audio channel: %s\r\n", audioChannelRight ? "RIGHT" : "LEFT");
         }
         printMenu();
         break;

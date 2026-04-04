@@ -100,6 +100,9 @@ int32_t pcmRingR[PCM_RING_SIZE];        /* Right channel ring */
 volatile uint32_t ringHeadR = 0;
 uint32_t ringTailR = 0;
 
+/* Channel select: 0=Left (default), 1=Right — swaps which ring the audio task reads */
+volatile uint8_t audioChannelRight = 0;
+
 /* FLAC encoder instance (shared with app_freertos.c audio task) */
 flac_enc_t flacEncoder;
 
@@ -535,6 +538,11 @@ void printMenu(void)
     printf("Z. Sleep (Stop 2)\r\n");
     printf("A. Toggle Autonomous Schedule (%s)\r\n",
            dev.pwr.scheduleActive ? "ON" : "OFF");
+    {
+        extern volatile uint8_t audioChannelRight;
+        printf("C. Toggle Audio Channel (%s)\r\n",
+               audioChannelRight ? "RIGHT" : "LEFT");
+    }
     printf("D. Toggle Dev Mode (%s)\r\n",
            dev.pwr.devMode ? "ON" : "OFF");
     printf("================\r\n");
