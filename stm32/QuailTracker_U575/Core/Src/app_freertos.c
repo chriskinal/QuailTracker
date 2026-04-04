@@ -2015,8 +2015,7 @@ static void StartBridgeTask(void *argument)
                 "\"gain\":%d,\"fmt\":%d,\"hpf\":%u,\"lpf\":%u,\"chunk\":%d,"
                 "\"trigEn\":%d,\"trigDb\":%d,\"trigPre\":%d,\"trigPost\":%d,"
                 "\"lowBat\":%d,\"autoStop\":%d,"
-                "\"pwrState\":%d,\"devMode\":%d,\"schedActive\":%d,\"rtcSync\":%d,"
-                "\"press\":%lu}",
+                "\"pwrState\":%d,\"devMode\":%d,\"schedActive\":%d,\"rtcSync\":%d}",
                 (unsigned long)mv,
                 tWhole, tFrac,
                 (unsigned)(sht30HumRH100 / 100),
@@ -2079,8 +2078,7 @@ static void StartBridgeTask(void *argument)
                 (int)dev.pwr.state,
                 (int)dev.pwr.devMode,
                 (int)dev.pwr.scheduleActive,
-                (int)dev.pwr.rtcSynced,
-                (unsigned long)dev.env.pressurePa);
+                (int)dev.pwr.rtcSynced);
 
             HAL_GPIO_WritePin(SPI2_CS_PORT, SPI2_CS_PIN, GPIO_PIN_RESET);
             HAL_StatusTypeDef spiResult = HAL_SPI_TransmitReceive(&hspi2, spi_tx, spi_rx, SPI2_BUF_SIZE, 100);
