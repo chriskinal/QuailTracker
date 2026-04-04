@@ -834,7 +834,7 @@ void stopRecording(void)
         f_close(&wavFile);
 
         uint32_t seconds = (uint32_t)(flacEncoder.totalSamples / SAMPLE_RATE);
-        uint32_t rawSize = (uint32_t)(flacEncoder.totalSamples * 2);
+        uint32_t rawSize = (uint32_t)(flacEncoder.totalSamples * FLAC_CHANNELS * (FLAC_BITS_PER_SAMPLE / 8));
         uint32_t ratio = rawSize > 0 ? (totalDataBytes * 100) / rawSize : 0;
         printf("Recording stopped: %lu bytes (%lus, %lu%% of raw)\r\n",
             (unsigned long)totalDataBytes, (unsigned long)seconds,

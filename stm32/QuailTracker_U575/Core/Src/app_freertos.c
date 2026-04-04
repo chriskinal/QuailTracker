@@ -667,7 +667,7 @@ void StartAudioTask(void *argument)
           osMutexRelease(fileMtxHandle);
         } else {
           /* FLAC encode -accumulates 8 calls into one 4096-sample block */
-          uint32_t encoded = flac_enc_process(&flacEncoder, pcmBuffer, blockLen);
+          uint32_t encoded = flac_enc_process_stereo(&flacEncoder, pcmBuffer, pcmBufferR, blockLen);
           if (encoded > 0) {
             osMutexAcquire(fileMtxHandle, osWaitForever);
             UINT bw;
