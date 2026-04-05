@@ -147,7 +147,6 @@ static void ws_broadcast(const char *json)
         if (ws_fds[i] != 0) {
             esp_err_t ret = httpd_ws_send_frame_async(ws_server, ws_fds[i], &ws_pkt);
             if (ret != ESP_OK) {
-                ESP_LOGW(TAG, "WS send failed fd=%d: %s", ws_fds[i], esp_err_to_name(ret));
                 ws_remove_client(ws_fds[i]);
             }
         }
@@ -159,6 +158,13 @@ static void ws_broadcast(const char *json)
 #include "web_data.h"
 
 /* ── HTTP + WebSocket Handlers ─────────────────────────────────── */
+
+/* Called when any HTTP/WS socket closes — clean up stale WS clients */
+static void on_sock_close(httpd_handle_t hd, int sockfd)
+{
+    ws_remove_client(sockfd);
+    close(sockfd);
+}
 
 static esp_err_t root_handler(httpd_req_t *req)
 {
@@ -246,9 +252,25 @@ static esp_err_t ota_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "OTA update started, content_len=%d", req->content_len);
 
+    /* Read first chunk and validate ESP32 image magic byte (0xE9) */
+    char buf[1024];
+    int ret = httpd_req_recv(req, buf, sizeof(buf));
+    if (ret <= 0) {
+        ws_broadcast("{\"otaErr\":\"No data received\"}");
+        httpd_resp_sendstr(req, "ERR");
+        return ESP_FAIL;
+    }
+    if ((uint8_t)buf[0] != 0xE9) {
+        ESP_LOGE(TAG, "Not ESP32 firmware (magic=0x%02X, expected 0xE9)", (uint8_t)buf[0]);
+        ws_broadcast("{\"otaErr\":\"Invalid firmware — not an ESP32 binary\"}");
+        httpd_resp_sendstr(req, "ERR");
+        return ESP_FAIL;
+    }
+
     const esp_partition_t *update_partition = esp_ota_get_next_update_partition(NULL);
     if (!update_partition) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No OTA partition");
+        ws_broadcast("{\"otaErr\":\"No OTA partition\"}");
+        httpd_resp_sendstr(req, "ERR");
         return ESP_FAIL;
     }
 
@@ -256,29 +278,38 @@ static esp_err_t ota_handler(httpd_req_t *req)
     esp_err_t err = esp_ota_begin(update_partition, OTA_WITH_SEQUENTIAL_WRITES, &ota_handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(err));
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA begin failed");
+        ws_broadcast("{\"otaErr\":\"OTA begin failed\"}");
+        httpd_resp_sendstr(req, "ERR");
         return ESP_FAIL;
     }
 
-    char buf[1024];
-    int received = 0;
+    /* Write first chunk that we already read */
+    err = esp_ota_write(ota_handle, buf, ret);
+    if (err != ESP_OK) {
+        esp_ota_abort(ota_handle);
+        ws_broadcast("{\"otaErr\":\"Write error\"}");
+        httpd_resp_sendstr(req, "ERR");
+        return ESP_FAIL;
+    }
+    int received = ret;
     int total = req->content_len;
 
+    /* Continue receiving and writing */
     while (received < total) {
-        int ret = httpd_req_recv(req, buf, sizeof(buf));
+        ret = httpd_req_recv(req, buf, sizeof(buf));
         if (ret <= 0) {
             if (ret == HTTPD_SOCK_ERR_TIMEOUT) continue;
-            ESP_LOGE(TAG, "OTA recv error at %d/%d", received, total);
             esp_ota_abort(ota_handle);
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Receive error");
+            ws_broadcast("{\"otaErr\":\"Receive error\"}");
+            httpd_resp_sendstr(req, "ERR");
             return ESP_FAIL;
         }
 
         err = esp_ota_write(ota_handle, buf, ret);
         if (err != ESP_OK) {
-            ESP_LOGE(TAG, "esp_ota_write failed: %s", esp_err_to_name(err));
             esp_ota_abort(ota_handle);
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Write error");
+            ws_broadcast("{\"otaErr\":\"Write error\"}");
+            httpd_resp_sendstr(req, "ERR");
             return ESP_FAIL;
         }
 
@@ -292,14 +323,16 @@ static esp_err_t ota_handler(httpd_req_t *req)
     err = esp_ota_end(ota_handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ota_end failed: %s", esp_err_to_name(err));
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Validation failed");
+        ws_broadcast("{\"otaErr\":\"Firmware validation failed\"}");
+        httpd_resp_sendstr(req, "ERR");
         return ESP_FAIL;
     }
 
     err = esp_ota_set_boot_partition(update_partition);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ota_set_boot_partition failed: %s", esp_err_to_name(err));
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Set boot failed");
+        ws_broadcast("{\"otaErr\":\"Set boot partition failed\"}");
+        httpd_resp_sendstr(req, "ERR");
         return ESP_FAIL;
     }
 
@@ -354,7 +387,30 @@ static esp_err_t stm32_ota_handler(httpd_req_t *req)
     ESP_LOGI(TAG, "STM32 flash started, content_len=%d", req->content_len);
 
     if (req->content_len <= 0 || req->content_len > 512 * 1024) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid firmware size");
+        ws_broadcast("{\"otaErr\":\"Invalid firmware size\"}");
+        httpd_resp_sendstr(req, "ERR");
+        return ESP_FAIL;
+    }
+
+    /* Read first chunk and validate STM32 header before doing anything */
+    char buf[1024];
+    int ret = httpd_req_recv(req, buf, sizeof(buf));
+    if (ret < 8) {
+        ws_broadcast("{\"otaErr\":\"No data received\"}");
+        httpd_resp_sendstr(req, "ERR");
+        return ESP_FAIL;
+    }
+
+    /* Validate: SP = 0x2000xxxx, reset vector = 0x0800xxxx */
+    uint32_t sp = (uint8_t)buf[0] | ((uint8_t)buf[1] << 8) |
+                  ((uint8_t)buf[2] << 16) | ((uint8_t)buf[3] << 24);
+    uint32_t rv = (uint8_t)buf[4] | ((uint8_t)buf[5] << 8) |
+                  ((uint8_t)buf[6] << 16) | ((uint8_t)buf[7] << 24);
+    if ((sp & 0xFFF00000) != 0x20000000 || (rv & 0xFFF00000) != 0x08000000) {
+        ESP_LOGE(TAG, "Not STM32 firmware (SP=0x%08lx RV=0x%08lx)",
+                 (unsigned long)sp, (unsigned long)rv);
+        ws_broadcast("{\"otaErr\":\"Invalid firmware — not an STM32 binary\"}");
+        httpd_resp_sendstr(req, "ERR");
         return ESP_FAIL;
     }
 
@@ -362,37 +418,43 @@ static esp_err_t stm32_ota_handler(httpd_req_t *req)
     const esp_partition_t *part = esp_partition_find_first(
         ESP_PARTITION_TYPE_DATA, 0x80, STM32FW_PARTITION_LABEL);
     if (!part) {
-        ESP_LOGE(TAG, "stm32fw partition not found");
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No staging partition");
+        ws_broadcast("{\"otaErr\":\"No staging partition\"}");
+        httpd_resp_sendstr(req, "ERR");
         return ESP_FAIL;
     }
 
     /* Erase the staging partition */
     esp_err_t err = esp_partition_erase_range(part, 0, part->size);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Partition erase failed: %s", esp_err_to_name(err));
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Erase failed");
+        ws_broadcast("{\"otaErr\":\"Partition erase failed\"}");
+        httpd_resp_sendstr(req, "ERR");
         return ESP_FAIL;
     }
 
-    /* Stage 1: Receive firmware and write to flash partition */
+    /* Write first chunk that we already read */
+    err = esp_partition_write(part, 0, buf, ret);
+    if (err != ESP_OK) {
+        ws_broadcast("{\"otaErr\":\"Write failed\"}");
+        httpd_resp_sendstr(req, "ERR");
+        return ESP_FAIL;
+    }
+    int received = ret;
     int total = req->content_len;
-    int received = 0;
-    char buf[1024];
 
+    /* Stage 1: Continue receiving firmware and writing to flash partition */
     while (received < total) {
-        int ret = httpd_req_recv(req, buf, sizeof(buf));
+        ret = httpd_req_recv(req, buf, sizeof(buf));
         if (ret <= 0) {
             if (ret == HTTPD_SOCK_ERR_TIMEOUT) continue;
-            ESP_LOGE(TAG, "Receive error at %d/%d", received, total);
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Receive error");
+            ws_broadcast("{\"otaErr\":\"Receive error\"}");
+            httpd_resp_sendstr(req, "ERR");
             return ESP_FAIL;
         }
 
         err = esp_partition_write(part, received, buf, ret);
         if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Partition write failed at %d: %s", received, esp_err_to_name(err));
-            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Write failed");
+            ws_broadcast("{\"otaErr\":\"Write failed\"}");
+            httpd_resp_sendstr(req, "ERR");
             return ESP_FAIL;
         }
 
@@ -415,8 +477,9 @@ static esp_err_t stm32_ota_handler(httpd_req_t *req)
         if ((sp & 0xFFF00000) != 0x20000000 || (rv & 0xFFF00000) != 0x08000000) {
             ESP_LOGE(TAG, "Not a valid STM32 firmware (SP=0x%08lx RV=0x%08lx)",
                      (unsigned long)sp, (unsigned long)rv);
-            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                "Invalid firmware — this does not appear to be an STM32 binary");
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_set_type(req, "text/plain");
+            httpd_resp_sendstr(req, "Invalid firmware — not an STM32 binary");
             return ESP_FAIL;
         }
         ESP_LOGI(TAG, "STM32 header valid (SP=0x%08lx RV=0x%08lx)",
@@ -450,7 +513,9 @@ static esp_err_t stm32_ota_handler(httpd_req_t *req)
         char errmsg[64];
         snprintf(errmsg, sizeof(errmsg), "Flash failed (error %d)", rc);
         ESP_LOGE(TAG, "%s", errmsg);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, errmsg);
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_sendstr(req, errmsg);
         return ESP_FAIL;
     }
 
@@ -466,9 +531,10 @@ static httpd_handle_t start_webserver(void)
     if (ws_server) return ws_server;  /* already running */
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 8;
+    config.max_uri_handlers = 16;
     config.stack_size = 8192;
-    config.uri_match_fn = httpd_uri_match_wildcard;  /* enable wildcard URI matching */
+    config.lru_purge_enable = true;    /* close oldest connection when full */
+    config.close_fn = on_sock_close;   /* clean up WS client list on disconnect */
     httpd_handle_t server = NULL;
 
     if (httpd_start(&server, &config) == ESP_OK) {
@@ -522,14 +588,26 @@ static httpd_handle_t start_webserver(void)
         };
         httpd_register_uri_handler(server, &esp_cfg_post);
 
-        /* Catch-all: return 204 for unknown URLs (satisfies captive portal probes).
-         * Must be registered LAST — wildcard matches everything. */
-        httpd_uri_t catchall = {
-            .uri = "/*",
+        /* Register captive portal probe URLs — return 204 so phones
+         * don't show portal popup. Any URL typed by user gets resolved
+         * to 192.168.9.1 by our DNS, hitting the root "/" handler. */
+        const char *probe_uris[] = {
+            "/generate_204",
+            "/hotspot-detect.html",
+            "/ncsi.txt",
+            "/connecttest.txt",
+            "/redirect",
+            "/success.txt",
+            NULL
+        };
+        httpd_uri_t probe = {
             .method = HTTP_GET,
             .handler = catchall_handler,
         };
-        httpd_register_uri_handler(server, &catchall);
+        for (int i = 0; probe_uris[i]; i++) {
+            probe.uri = probe_uris[i];
+            httpd_register_uri_handler(server, &probe);
+        }
 
         ESP_LOGI(TAG, "Web server started on port %d", config.server_port);
     }

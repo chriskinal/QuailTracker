@@ -771,6 +771,7 @@
             var xhr = new XMLHttpRequest();
             xhr.open('POST', '/ota', true);
             xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+            xhr.timeout = 60000;
             xhr.upload.onprogress = function(e) {
                 if (e.lengthComputable) {
                     var pct = Math.round(e.loaded * 100 / e.total);
@@ -865,19 +866,40 @@
             xhr.send(file);
         }
 
+        var _connectTimer = null;
+        var _retries = 0;
+
         function connect() {
+            /* Debounce — cancel any pending retry */
+            if (_connectTimer) { clearTimeout(_connectTimer); _connectTimer = null; }
+
+            /* Close any existing connection */
+            if (ws) {
+                try { ws.onclose = null; ws.close(); } catch(e) {}
+                ws = null;
+            }
+
+            _retries++;
+            document.getElementById('dot').className = 'dot';
+            document.getElementById('connSt').textContent = 'Connecting...';
+
             ws = new WebSocket('ws://' + location.host + '/ws');
 
             ws.onopen = function() {
+                _retries = 0;
                 document.getElementById('dot').className = 'dot on';
                 document.getElementById('connSt').textContent = 'Live';
                 loadEspConfig();
             };
 
+            ws.onerror = function() {};
+
             ws.onclose = function() {
                 document.getElementById('dot').className = 'dot';
-                document.getElementById('connSt').textContent = 'Disconnected';
-                setTimeout(connect, 2000);
+                document.getElementById('connSt').textContent = 'Reconnecting...';
+                /* Increasing backoff: 1s, 2s, 3s, max 5s */
+                var delay = Math.min(_retries * 1000, 5000);
+                _connectTimer = setTimeout(connect, delay);
             };
 
             ws.onmessage = function(ev) {
@@ -890,6 +912,21 @@
                     if (el) {
                         el.textContent = 'Flashing STM32... ' + d.stm32flash + '%';
                         el.style.color = '#2196F3';
+                    }
+                    return;
+                }
+
+                /* OTA error via WebSocket (both ESP32 and STM32) */
+                if (d.otaErr !== undefined) {
+                    var stmEl = document.getElementById('stm32OtaStatus');
+                    var espEl = document.getElementById('otaStatus');
+                    var msg = d.otaErr;
+                    if (msg.indexOf('STM32') >= 0 || msg.indexOf('stm32') >= 0 ||
+                        window._stm32flashing) {
+                        if (stmEl) { stmEl.textContent = msg; stmEl.style.color = '#f44336'; }
+                        window._stm32flashing = false;
+                    } else {
+                        if (espEl) { espEl.textContent = msg; espEl.style.color = '#f44336'; }
                     }
                     return;
                 }
