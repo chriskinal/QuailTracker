@@ -56,4 +56,15 @@ public interface IAudioFileService
     /// Gets the total number of segments in an audio file, accounting for overlap.
     /// </summary>
     int GetSegmentCount(AudioFile audioFile, double segmentDuration = 3.0, double overlapSeconds = 0.0);
+
+    /// <summary>
+    /// Extracts separate L and R channel segments from a stereo audio file.
+    /// Returns (left, right) float arrays at native sample rate (no resampling).
+    /// Returns (empty, empty) if file is mono.
+    /// </summary>
+    Task<(float[] left, float[] right)> ExtractStereoSegmentAsync(
+        string filePath,
+        double offsetSeconds,
+        double durationSeconds = 3.0,
+        CancellationToken ct = default);
 }

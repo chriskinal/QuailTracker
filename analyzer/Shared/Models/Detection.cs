@@ -47,6 +47,15 @@ public class Detection
     /// <summary>BirdNet confidence score (0.0 to 1.0).</summary>
     public double Confidence { get; set; }
 
+    /// <summary>Stereo TDOA bearing in degrees (0=forward, 90=right, -90=left). NaN if not computed.</summary>
+    public double BearingDeg { get; set; } = double.NaN;
+
+    /// <summary>TDOA in samples between L and R channels. Positive = sound arrives at R first.</summary>
+    public int TdoaSamples { get; set; }
+
+    /// <summary>Cross-correlation peak value (0-1). Higher = more confident bearing.</summary>
+    public double TdoaConfidence { get; set; }
+
     /// <summary>Whether this detection has been selected for TDOA localization.</summary>
     public bool IsSelected { get; set; }
 

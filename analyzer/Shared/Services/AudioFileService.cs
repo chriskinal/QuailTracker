@@ -257,6 +257,81 @@ public class AudioFileService : IAudioFileService
         }, ct);
     }
 
+    public async Task<(float[] left, float[] right)> ExtractStereoSegmentAsync(
+        string filePath,
+        double offsetSeconds,
+        double durationSeconds = 3.0,
+        CancellationToken ct = default)
+    {
+        return await Task.Run(() =>
+        {
+            ct.ThrowIfCancellationRequested();
+
+            using var reader = OpenAudioReader(filePath);
+            var waveFormat = reader.WaveFormat;
+
+            if (waveFormat.Channels != 2)
+                return (Array.Empty<float>(), Array.Empty<float>());
+
+            var startSample = (long)(offsetSeconds * waveFormat.SampleRate);
+            var sampleCount = (int)(durationSeconds * waveFormat.SampleRate);
+            var totalSamples = reader.Length / waveFormat.BlockAlign;
+
+            if (reader is FlacReader flacReader2)
+            {
+                var streamInfo = flacReader2.Metadata?
+                    .OfType<FlacMetadataStreamInfo>()
+                    .FirstOrDefault();
+                if (streamInfo != null && streamInfo.TotalSamples > 0)
+                    totalSamples = streamInfo.TotalSamples;
+            }
+
+            if (startSample >= totalSamples)
+                return (Array.Empty<float>(), Array.Empty<float>());
+
+            sampleCount = (int)Math.Min(sampleCount, totalSamples - startSample);
+
+            // Read interleaved stereo samples
+            ISampleProvider provider;
+            if (reader is FlacReader)
+            {
+                provider = reader.ToSampleProvider();
+                if (offsetSeconds > 0.01)
+                {
+                    var skipSamples = startSample * 2; // stereo
+                    var skipBuf = new float[Math.Min(4096, skipSamples)];
+                    while (skipSamples > 0)
+                    {
+                        var toRead = (int)Math.Min(skipBuf.Length, skipSamples);
+                        var skipped = provider.Read(skipBuf, 0, toRead);
+                        if (skipped == 0) break;
+                        skipSamples -= skipped;
+                    }
+                }
+            }
+            else
+            {
+                reader.Position = startSample * waveFormat.BlockAlign;
+                provider = reader.ToSampleProvider();
+            }
+
+            var interleaved = new float[sampleCount * 2];
+            var read = provider.Read(interleaved, 0, interleaved.Length);
+
+            // Deinterleave into L and R
+            var frames = read / 2;
+            var left = new float[frames];
+            var right = new float[frames];
+            for (var i = 0; i < frames; i++)
+            {
+                left[i] = interleaved[i * 2];
+                right[i] = interleaved[i * 2 + 1];
+            }
+
+            return (left, right);
+        }, ct);
+    }
+
     public int GetSegmentCount(AudioFile audioFile, double segmentDuration = 3.0, double overlapSeconds = 0.0)
     {
         if (!audioFile.IsValid || audioFile.Duration.TotalSeconds <= 0)
