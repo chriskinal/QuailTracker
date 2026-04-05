@@ -68,4 +68,5 @@ obj/
 *.nupkg
 
 # Datasheets
-datasheets/audio/
+datasheets/
+audio/
