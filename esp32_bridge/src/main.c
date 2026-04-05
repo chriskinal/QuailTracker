@@ -402,7 +402,28 @@ static esp_err_t stm32_ota_handler(httpd_req_t *req)
                      received, total, received * 100 / total);
         }
     }
-    ESP_LOGI(TAG, "Firmware staged (%d bytes), starting STM32 flash", received);
+    ESP_LOGI(TAG, "Firmware staged (%d bytes), validating...", received);
+
+    /* Validate STM32 firmware header: first word = initial SP (0x2000xxxx),
+     * second word = reset vector (0x0800xxxx). Rejects ESP32 firmware or
+     * random data before attempting to flash. */
+    {
+        uint8_t hdr[8];
+        esp_partition_read(part, 0, hdr, 8);
+        uint32_t sp = hdr[0] | (hdr[1] << 8) | (hdr[2] << 16) | (hdr[3] << 24);
+        uint32_t rv = hdr[4] | (hdr[5] << 8) | (hdr[6] << 16) | (hdr[7] << 24);
+        if ((sp & 0xFFF00000) != 0x20000000 || (rv & 0xFFF00000) != 0x08000000) {
+            ESP_LOGE(TAG, "Not a valid STM32 firmware (SP=0x%08lx RV=0x%08lx)",
+                     (unsigned long)sp, (unsigned long)rv);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                "Invalid firmware — this does not appear to be an STM32 binary");
+            return ESP_FAIL;
+        }
+        ESP_LOGI(TAG, "STM32 header valid (SP=0x%08lx RV=0x%08lx)",
+                 (unsigned long)sp, (unsigned long)rv);
+    }
+
+    ESP_LOGI(TAG, "Starting STM32 flash");
     stm32_flash_pct = 0;
 
     /* Stage 2: Stop SPI task, free SPI slave, flash STM32 from partition */
