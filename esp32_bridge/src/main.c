@@ -54,12 +54,13 @@ static volatile uint32_t disconnect_tick = 0;   /* tick when BLE disconnected */
 static volatile bool stm32_sleeping = false;     /* true = STM32 in Stop 2 */
 static bool wifi_started = false;
 
-/* WiFi duty cycle for low-power mode: on 20s, deep sleep 40s.
+/* WiFi duty cycle for low-power mode: on 30s, deep sleep 60s.
  * During deep sleep the ESP32 draws ~5µA instead of 44mA.
+ * 30s on-time allows for ESP32 boot (~3s) + phone WiFi scan + connect.
  * Disabled by default — WiFi stays on continuously. */
 static bool wifi_duty_cycle = false;
-#define WIFI_DUTY_ON_MS   20000
-#define WIFI_DUTY_SLEEP_S 40
+#define WIFI_DUTY_ON_MS   30000
+#define WIFI_DUTY_SLEEP_S 60
 bool spi_initialized = false;
 static TaskHandle_t spi_task_handle = NULL;
 static volatile bool spi_task_stop = false;
