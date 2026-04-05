@@ -245,8 +245,8 @@ static void encode_frame_header(bitwriter_t *bw, uint32_t frameNumber,
     /* Sample rate code (4 bits): 0x0A = 48000 Hz */
     bw_write_bits(bw, 4, 0x0A);
 
-    /* Channel assignment (4 bits): 0 = mono */
-    bw_write_bits(bw, 4, 0);
+    /* Channel assignment (4 bits): 0=mono, 1=2ch independent */
+    bw_write_bits(bw, 4, FLAC_CHANNELS - 1);
 
     /* Sample size (3 bits): 6 = 24-bit */
     bw_write_bits(bw, 3, 6);
@@ -266,16 +266,14 @@ static void encode_frame_header(bitwriter_t *bw, uint32_t frameNumber,
     bw_write_bits(bw, 8, 0);
 }
 
-static uint32_t encode_frame(flac_enc_t *e, uint32_t blockSize)
+/* Encode one subframe (one channel) into the bitwriter */
+static void encode_subframe(bitwriter_t *bw, const int32_t *samples, uint32_t blockSize)
 {
-    bitwriter_t bw;
-    bw_init(&bw, e->outBuf, FLAC_OUT_BUF_SIZE);
-
-    /* --- Select best predictor --- */
+    /* Select best predictor */
     uint32_t bestOrder = 0;
     uint64_t bestCost = UINT64_MAX;
     for (uint32_t ord = 0; ord <= 4 && ord <= blockSize; ord++) {
-        uint64_t cost = compute_fixed_cost(e->blockBuf, blockSize, ord);
+        uint64_t cost = compute_fixed_cost(samples, blockSize, ord);
         if (cost < bestCost) {
             bestCost = cost;
             bestOrder = ord;
@@ -285,60 +283,69 @@ static uint32_t encode_frame(flac_enc_t *e, uint32_t blockSize)
     uint32_t residualCount = blockSize - bestOrder;
     uint32_t k = estimate_rice_param(bestCost, residualCount);
 
-    /* Check if verbatim would be more compact.
-     * Approximate Rice bits: each residual averages ~(2 + k) bits when k fits. */
     uint64_t estRiceBits = (uint64_t)residualCount * (2 + k)
                          + (uint64_t)bestOrder * FLAC_BITS_PER_SAMPLE + 20;
     uint64_t verbBits = (uint64_t)blockSize * FLAC_BITS_PER_SAMPLE + 8;
     int useVerbatim = (estRiceBits >= verbBits);
 
+    if (useVerbatim) {
+        bw_write_bits(bw, 1, 0);
+        bw_write_bits(bw, 6, 1);     /* VERBATIM */
+        bw_write_bits(bw, 1, 0);
+        for (uint32_t i = 0; i < blockSize; i++)
+            bw_write_bits(bw, 24, (uint32_t)(samples[i] & 0xFFFFFF));
+    } else {
+        bw_write_bits(bw, 1, 0);
+        bw_write_bits(bw, 6, 0x08 | bestOrder);  /* FIXED: 001xxx */
+        bw_write_bits(bw, 1, 0);
+
+        for (uint32_t i = 0; i < bestOrder; i++)
+            bw_write_bits(bw, 24, (uint32_t)(samples[i] & 0xFFFFFF));
+
+        bw_write_bits(bw, 2, 0);     /* coding method */
+        bw_write_bits(bw, 4, 0);     /* partition order */
+        bw_write_bits(bw, 4, k);     /* Rice parameter */
+
+        for (uint32_t i = bestOrder; i < blockSize; i++) {
+            int32_t r = compute_residual(samples, i, bestOrder);
+            bw_write_rice_signed(bw, k, r);
+        }
+    }
+}
+
+static uint32_t encode_frame(flac_enc_t *e, uint32_t blockSize)
+{
+    bitwriter_t bw;
+    bw_init(&bw, e->outBuf, FLAC_OUT_BUF_SIZE);
+
     /* --- Frame header --- */
     uint32_t crc8Pos;
     encode_frame_header(&bw, e->frameNumber, blockSize, &crc8Pos);
 
-    /* --- Subframe --- */
+    /* --- Subframes: one per channel --- */
+    encode_subframe(&bw, e->blockBuf, blockSize);   /* Left */
+    if (FLAC_CHANNELS == 2)
+        encode_subframe(&bw, e->blockBufR, blockSize);  /* Right */
 
-    if (useVerbatim) {
-        /* Subframe header: pad(1) + type VERBATIM=000001(6) + wasted=0(1) */
-        bw_write_bits(&bw, 1, 0);
-        bw_write_bits(&bw, 6, 1);     /* VERBATIM */
-        bw_write_bits(&bw, 1, 0);
+    /* If overflow, re-encode entire frame as verbatim */
+    if (bw.overflow) {
+        bw_init(&bw, e->outBuf, FLAC_OUT_BUF_SIZE);
+        encode_frame_header(&bw, e->frameNumber, blockSize, &crc8Pos);
 
+        /* Left verbatim */
+        bw_write_bits(&bw, 1, 0);
+        bw_write_bits(&bw, 6, 1);
+        bw_write_bits(&bw, 1, 0);
         for (uint32_t i = 0; i < blockSize; i++)
             bw_write_bits(&bw, 24, (uint32_t)(e->blockBuf[i] & 0xFFFFFF));
-    } else {
-        /* Subframe header: pad(1) + type FIXED order N = 001|N(6) + wasted=0(1) */
-        bw_write_bits(&bw, 1, 0);
-        bw_write_bits(&bw, 6, 0x08 | bestOrder);  /* FIXED: 001xxx */
-        bw_write_bits(&bw, 1, 0);
 
-        /* Warm-up samples (unencoded, 24 bits each) */
-        for (uint32_t i = 0; i < bestOrder; i++)
-            bw_write_bits(&bw, 24, (uint32_t)(e->blockBuf[i] & 0xFFFFFF));
-
-        /* Residual coding: method 0 (4-bit Rice params), partition order 0 */
-        bw_write_bits(&bw, 2, 0);     /* coding method */
-        bw_write_bits(&bw, 4, 0);     /* partition order */
-        bw_write_bits(&bw, 4, k);     /* Rice parameter */
-
-        /* Rice-encode residuals */
-        for (uint32_t i = bestOrder; i < blockSize; i++) {
-            int32_t r = compute_residual(e->blockBuf, i, bestOrder);
-            bw_write_rice_signed(&bw, k, r);
-        }
-
-        /* If Rice coding overflowed the output buffer, re-encode as verbatim.
-         * Verbatim is bounded: blockSize*3 + ~20 bytes overhead < 16KB. */
-        if (bw.overflow) {
-            bw_init(&bw, e->outBuf, FLAC_OUT_BUF_SIZE);
-            encode_frame_header(&bw, e->frameNumber, blockSize, &crc8Pos);
-
+        if (FLAC_CHANNELS == 2) {
+            /* Right verbatim */
             bw_write_bits(&bw, 1, 0);
-            bw_write_bits(&bw, 6, 1);     /* VERBATIM */
+            bw_write_bits(&bw, 6, 1);
             bw_write_bits(&bw, 1, 0);
-
             for (uint32_t i = 0; i < blockSize; i++)
-                bw_write_bits(&bw, 24, (uint32_t)(e->blockBuf[i] & 0xFFFFFF));
+                bw_write_bits(&bw, 24, (uint32_t)(e->blockBufR[i] & 0xFFFFFF));
         }
     }
 
@@ -425,11 +432,16 @@ static void write_streaminfo(uint8_t *out,
     out[17] = (uint8_t)(maxFrame);
 
     /* Packed: sample_rate(20) | channels-1(3) | bps-1(5) | total_samples(36)
-     * 48000=0x0BB80, ch-1=0, bps-1=23=0x17 */
-    out[18] = 0x0B;                                       /* sr[19:12] */
-    out[19] = 0xB8;                                       /* sr[11:4]  */
-    out[20] = 0x01;                                       /* sr[3:0]=0 | ch[2:0]=0 | bps-1[4]=1 */
-    out[21] = (uint8_t)(0x70 | ((totalSamples >> 32) & 0x0F)); /* bps[3:0]=7 | ts[35:32] */
+     * 48000=0x0BB80, ch-1=(FLAC_CHANNELS-1), bps-1=23=0x17 */
+    {
+        uint32_t sr = FLAC_SAMPLE_RATE;        /* 48000 = 0x0BB80 */
+        uint8_t  ch = FLAC_CHANNELS - 1;       /* 0=mono, 1=stereo */
+        uint8_t  bps = FLAC_BITS_PER_SAMPLE - 1; /* 23 = 0x17 */
+        out[18] = (uint8_t)(sr >> 12);                                    /* sr[19:12] */
+        out[19] = (uint8_t)(sr >> 4);                                     /* sr[11:4]  */
+        out[20] = (uint8_t)(((sr & 0x0F) << 4) | (ch << 1) | (bps >> 4)); /* sr[3:0] | ch[2:0] | bps[4] */
+        out[21] = (uint8_t)(((bps & 0x0F) << 4) | ((totalSamples >> 32) & 0x0F)); /* bps[3:0] | ts[35:32] */
+    }
     out[22] = (uint8_t)(totalSamples >> 24);
     out[23] = (uint8_t)(totalSamples >> 16);
     out[24] = (uint8_t)(totalSamples >> 8);
@@ -466,6 +478,21 @@ uint32_t flac_enc_write_header(flac_enc_t *e, uint8_t *out)
 uint32_t flac_enc_process(flac_enc_t *e, const int32_t *pcm, uint32_t count)
 {
     memcpy(&e->blockBuf[e->blockPos], pcm, count * sizeof(int32_t));
+    /* For mono compat: zero right channel */
+    memset(&e->blockBufR[e->blockPos], 0, count * sizeof(int32_t));
+    e->blockPos += count;
+
+    if (e->blockPos >= FLAC_BLOCK_SIZE)
+        return encode_frame(e, FLAC_BLOCK_SIZE);
+
+    return 0;
+}
+
+uint32_t flac_enc_process_stereo(flac_enc_t *e, const int32_t *pcmL,
+                                  const int32_t *pcmR, uint32_t count)
+{
+    memcpy(&e->blockBuf[e->blockPos], pcmL, count * sizeof(int32_t));
+    memcpy(&e->blockBufR[e->blockPos], pcmR, count * sizeof(int32_t));
     e->blockPos += count;
 
     if (e->blockPos >= FLAC_BLOCK_SIZE)

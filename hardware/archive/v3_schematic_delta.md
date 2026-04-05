@@ -346,7 +346,7 @@ Standard 18650 spring holders are symmetrical — cells can be inserted backward
 ```
 BATT+ ── Q6.Source (P-FET SI2301CDS)
               │
-         Q6.Gate ── R12 (100k) ── Q6.Source
+         Q6.Gate ── R12 (100k) ── GND
               │
          Q6.Drain ── 3V3_IN (to LDO input)
 ```
@@ -362,7 +362,7 @@ BATT+ ── Q6.Source (P-FET SI2301CDS)
 1. Place Q6: SI2301CDS (LCSC C10487) — SOT-23, same as Q2/Q4
 2. Place R12: 100k 0603 (LCSC C25803)
 3. Q6.Source → BATT+ (battery positive terminal)
-4. Q6.Gate → R12.1; R12.2 → Q6.Source (gate tied to source through R12)
+4. Q6.Gate → R12.1; R12.2 → GND (gate tied to source through R12)
 5. Q6.Drain → LDO input (currently labeled 3V3_IN or VBAT on V2 schematic)
 6. Move LDO input connection from BATT+ to Q6.Drain
 
@@ -371,7 +371,7 @@ BATT+ ── Q6.Source (P-FET SI2301CDS)
 | From | To | Net |
 |------|----|-----|
 | Battery + terminal | Q6.Source | BATT+ |
-| Q6.Gate | R12.1 | Q6_GATE |
+| Q6.Gate | R12.1 | GND |
 | R12.2 | Q6.Source | BATT+ |
 | Q6.Drain | U3.IN (NCP170 LDO) | VBAT_PROT |
 | Q6.Drain | C_IN.+ (LDO input cap) | VBAT_PROT |

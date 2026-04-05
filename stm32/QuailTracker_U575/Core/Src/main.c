@@ -49,17 +49,27 @@
 
 /* Private variables ---------------------------------------------------------*/
 
-MDF_HandleTypeDef AdfHandle0;
-MDF_FilterConfigTypeDef AdfFilterConfig0;
-DMA_NodeTypeDef Node_GPDMA1_Channel0;
+/* Stereo MDF1: Filter0 = Left (falling edge), Filter1 = Right (rising edge) */
+MDF_HandleTypeDef MdfHandle0;           /* Left channel */
+MDF_HandleTypeDef MdfHandle1;           /* Right channel */
+MDF_FilterConfigTypeDef MdfFilterConfig0;
+MDF_FilterConfigTypeDef MdfFilterConfig1;
+DMA_NodeTypeDef Node_GPDMA1_Channel0;      /* Left DMA linked-list node */
 DMA_QListTypeDef List_GPDMA1_Channel0;
 DMA_HandleTypeDef handle_GPDMA1_Channel0;
+DMA_NodeTypeDef Node_GPDMA1_Channel1;      /* Right DMA linked-list node */
+DMA_QListTypeDef List_GPDMA1_Channel1;
+DMA_HandleTypeDef handle_GPDMA1_Channel1;
+
+/* Keep old names as aliases for code that references them */
+#define AdfHandle0       MdfHandle0
+#define AdfFilterConfig0 MdfFilterConfig0
 
 UART_HandleTypeDef husart1;
-UART_HandleTypeDef husart2;
 UART_HandleTypeDef husart3;
 
 SPI_HandleTypeDef hspi1;
+SPI_HandleTypeDef hspi2;  /* ESP32-C3 bridge */
 
 ADC_HandleTypeDef hadc1;
 
@@ -71,19 +81,28 @@ I2C_HandleTypeDef hi2c1;
 #define AUDIO_BUF_SIZE 1024
 #define SAMPLE_RATE    48000
 
-int32_t audioBuffer[AUDIO_BUF_SIZE];
+int32_t audioBuffer[AUDIO_BUF_SIZE];      /* Left channel DMA buffer */
+int32_t audioBufferR[AUDIO_BUF_SIZE];     /* Right channel DMA buffer */
 
-/* Conversion buffer: 512 samples -> 512 int32 samples (24-bit in int32) */
+/* Conversion buffers: 512 samples each (left and right channels) */
 int32_t pcmBuffer[AUDIO_BUF_SIZE / 2];
+int32_t pcmBufferR[AUDIO_BUF_SIZE / 2];  /* Right channel processing buffer */
 
 /* PCM ring buffer — written by DMA ISR, read by audio task.
  * Must be in main.c so ISR callbacks can access it directly.
  * Power-of-2 size for fast masking.  16384 samples = 341ms at 48kHz. */
 #define PCM_RING_SIZE  16384
 #define PCM_RING_MASK  (PCM_RING_SIZE - 1)
-int32_t pcmRing[PCM_RING_SIZE];
-volatile uint32_t ringHead = 0;   /* ISR writes here */
-uint32_t ringTail = 0;            /* audio task reads here */
+int32_t pcmRing[PCM_RING_SIZE];          /* Left channel ring */
+volatile uint32_t ringHead = 0;
+uint32_t ringTail = 0;
+
+int32_t pcmRingR[PCM_RING_SIZE];        /* Right channel ring */
+volatile uint32_t ringHeadR = 0;
+uint32_t ringTailR = 0;
+
+/* Channel select: 0=Left (default), 1=Right — swaps which ring the audio task reads */
+volatile uint8_t audioChannelRight = 0;
 
 /* FLAC encoder instance (shared with app_freertos.c audio task) */
 flac_enc_t flacEncoder;
@@ -116,7 +135,6 @@ flac_enc_t flacEncoder;
 
 /* UART RX queues — fed by RXNE interrupts, consumed by tasks */
 osMessageQueueId_t gpsRxQueue;    /* USART1 — GPS */
-osMessageQueueId_t bleRxQueue;    /* USART2 — BLE */
 osMessageQueueId_t consoleRxQueue; /* USART3 — Debug console */
 
 /* Printf mutex — serializes _write() across FreeRTOS tasks */
@@ -169,10 +187,10 @@ static void MX_GPIO_Init(void);
 static void MX_GPDMA1_Init(void);
 static void MX_ICACHE_Init(void);
 static void MX_SPI1_Init(void);
+static void MX_SPI2_Init(void);
 static void MX_USART1_UART_Init(void);
-static void MX_USART2_UART_Init(void);
 static void MX_USART3_UART_Init(void);
-static void MX_ADF1_Init(void);
+static void MX_MDF1_Init(void);
 /* USER CODE BEGIN PFP */
 static void MX_ADC1_Init(void);
 static void MX_RTC_Init(void);
@@ -219,24 +237,11 @@ int getCharGps(uint32_t timeoutMs)
     return -1;
 }
 
-int getCharBle(uint32_t timeoutMs)
-{
-    uint8_t ch;
-    if (osMessageQueueGet(bleRxQueue, &ch, NULL, timeoutMs) == osOK)
-        return (int)ch;
-    return -1;
-}
-
-void bleSend(const char *s)
-{
-    HAL_UART_Transmit(&husart2, (const uint8_t *)s, strlen(s), 100);
-}
-
 void WAV_WriteHeader(FIL *fp, uint32_t sampleRate, uint32_t dataSize)
 {
     uint8_t hdr[44];
     uint32_t fileSize = dataSize + 36;
-    uint16_t channels = 1;
+    uint16_t channels = 2;  /* stereo for TDOA */
     uint16_t bitsPerSample = 24;
     uint32_t byteRate = sampleRate * channels * bitsPerSample / 8;
     uint16_t blockAlign = channels * bitsPerSample / 8;
@@ -525,15 +530,29 @@ void printMenu(void)
     printf("6. Eject SD Card\r\n");
     printf("7. Mount SD Card\r\n");
     printf("8. GPS Status / Control\r\n");
-    printf("9. BLE Status\r\n");
+    printf("9. Comms Status\r\n");
     printf("F. Toggle Format (%s)\r\n", dev.rec.format == REC_FMT_WAV ? "WAV" : "FLAC");
     printf("G. Toggle GPS Raw Output\r\n");
     printf("R. Toggle Recording\r\n");
     printf("S. Toggle GPS Survey-In (%s)\r\n",
            configGetSurveyCount() > 0 ? "has data" : "no data");
     printf("Z. Sleep (Stop 2)\r\n");
+    printf("A. Toggle Autonomous Schedule (%s)\r\n",
+           dev.pwr.scheduleActive ? "ON" : "OFF");
+    {
+        extern volatile uint8_t audioChannelRight;
+        printf("C. Toggle Audio Channel (%s)\r\n",
+               audioChannelRight ? "RIGHT" : "LEFT");
+    }
+    printf("D. Toggle Dev Mode (%s)\r\n",
+           dev.pwr.devMode ? "ON" : "OFF");
     printf("================\r\n");
-    printf("[%s] > ", isRecording ? "REC" : "IDLE");
+    {
+        static const char *pwr_names[] = {"SLEEP", "REC", "USER", "DEV"};
+        printf("[%s|%s] > ",
+               isRecording ? "REC" : "IDLE",
+               pwr_names[dev.pwr.state & 3]);
+    }
     fflush(stdout);
 }
 
@@ -555,7 +574,7 @@ void printStatus(void)
     printf("  Format: %s\r\n", dev.rec.format == REC_FMT_WAV ? "WAV" : "FLAC");
     printf("  Active: %s\r\n", isRecording ? "Yes" : "No");
     if (isRecording) {
-        uint32_t seconds = totalDataBytes / (SAMPLE_RATE * 3);
+        uint32_t seconds = totalDataBytes / (SAMPLE_RATE * 6);
         printf("  Duration: %lus\r\n", (unsigned long)seconds);
         printf("  Size: %lu bytes\r\n", (unsigned long)totalDataBytes);
     }
@@ -613,8 +632,17 @@ void printStatus(void)
     printf("  Humidity: %u.%u%%\r\n",
            (unsigned)(sht30HumRH100 / 100), (unsigned)(sht30HumRH100 / 10 % 10));
 
-    extern void printBleStatusBrief(void);
-    printBleStatusBrief();
+    printf("Firmware:\r\n");
+    printf("  STM32:  %s\r\n", FW_VERSION);
+    printf("  ESP32:  %s\r\n",
+           dev.comms.espFwVersion[0] ? dev.comms.espFwVersion : "Unknown");
+    printf("Comms:\r\n");
+    printf("  ESP32:  %s\r\n", dev.comms.espReady ? "Ready" : "No response");
+    printf("  SPI:    %lu transactions\r\n", (unsigned long)dev.comms.spiTransactions);
+    {
+        static const char *pwr_names[] = {"SLEEP", "REC", "USER", "DEV"};
+        printf("  Power:  %s\r\n", pwr_names[dev.pwr.state & 3]);
+    }
 
     printf("============================\r\n");
 }
@@ -729,6 +757,13 @@ void startRecording(void)
 
     totalDataBytes = 0;
     dev.audio.clipCount = 0;
+
+    /* Sync both ring buffers — discard any accumulated data so L and R
+     * start from the same point in time.  Without this, the right channel
+     * can lag by hundreds of ms due to DMA callback timing differences. */
+    ringTail = ringHead;
+    ringTailR = ringHeadR;
+
     isRecording = 1;
     recStartTick = HAL_GetTick();
     fileCounter++;
@@ -768,7 +803,7 @@ void stopRecording(void)
 
         f_close(&wavFile);
 
-        uint32_t seconds = totalDataBytes / (SAMPLE_RATE * 3);
+        uint32_t seconds = totalDataBytes / (SAMPLE_RATE * 6);
         printf("Recording stopped: %lu bytes (%lus)\r\n",
             (unsigned long)totalDataBytes, (unsigned long)seconds);
     } else {
@@ -799,7 +834,7 @@ void stopRecording(void)
         f_close(&wavFile);
 
         uint32_t seconds = (uint32_t)(flacEncoder.totalSamples / SAMPLE_RATE);
-        uint32_t rawSize = (uint32_t)(flacEncoder.totalSamples * 2);
+        uint32_t rawSize = (uint32_t)(flacEncoder.totalSamples * FLAC_CHANNELS * (FLAC_BITS_PER_SAMPLE / 8));
         uint32_t ratio = rawSize > 0 ? (totalDataBytes * 100) / rawSize : 0;
         printf("Recording stopped: %lu bytes (%lus, %lu%% of raw)\r\n",
             (unsigned long)totalDataBytes, (unsigned long)seconds,
@@ -809,7 +844,7 @@ void stopRecording(void)
     /* Update health stats with completed recording */
     {
         uint32_t secs = (dev.rec.format == REC_FMT_WAV)
-            ? totalDataBytes / (SAMPLE_RATE * 3)
+            ? totalDataBytes / (SAMPLE_RATE * 6)
             : (uint32_t)(flacEncoder.totalSamples / SAMPLE_RATE);
         extern void healthUpdateRecStop(uint32_t bytes, uint32_t durationSecs);
         healthUpdateRecStop(totalDataBytes, secs);
@@ -853,7 +888,7 @@ void chunkRecording(void)
 
     uint32_t seconds = 0;
     if (dev.rec.format == REC_FMT_WAV) {
-        seconds = totalDataBytes / (SAMPLE_RATE * 3);
+        seconds = totalDataBytes / (SAMPLE_RATE * 6);
     } else {
         seconds = (uint32_t)(flacEncoder.totalSamples / SAMPLE_RATE);
     }
@@ -965,13 +1000,12 @@ int main(void)
   MX_ICACHE_Init();
   HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 5: icache ok */
   MX_SPI1_Init();
+  MX_SPI2_Init();
   HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 6: spi ok */
   MX_USART1_UART_Init();
   HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 7: usart1 ok */
-  MX_USART2_UART_Init();
-  HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 8: usart2 ok */
   MX_USART3_UART_Init();
-  MX_ADF1_Init();
+  MX_MDF1_Init();
   HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); HAL_Delay(300); /* blink 9: adf ok */
   /* USER CODE BEGIN 2 */
   /* Quick LED heartbeat — 3 blinks to confirm all inits passed */
@@ -989,6 +1023,17 @@ int main(void)
   SEGGER_RTT_WriteString(0, "\r\n[RTT OK]\r\n");
 
   setvbuf(stdout, NULL, _IONBF, 0);
+
+  /* SPI2 ping-pong test with ESP32-C3 bridge */
+  {
+      uint8_t tx[64] = {0}, rx[64] = {0};
+      memcpy(tx, "PING", 4);
+      HAL_GPIO_WritePin(GPIOD, GPIO_PIN_0, GPIO_PIN_RESET);  /* CS low */
+      HAL_StatusTypeDef s = HAL_SPI_TransmitReceive(&hspi2, tx, rx, 64, 1000);
+      HAL_GPIO_WritePin(GPIOD, GPIO_PIN_0, GPIO_PIN_SET);    /* CS high */
+      printf("SPI2 test: %s (RX: \"%.*s\")\r\n",
+             s == HAL_OK ? "OK" : "FAIL", 8, (char *)rx);
+  }
 
   printf("\r\n\r\n");
   printf("================================================\r\n");
@@ -1008,22 +1053,41 @@ int main(void)
   MX_I2C1_Init();
   sht30Read();  /* initial reading */
 
-  /* Start ADF1 DMA acquisition before scheduler */
+  /* Start MDF1 stereo DMA acquisition before scheduler */
   {
-    AdfFilterConfig0.DecimationRatio = 64;
-    AdfFilterConfig0.Gain = 6;
+    MdfFilterConfig0.DecimationRatio = 64;
+    MdfFilterConfig0.Gain = 6;
+    MdfFilterConfig1.DecimationRatio = 64;
+    MdfFilterConfig1.Gain = 6;
 
-    MDF_DmaConfigTypeDef dmaConfig = {0};
-    dmaConfig.Address = (uint32_t)audioBuffer;
-    dmaConfig.DataLength = AUDIO_BUF_SIZE * 4;
-    dmaConfig.MsbOnly = DISABLE;
+    MDF_DmaConfigTypeDef dmaConfigL = {0};
+    dmaConfigL.Address = (uint32_t)audioBuffer;
+    dmaConfigL.DataLength = AUDIO_BUF_SIZE * 4;
+    dmaConfigL.MsbOnly = DISABLE;
 
-    printf("ADF1: ");
-    if (HAL_MDF_AcqStart_DMA(&AdfHandle0, &AdfFilterConfig0, &dmaConfig) != HAL_OK) {
-        printf("FAILED\r\n");
-    } else {
+    MDF_DmaConfigTypeDef dmaConfigR = {0};
+    dmaConfigR.Address = (uint32_t)audioBufferR;
+    dmaConfigR.DataLength = AUDIO_BUF_SIZE * 4;
+    dmaConfigR.MsbOnly = DISABLE;
+
+    printf("MDF1: ");
+    uint8_t ok = 1;
+    /* Arm both filters — they wait for TRGO in SYNC mode */
+    if (HAL_MDF_AcqStart_DMA(&MdfHandle0, &MdfFilterConfig0, &dmaConfigL) != HAL_OK) {
+        printf("L-FAILED ");
+        ok = 0;
+    }
+    if (HAL_MDF_AcqStart_DMA(&MdfHandle1, &MdfFilterConfig1, &dmaConfigR) != HAL_OK) {
+        printf("R-FAILED ");
+        ok = 0;
+    }
+    if (ok) {
+        /* Fire TRGO — both filters start simultaneously */
+        HAL_MDF_GenerateTrgo(&MdfHandle0);
         audioStarted = 1;
-        printf("OK (48kHz, Sinc4, gain=%d)\r\n", (int)AdfFilterConfig0.Gain);
+        printf("OK stereo SYNC (48kHz, Sinc4, gain=%d)\r\n", (int)MdfFilterConfig0.Gain);
+    } else {
+        printf("\r\n");
     }
   }
 
@@ -1050,7 +1114,6 @@ int main(void)
   }
   /* Create UART RX queues (must exist before RXNE interrupts are enabled) */
   gpsRxQueue = osMessageQueueNew(128, sizeof(uint8_t), NULL);
-  bleRxQueue = osMessageQueueNew(128, sizeof(uint8_t), NULL);
   consoleRxQueue = osMessageQueueNew(128, sizeof(uint8_t), NULL);
 
   /* Enable RXNE interrupts — ISRs push bytes into queues above.
@@ -1059,9 +1122,7 @@ int main(void)
   HAL_NVIC_SetPriority(USART1_IRQn, 6, 0);
   HAL_NVIC_EnableIRQ(USART1_IRQn);
 
-  __HAL_UART_ENABLE_IT(&husart2, UART_IT_RXNE);
-  HAL_NVIC_SetPriority(USART2_IRQn, 6, 0);
-  HAL_NVIC_EnableIRQ(USART2_IRQn);
+
 
   __HAL_UART_ENABLE_IT(&husart3, UART_IT_RXNE);
   HAL_NVIC_SetPriority(USART3_IRQn, 6, 0);
@@ -1188,63 +1249,72 @@ static void SystemPower_Config(void)
   * @param None
   * @retval None
   */
-static void MX_ADF1_Init(void)
+/* MDF1 Stereo Init — two filters on same SDI0, opposite clock edges.
+ * Filter0 = Left mic (L/R=GND, data on falling edge)
+ * Filter1 = Right mic (L/R=VDD, data on rising edge)
+ * PE9 = MDF1_CCK0 (clock), PD3 = MDF1_SDI0 (data), both AF6.
+ * Pin mapping confirmed by CubeMX for STM32U575VGT6 LQFP-100. */
+static void MX_MDF1_Init(void)
 {
+    /* Filter0 — Left channel (falling edge) */
+    MdfHandle0.Instance = MDF1_Filter0;
+    MdfHandle0.Init.CommonParam.ProcClockDivider = 52;  /* 160MHz/52 = 3.077MHz PDM clock */
+    MdfHandle0.Init.CommonParam.OutputClock.Activation = ENABLE;
+    MdfHandle0.Init.CommonParam.OutputClock.Pins = MDF_OUTPUT_CLOCK_0;
+    MdfHandle0.Init.CommonParam.OutputClock.Divider = 1;
+    MdfHandle0.Init.CommonParam.OutputClock.Trigger.Activation = ENABLE;
+    MdfHandle0.Init.CommonParam.OutputClock.Trigger.Source = MDF_CLOCK_TRIG_TRGO;
+    MdfHandle0.Init.CommonParam.OutputClock.Trigger.Edge = MDF_CLOCK_TRIG_RISING_EDGE;
+    MdfHandle0.Init.SerialInterface.Activation = ENABLE;
+    MdfHandle0.Init.SerialInterface.Mode = MDF_SITF_LF_MASTER_SPI_MODE;
+    MdfHandle0.Init.SerialInterface.ClockSource = MDF_SITF_CCK0_SOURCE;
+    MdfHandle0.Init.SerialInterface.Threshold = 4;
+    MdfHandle0.Init.FilterBistream = MDF_BITSTREAM0_FALLING;
+    if (HAL_MDF_Init(&MdfHandle0) != HAL_OK) {
+        printf("MDF1 Filter0 (L): Init FAILED\r\n");
+        return;
+    }
 
-  /* USER CODE BEGIN ADF1_Init 0 */
+    /* Filter1 — Right channel (rising edge).
+     * Serial interface disabled — Filter1 reads from SITF0 via bitstream mixer.
+     * Only Filter0 owns the serial interface and output clock. */
+    MdfHandle1.Instance = MDF1_Filter1;
+    MdfHandle1.Init.CommonParam.ProcClockDivider = 52;
+    MdfHandle1.Init.CommonParam.OutputClock.Activation = DISABLE;
+    MdfHandle1.Init.CommonParam.OutputClock.Pins = MDF_OUTPUT_CLOCK_0;
+    MdfHandle1.Init.CommonParam.OutputClock.Divider = 1;
+    MdfHandle1.Init.CommonParam.OutputClock.Trigger.Activation = DISABLE;
+    MdfHandle1.Init.SerialInterface.Activation = DISABLE;
+    MdfHandle1.Init.SerialInterface.Mode = MDF_SITF_LF_MASTER_SPI_MODE;
+    MdfHandle1.Init.SerialInterface.ClockSource = MDF_SITF_CCK0_SOURCE;
+    MdfHandle1.Init.SerialInterface.Threshold = 4;
+    MdfHandle1.Init.FilterBistream = MDF_BITSTREAM0_RISING;
+    if (HAL_MDF_Init(&MdfHandle1) != HAL_OK) {
+        printf("MDF1 Filter1 (R): Init FAILED\r\n");
+        return;
+    }
 
-  /* USER CODE END ADF1_Init 0 */
+    /* Filter configurations — identical for both channels, SYNC mode.
+     * Both filters wait for TRGO trigger, ensuring sample-aligned start. */
+    MdfFilterConfig0.DataSource = MDF_DATA_SOURCE_BSMX;
+    MdfFilterConfig0.Delay = 0;
+    MdfFilterConfig0.CicMode = MDF_ONE_FILTER_SINC4;
+    MdfFilterConfig0.DecimationRatio = 64;
+    MdfFilterConfig0.Gain = 0;
+    MdfFilterConfig0.ReshapeFilter.Activation = DISABLE;
+    MdfFilterConfig0.HighPassFilter.Activation = ENABLE;
+    MdfFilterConfig0.HighPassFilter.CutOffFrequency = MDF_HPF_CUTOFF_0_000625FPCM;
+    MdfFilterConfig0.SoundActivity.Activation = DISABLE;
+    MdfFilterConfig0.AcquisitionMode = MDF_MODE_SYNC_CONT;
+    MdfFilterConfig0.Trigger.Source = MDF_FILTER_TRIG_TRGO;
+    MdfFilterConfig0.Trigger.Edge = MDF_FILTER_TRIG_RISING_EDGE;
+    MdfFilterConfig0.FifoThreshold = MDF_FIFO_THRESHOLD_NOT_EMPTY;
+    MdfFilterConfig0.DiscardSamples = 0;
 
-  /* USER CODE BEGIN ADF1_Init 1 */
+    /* Copy same config for right channel */
+    memcpy(&MdfFilterConfig1, &MdfFilterConfig0, sizeof(MdfFilterConfig1));
 
-  /* USER CODE END ADF1_Init 1 */
-
-  /**
-    AdfHandle0 structure initialization and HAL_MDF_Init function call
-  */
-  AdfHandle0.Instance = ADF1_Filter0;
-  AdfHandle0.Init.CommonParam.ProcClockDivider = 52;
-  AdfHandle0.Init.CommonParam.OutputClock.Activation = ENABLE;
-  AdfHandle0.Init.CommonParam.OutputClock.Pins = MDF_OUTPUT_CLOCK_0;
-  AdfHandle0.Init.CommonParam.OutputClock.Divider = 1;
-  AdfHandle0.Init.CommonParam.OutputClock.Trigger.Activation = DISABLE;
-  AdfHandle0.Init.SerialInterface.Activation = ENABLE;
-  AdfHandle0.Init.SerialInterface.Mode = MDF_SITF_LF_MASTER_SPI_MODE;
-  AdfHandle0.Init.SerialInterface.ClockSource = MDF_SITF_CCK0_SOURCE;
-  AdfHandle0.Init.SerialInterface.Threshold = 4;
-  AdfHandle0.Init.FilterBistream = MDF_BITSTREAM0_FALLING;
-  if (HAL_MDF_Init(&AdfHandle0) != HAL_OK)
-  {
-    Error_Handler();
-  }
-
-  /**
-    AdfFilterConfig0 structure initialization
-
-    WARNING : only structure is filled, no specific init function call for filter
-  */
-  AdfFilterConfig0.DataSource = MDF_DATA_SOURCE_BSMX;
-  AdfFilterConfig0.Delay = 0;
-  AdfFilterConfig0.CicMode = MDF_ONE_FILTER_SINC4;
-  AdfFilterConfig0.DecimationRatio = 64;
-  AdfFilterConfig0.Gain = 0;
-  AdfFilterConfig0.ReshapeFilter.Activation = DISABLE;  /* RSFLT tested: Sinc5/dec=16+RSFLT raised
-                                                        * noise floor by 33dB (from -44dB to -11dB).
-                                                        * Low CIC decimation lets too much quantization
-                                                        * noise fold into passband. Not viable at our
-                                                        * 3MHz PDM clock without higher sample rate. */
-  AdfFilterConfig0.HighPassFilter.Activation = ENABLE; /* Remove DC offset from PDM mic.
-                                                        * Cutoff = 0.000625 × Fpcm = 30Hz at 48kHz.
-                                                        * Per ST AN5795 recommendation. */
-  AdfFilterConfig0.HighPassFilter.CutOffFrequency = MDF_HPF_CUTOFF_0_000625FPCM;
-  AdfFilterConfig0.SoundActivity.Activation = DISABLE;
-  AdfFilterConfig0.AcquisitionMode = MDF_MODE_ASYNC_CONT;
-  AdfFilterConfig0.FifoThreshold = MDF_FIFO_THRESHOLD_NOT_EMPTY;
-  AdfFilterConfig0.DiscardSamples = 0;
-  /* USER CODE BEGIN ADF1_Init 2 */
-
-  /* USER CODE END ADF1_Init 2 */
-
+    printf("MDF1: Stereo init OK (L=falling, R=rising, PE9/PD3, SYNC)\r\n");
 }
 
 /**
@@ -1265,6 +1335,8 @@ static void MX_GPDMA1_Init(void)
   /* GPDMA1 interrupt Init */
     HAL_NVIC_SetPriority(GPDMA1_Channel0_IRQn, 5, 0);
     HAL_NVIC_EnableIRQ(GPDMA1_Channel0_IRQn);
+    HAL_NVIC_SetPriority(GPDMA1_Channel1_IRQn, 5, 0);
+    HAL_NVIC_EnableIRQ(GPDMA1_Channel1_IRQn);
 
   /* USER CODE BEGIN GPDMA1_Init 1 */
 
@@ -1325,29 +1397,6 @@ static void MX_USART1_UART_Init(void)
   husart1.Init.ClockPrescaler = UART_PRESCALER_DIV1;
   husart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
   if (HAL_UART_Init(&husart1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-}
-
-/**
-  * @brief USART2 Initialization Function — BLE module (PB-03F, 115200 baud, PA2/PA3)
-  * @retval None
-  */
-static void MX_USART2_UART_Init(void)
-{
-  husart2.Instance = USART2;
-  husart2.Init.BaudRate = 115200;
-  husart2.Init.WordLength = UART_WORDLENGTH_8B;
-  husart2.Init.StopBits = UART_STOPBITS_1;
-  husart2.Init.Parity = UART_PARITY_NONE;
-  husart2.Init.Mode = UART_MODE_TX_RX;
-  husart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  husart2.Init.OverSampling = UART_OVERSAMPLING_16;
-  husart2.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
-  husart2.Init.ClockPrescaler = UART_PRESCALER_DIV1;
-  husart2.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-  if (HAL_UART_Init(&husart2) != HAL_OK)
   {
     Error_Handler();
   }
@@ -1434,6 +1483,62 @@ static void MX_SPI1_Init(void)
 }
 
 /**
+  * @brief SPI2 Init — ESP32-C3 bridge
+  * PB13=SCK, PB15=MOSI, PB14=MISO, PB12=CS (GPIO software)
+  * These pins match the STM32U575 ROM bootloader SPI2 pinout (AN2606).
+  */
+static void MX_SPI2_Init(void)
+{
+    __HAL_RCC_SPI2_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+
+    GPIO_InitTypeDef gpio = {0};
+    gpio.Mode = GPIO_MODE_AF_PP;
+    gpio.Pull = GPIO_NOPULL;
+    gpio.Speed = GPIO_SPEED_FREQ_HIGH;
+    gpio.Alternate = GPIO_AF5_SPI2;
+
+    /* PB13 = SPI2_SCK */
+    gpio.Pin = GPIO_PIN_13;
+    HAL_GPIO_Init(GPIOB, &gpio);
+
+    /* PB14 = SPI2_MISO */
+    gpio.Pin = GPIO_PIN_14;
+    HAL_GPIO_Init(GPIOB, &gpio);
+
+    /* PB15 = SPI2_MOSI */
+    gpio.Pin = GPIO_PIN_15;
+    HAL_GPIO_Init(GPIOB, &gpio);
+
+    /* PB12 = CS (GPIO output, start high/deselected) */
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET);
+    gpio.Pin = GPIO_PIN_12;
+    gpio.Mode = GPIO_MODE_OUTPUT_PP;
+    gpio.Alternate = 0;
+    HAL_GPIO_Init(GPIOB, &gpio);
+
+    /* SPI2: master, 8-bit, mode 0, 5 MHz (160MHz/32) */
+    hspi2.Instance = SPI2;
+    hspi2.Init.Mode = SPI_MODE_MASTER;
+    hspi2.Init.Direction = SPI_DIRECTION_2LINES;
+    hspi2.Init.DataSize = SPI_DATASIZE_8BIT;
+    hspi2.Init.CLKPolarity = SPI_POLARITY_LOW;
+    hspi2.Init.CLKPhase = SPI_PHASE_1EDGE;
+    hspi2.Init.NSS = SPI_NSS_SOFT;
+    hspi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_32;
+    hspi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
+    hspi2.Init.TIMode = SPI_TIMODE_DISABLE;
+    hspi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+    hspi2.Init.NSSPMode = SPI_NSS_PULSE_DISABLE;
+    hspi2.Init.MasterKeepIOState = SPI_MASTER_KEEP_IO_STATE_ENABLE;
+    hspi2.Init.IOSwap = SPI_IO_SWAP_DISABLE;
+    hspi2.Init.ReadyMasterManagement = SPI_RDY_MASTER_MANAGEMENT_INTERNALLY;
+    hspi2.Init.ReadyPolarity = SPI_RDY_POLARITY_HIGH;
+    if (HAL_SPI_Init(&hspi2) != HAL_OK)
+        Error_Handler();
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -1472,7 +1577,7 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
-  /* PD10 — BLE_VCC EN (active high, BLE on at boot) */
+  /* PD10 — ESP_VCC EN (active high, ESP32 on at boot) */
   HAL_GPIO_WritePin(GPIOD, GPIO_PIN_10, GPIO_PIN_SET);
   GPIO_InitStruct.Pin = GPIO_PIN_10;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -1720,16 +1825,67 @@ static void MX_RTC_Init(void)
     printf("RTC: OK (LSE 32.768kHz)\r\n");
 }
 
-void enterStop2(uint32_t seconds)
+/* ---- RTC time sync from GPS ---- */
+void rtcSyncFromGps(void)
 {
-    if (seconds == 0 || seconds > 65535) return;
+    extern device_state_t dev;
+    gps_data_t gps = dev.gps.fix;
+    if (!gps.valid || gps.utc_date == 0) return;
+
+    /* Parse HHMMSS → hours/minutes/seconds */
+    RTC_TimeTypeDef sTime = {0};
+    sTime.Hours   = (uint8_t)(gps.utc_time / 10000);
+    sTime.Minutes = (uint8_t)((gps.utc_time / 100) % 100);
+    sTime.Seconds = (uint8_t)(gps.utc_time % 100);
+    sTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
+    sTime.StoreOperation = RTC_STOREOPERATION_RESET;
+
+    /* Parse DDMMYY → day/month/year */
+    RTC_DateTypeDef sDate = {0};
+    sDate.Date  = (uint8_t)(gps.utc_date / 10000);
+    sDate.Month = (uint8_t)((gps.utc_date / 100) % 100);
+    sDate.Year  = (uint8_t)(gps.utc_date % 100);  /* 2-digit year */
+
+    HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
+    HAL_RTC_SetDate(&hrtc, &sDate, RTC_FORMAT_BIN);
+
+    dev.pwr.rtcSynced = 1;
+    dev.pwr.lastGpsSyncTick = HAL_GetTick();
+}
+
+/* ---- RTC read helpers ---- */
+void rtcGetTime(uint8_t *hours, uint8_t *minutes, uint8_t *seconds)
+{
+    RTC_TimeTypeDef sTime = {0};
+    RTC_DateTypeDef sDate = {0};  /* must read date after time per RM */
+    HAL_RTC_GetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
+    HAL_RTC_GetDate(&hrtc, &sDate, RTC_FORMAT_BIN);
+    *hours   = sTime.Hours;
+    *minutes = sTime.Minutes;
+    *seconds = sTime.Seconds;
+}
+
+void rtcGetDate(uint8_t *day, uint8_t *month, uint16_t *year)
+{
+    RTC_TimeTypeDef sTime = {0};
+    RTC_DateTypeDef sDate = {0};
+    HAL_RTC_GetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
+    HAL_RTC_GetDate(&hrtc, &sDate, RTC_FORMAT_BIN);
+    *day   = sDate.Date;
+    *month = sDate.Month;
+    *year  = 2000 + (uint16_t)sDate.Year;
+}
+
+wake_source_t enterStop2(uint32_t seconds)
+{
+    if (seconds == 0 || seconds > 65535) return WAKE_RTC;
 
     uint8_t wasAudioStarted = audioStarted;
 
-    /* Stop ADF1 DMA if running */
+    /* Stop MDF1 stereo DMA if running */
     if (audioStarted) {
-        extern MDF_HandleTypeDef AdfHandle0;
-        HAL_MDF_AcqStop_DMA(&AdfHandle0);
+        HAL_MDF_AcqStop_DMA(&MdfHandle0);
+        HAL_MDF_AcqStop_DMA(&MdfHandle1);
         audioStarted = 0;
     }
 
@@ -1739,13 +1895,10 @@ void enterStop2(uint32_t seconds)
      * re-assert the USART NVIC line immediately after any pending clear,
      * causing WFI to return instantly.  Clear errors + drain RDR first. */
     __HAL_UART_DISABLE_IT(&husart1, UART_IT_RXNE);
-    __HAL_UART_DISABLE_IT(&husart2, UART_IT_RXNE);
     __HAL_UART_DISABLE_IT(&husart3, UART_IT_RXNE);
     USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
-    USART2->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
     USART3->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
     (void)USART1->RDR;  /* drain stale RXNE */
-    (void)USART2->RDR;
     (void)USART3->RDR;
 
     /* Set all peripheral-facing GPIOs to analog (hi-Z) to prevent
@@ -1754,9 +1907,7 @@ void enterStop2(uint32_t seconds)
     uint32_t moder_a = GPIOA->MODER;
     uint32_t moder_b = GPIOB->MODER;
     uint32_t moder_d = GPIOD->MODER;
-    GPIOA->MODER |= (0x3u << (2*2))   /* PA2  USART2_TX (BLE RX)  */
-                   | (0x3u << (3*2))   /* PA3  USART2_RX (BLE TX)  */
-                   | (0x3u << (4*2))   /* PA4  SD_CS               */
+    GPIOA->MODER |= (0x3u << (4*2))   /* PA4  SD_CS               */
                    | (0x3u << (5*2))   /* PA5  SPI1_SCK  (SD CLK)  */
                    | (0x3u << (6*2))   /* PA6  SPI1_MISO (SD MISO) */
                    | (0x3u << (7*2))   /* PA7  SPI1_MOSI (SD MOSI) */
@@ -1770,11 +1921,24 @@ void enterStop2(uint32_t seconds)
      * Keep as outputs (don't change MODER) — floating PD12 turns on
      * the power switch, floating PD14 could wake GPS from backup. */
     uint32_t odr_d = GPIOD->ODR;
-    GPIOD->BSRR = (1u << (10+16))   /* PD10 BLE_VCC EN    → LOW */
+    GPIOD->BSRR = (1u << (10+16))   /* PD10 ESP_VCC EN    → LOW */
                  | (1u << (11+16))   /* PD11 PERIPH_VCC EN → LOW */
                  | (1u << (12+16))   /* PD12 GPS_VCC EN    → LOW */
                  | (1u << (14+16))   /* PD14 GPS_WAKE      → LOW */
                  | (1u << (15+16));  /* PD15 GPS_nRESET    → LOW */
+
+    /* --- Phase 2: Configure PB12 (SPI2 CS) as EXTI input for ESP32 wake ---
+     * Save PB12 MODER, then reconfigure as input with pull-up.
+     * ESP32 pulls PB12 LOW for 10ms to wake STM32. */
+    uint32_t pb12_moder_save = GPIOB->MODER & (0x3u << (12*2));
+    uint32_t pb12_pupdr_save = GPIOB->PUPDR & (0x3u << (12*2));
+    GPIOB->MODER &= ~(0x3u << (12*2));        /* PB12 = input */
+    GPIOB->PUPDR &= ~(0x3u << (12*2));
+    GPIOB->PUPDR |=  (0x1u << (12*2));        /* PB12 = pull-up */
+
+    /* Enable EXTI12 falling edge (PB12) for ESP32 wake */
+    EXTI->FTSR1 |= EXTI_FTSR1_FT12;          /* falling edge trigger */
+    EXTI->IMR1  |= EXTI_IMR1_IM12;            /* unmask EXTI line 12 */
 
     /* Disable SysTick + HAL timebase (TIM17) to stop periodic ticks */
     SysTick->CTRL &= ~(SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk);
@@ -1794,16 +1958,15 @@ void enterStop2(uint32_t seconds)
     EXTI->IMR1  |= EXTI_IMR1_IM19;
 
     /* Save all NVIC interrupt enables, then disable everything except
-     * the RTC IRQ (EXTI line 19).  This prevents ANY peripheral from
-     * causing a spurious WFI return — TIM17 HAL tick, USART ORE errors,
-     * DMA TC flags, EXTI8 (PPS), etc.  WFI only wakes on enabled+pending
-     * interrupts, so with only RTC_IRQn enabled, only EXTI19 can wake. */
+     * the RTC IRQ (EXTI line 19) and EXTI0 (ESP32 CS wake).
+     * WFI only wakes on enabled+pending interrupts. */
     uint32_t nvic_iser_save[8];
     for (uint32_t i = 0; i < 8u; i++) {
         nvic_iser_save[i] = NVIC->ISER[i];
         NVIC->ICER[i] = 0xFFFFFFFFu;       /* disable all IRQs */
     }
-    NVIC_EnableIRQ(RTC_IRQn);               /* enable only RTC wake */
+    NVIC_EnableIRQ(RTC_IRQn);               /* enable RTC wake */
+    NVIC_EnableIRQ(EXTI12_IRQn);            /* enable ESP32 CS wake */
 
     /* Clear ALL pending: SysTick, PendSV, NVIC, and EXTI (both edges) */
     SCB->ICSR  = SCB_ICSR_PENDSTCLR_Msk | SCB_ICSR_PENDSVCLR_Msk;
@@ -1817,7 +1980,13 @@ void enterStop2(uint32_t seconds)
     /* Enter Stop 2 */
     HAL_PWREx_EnterSTOP2Mode(PWR_STOPENTRY_WFI);
 
-    /* --- CPU resumes here after RTC wake-up --- */
+    /* --- CPU resumes here after RTC or EXTI0 wake-up --- */
+
+    /* Determine wake source: check EXTI FPR1 bit 0 before clearing */
+    wake_source_t wakeSource = WAKE_RTC;
+    if (EXTI->FPR1 & EXTI_FPR1_FPIF12) {
+        wakeSource = WAKE_ESP32;
+    }
 
     /* Restore PLL / 160MHz system clock */
     SystemClock_Config();
@@ -1831,13 +2000,22 @@ void enterStop2(uint32_t seconds)
     HAL_RTCEx_DeactivateWakeUpTimer(&hrtc);
     __HAL_RTC_WRITEPROTECTION_ENABLE(&hrtc);
 
+    /* Disable EXTI12 (PB12) — no longer needed as wake source */
+    EXTI->FTSR1 &= ~EXTI_FTSR1_FT12;
+    EXTI->IMR1  &= ~EXTI_IMR1_IM12;
+    EXTI->FPR1   = EXTI_FPR1_FPIF12;   /* clear pending */
+
+    /* Restore PB12 to its original mode (SPI2 CS output) */
+    GPIOB->PUPDR &= ~(0x3u << (12*2));
+    GPIOB->PUPDR |= pb12_pupdr_save;
+    GPIOB->MODER &= ~(0x3u << (12*2));
+    GPIOB->MODER |= pb12_moder_save;
+
     /* Clear UART error flags accumulated during sleep (ORE from RX pins
      * disconnected from AF) and drain stale RDR before restoring GPIOs. */
     USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
-    USART2->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
     USART3->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
     (void)USART1->RDR;
-    (void)USART2->RDR;
     (void)USART3->RDR;
 
     /* Restore peripheral GPIO states (saved before sleep) */
@@ -1849,10 +2027,8 @@ void enterStop2(uint32_t seconds)
     /* GPIOs restored — USART RX pins reconnected, may generate new ORE.
      * Clear errors again + drain RDR before restoring NVIC enables. */
     USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
-    USART2->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
     USART3->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
     (void)USART1->RDR;
-    (void)USART2->RDR;
     (void)USART3->RDR;
 
     /* Restore all NVIC interrupt enables (saved before sleep) */
@@ -1861,25 +2037,31 @@ void enterStop2(uint32_t seconds)
 
     /* Re-enable UART RXNE interrupts */
     __HAL_UART_ENABLE_IT(&husart1, UART_IT_RXNE);
-    __HAL_UART_ENABLE_IT(&husart2, UART_IT_RXNE);
     __HAL_UART_ENABLE_IT(&husart3, UART_IT_RXNE);
 
-    /* Restart ADF1 DMA if it was running */
+    /* Restart MDF1 stereo DMA if it was running */
     if (wasAudioStarted) {
-        extern MDF_HandleTypeDef AdfHandle0;
-        extern MDF_FilterConfigTypeDef AdfFilterConfig0;
         extern int32_t audioBuffer[];
-        MDF_DmaConfigTypeDef dmaConfig = {0};
-        dmaConfig.Address = (uint32_t)audioBuffer;
-        dmaConfig.DataLength = AUDIO_BUF_SIZE * 4;
-        dmaConfig.MsbOnly = DISABLE;
-        if (HAL_MDF_AcqStart_DMA(&AdfHandle0, &AdfFilterConfig0, &dmaConfig) == HAL_OK) {
+        extern int32_t audioBufferR[];
+        MDF_DmaConfigTypeDef dmaL = {0};
+        dmaL.Address = (uint32_t)audioBuffer;
+        dmaL.DataLength = AUDIO_BUF_SIZE * 4;
+        dmaL.MsbOnly = DISABLE;
+        MDF_DmaConfigTypeDef dmaR = {0};
+        dmaR.Address = (uint32_t)audioBufferR;
+        dmaR.DataLength = AUDIO_BUF_SIZE * 4;
+        dmaR.MsbOnly = DISABLE;
+        if (HAL_MDF_AcqStart_DMA(&MdfHandle0, &MdfFilterConfig0, &dmaL) == HAL_OK &&
+            HAL_MDF_AcqStart_DMA(&MdfHandle1, &MdfFilterConfig1, &dmaR) == HAL_OK) {
+            HAL_MDF_GenerateTrgo(&MdfHandle0);
             audioStarted = 1;
         }
     }
+
+    return wakeSource;
 }
 
-/* ADF1 DMA callbacks — copy PCM data into ring buffer directly from ISR.
+/* MDF1 stereo DMA callbacks — copy PCM data into L/R ring buffers from ISR.
  * This runs in ~5µs at 160MHz (512 shift+store ops) and guarantees data is
  * captured before the circular DMA overwrites the buffer.  The previous
  * approach (boolean flags + task-level copy) lost data when f_sync blocked
@@ -1887,42 +2069,70 @@ void enterStop2(uint32_t seconds)
  * and the DMA buffer got overwritten before the task could read it. */
 void HAL_MDF_AcqHalfCpltCallback(MDF_HandleTypeDef *hmdf)
 {
-    dmaCallbackCount++;
-    dmaCallbackTick = HAL_GetTick();
-    absSampleCount += AUDIO_BUF_SIZE / 2;
+    if (hmdf->Instance == MDF1_Filter0) {
+        /* Left channel — first half of DMA buffer */
+        dmaCallbackCount++;
+        dmaCallbackTick = HAL_GetTick();
+        absSampleCount += AUDIO_BUF_SIZE / 2;
 
-    uint32_t h = ringHead;
-    if ((h - ringTail) + (AUDIO_BUF_SIZE / 2) > PCM_RING_SIZE) {
-        ringOverruns++;
-    } else {
-        const int32_t *src = &audioBuffer[0];
-        for (int i = 0; i < AUDIO_BUF_SIZE / 2; i++) {
-            pcmRing[h & PCM_RING_MASK] = (int32_t)(src[i] >> 8);
-            h++;
+        uint32_t h = ringHead;
+        if ((h - ringTail) + (AUDIO_BUF_SIZE / 2) > PCM_RING_SIZE) {
+            ringOverruns++;
+        } else {
+            const int32_t *src = &audioBuffer[0];
+            for (int i = 0; i < AUDIO_BUF_SIZE / 2; i++) {
+                pcmRing[h & PCM_RING_MASK] = (int32_t)(src[i] >> 8);
+                h++;
+            }
+            ringHead = h;
         }
-        ringHead = h;
+        osSemaphoreRelease(audioDmaSemHandle);
+    } else if (hmdf->Instance == MDF1_Filter1) {
+        /* Right channel — first half of DMA buffer */
+        uint32_t h = ringHeadR;
+        if ((h - ringTailR) + (AUDIO_BUF_SIZE / 2) <= PCM_RING_SIZE) {
+            const int32_t *src = &audioBufferR[0];
+            for (int i = 0; i < AUDIO_BUF_SIZE / 2; i++) {
+                pcmRingR[h & PCM_RING_MASK] = (int32_t)(src[i] >> 8);
+                h++;
+            }
+            ringHeadR = h;
+        }
     }
-    osSemaphoreRelease(audioDmaSemHandle);
 }
 
 void HAL_MDF_AcqCpltCallback(MDF_HandleTypeDef *hmdf)
 {
-    dmaCallbackCount++;
-    dmaCallbackTick = HAL_GetTick();
-    absSampleCount += AUDIO_BUF_SIZE / 2;
+    if (hmdf->Instance == MDF1_Filter0) {
+        /* Left channel — second half of DMA buffer */
+        dmaCallbackCount++;
+        dmaCallbackTick = HAL_GetTick();
+        absSampleCount += AUDIO_BUF_SIZE / 2;
 
-    uint32_t h = ringHead;
-    if ((h - ringTail) + (AUDIO_BUF_SIZE / 2) > PCM_RING_SIZE) {
-        ringOverruns++;
-    } else {
-        const int32_t *src = &audioBuffer[AUDIO_BUF_SIZE / 2];
-        for (int i = 0; i < AUDIO_BUF_SIZE / 2; i++) {
-            pcmRing[h & PCM_RING_MASK] = (int32_t)(src[i] >> 8);
-            h++;
+        uint32_t h = ringHead;
+        if ((h - ringTail) + (AUDIO_BUF_SIZE / 2) > PCM_RING_SIZE) {
+            ringOverruns++;
+        } else {
+            const int32_t *src = &audioBuffer[AUDIO_BUF_SIZE / 2];
+            for (int i = 0; i < AUDIO_BUF_SIZE / 2; i++) {
+                pcmRing[h & PCM_RING_MASK] = (int32_t)(src[i] >> 8);
+                h++;
+            }
+            ringHead = h;
         }
-        ringHead = h;
+        osSemaphoreRelease(audioDmaSemHandle);
+    } else if (hmdf->Instance == MDF1_Filter1) {
+        /* Right channel — second half of DMA buffer */
+        uint32_t h = ringHeadR;
+        if ((h - ringTailR) + (AUDIO_BUF_SIZE / 2) <= PCM_RING_SIZE) {
+            const int32_t *src = &audioBufferR[AUDIO_BUF_SIZE / 2];
+            for (int i = 0; i < AUDIO_BUF_SIZE / 2; i++) {
+                pcmRingR[h & PCM_RING_MASK] = (int32_t)(src[i] >> 8);
+                h++;
+            }
+            ringHeadR = h;
+        }
     }
-    osSemaphoreRelease(audioDmaSemHandle);
 }
 
 void HAL_GPIO_EXTI_Rising_Callback(uint16_t GPIO_Pin)

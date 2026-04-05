@@ -28,10 +28,10 @@
 #include <stdint.h>
 
 #define FLAC_BLOCK_SIZE       4096
-#define FLAC_OUT_BUF_SIZE     16384  /* worst-case encoded frame (verbatim 24-bit: 4096×3 + overhead) */
+#define FLAC_OUT_BUF_SIZE     32768  /* worst-case: 2ch × verbatim 24-bit: 2×4096×3 + overhead */
 #define FLAC_SAMPLE_RATE      48000
 #define FLAC_BITS_PER_SAMPLE  24
-#define FLAC_CHANNELS         1
+#define FLAC_CHANNELS         2
 #define FLAC_HEADER_SIZE      42     /* "fLaC" + STREAMINFO block */
 
 /* SEEKTABLE: one seek point every 10 seconds.
@@ -48,8 +48,9 @@ typedef struct {
 } flac_seekpoint_t;
 
 typedef struct {
-    /* PCM accumulation buffer */
+    /* PCM accumulation buffers (left and right channels) */
     int32_t  blockBuf[FLAC_BLOCK_SIZE];
+    int32_t  blockBufR[FLAC_BLOCK_SIZE];
 
     /* Encoded frame output buffer */
     uint8_t  outBuf[FLAC_OUT_BUF_SIZE];
@@ -77,9 +78,14 @@ void flac_enc_init(flac_enc_t *e);
 /* Write "fLaC" + placeholder STREAMINFO to out[42]. Returns FLAC_HEADER_SIZE. */
 uint32_t flac_enc_write_header(flac_enc_t *e, uint8_t *out);
 
-/* Feed PCM samples. Returns encoded bytes in e->outBuf when a block is
- * complete (caller must write to file), or 0 if still accumulating. */
+/* Feed PCM samples (mono — left channel only for FLAC compatibility).
+ * Returns encoded bytes in e->outBuf when a block is complete, or 0. */
 uint32_t flac_enc_process(flac_enc_t *e, const int32_t *pcm, uint32_t count);
+
+/* Feed stereo PCM samples (left + right).
+ * Returns encoded bytes in e->outBuf when a block is complete, or 0. */
+uint32_t flac_enc_process_stereo(flac_enc_t *e, const int32_t *pcmL,
+                                  const int32_t *pcmR, uint32_t count);
 
 /* Encode remaining partial block. Returns bytes in e->outBuf, or 0. */
 uint32_t flac_enc_flush(flac_enc_t *e);

@@ -16,6 +16,20 @@
 
 #include <stdint.h>
 
+/* ---- Power states ---- */
+typedef enum {
+    PWR_SCHEDULED_NONREC = 0,  /* Sleeping between recording windows */
+    PWR_SCHEDULED_REC    = 1,  /* Recording during a scheduled window */
+    PWR_USER_CONNECTED   = 2,  /* User connected via BLE/WiFi */
+    PWR_DEV_MODE         = 3,  /* Development mode — everything on */
+} power_state_t;
+
+/* Wake source from Stop 2 */
+typedef enum {
+    WAKE_RTC   = 0,   /* RTC timer expired */
+    WAKE_ESP32 = 1,   /* ESP32 asserted CS pin (PD0) */
+} wake_source_t;
+
 /* ---- GPS data ---- */
 typedef struct {
     uint8_t  fix;        /* 0=no fix, 1=GPS, 2=DGPS */
@@ -133,23 +147,33 @@ typedef struct {
 
     struct {
         uint32_t batteryMv;
-        int16_t  tempC100;        /* was sht30TempC100 */
-        uint16_t humRH100;        /* was sht30HumRH100 */
+        int16_t  tempC100;        /* 0.01 °C units */
+        uint16_t humRH100;        /* 0.01 %RH units */
     } env;
 
     struct {
-        volatile uint8_t connected;  /* was bleConnected */
-        uint8_t  ready;              /* was bleReady */
-        char     name[32];           /* was bleName */
-        char     addr[20];           /* was bleAddr */
-        volatile uint8_t nameUpdatePending;
-    } ble;
+        uint8_t  espReady;           /* 1 = ESP32 bridge responding on SPI */
+        uint8_t  wifiActive;         /* 1 = WiFi AP running */
+        uint8_t  bleConnected;       /* 1 = BLE client connected to ESP32 */
+        uint32_t spiTransactions;    /* total SPI exchanges */
+        uint32_t lastSpiTick;        /* HAL tick of last successful SPI */
+        char     espFwVersion[16];   /* ESP32 firmware version string */
+    } comms;
 
     struct {
         volatile int32_t peakLevel;  /* was audioPeakLevel */
         volatile uint8_t actRatio;
         uint32_t clipCount;          /* was limiterClipCount */
     } audio;
+
+    struct {
+        volatile power_state_t state;    /* current power state */
+        uint8_t  devMode;                /* 1 = dev mode override */
+        uint8_t  rtcSynced;             /* 1 = RTC has been set from GPS */
+        uint8_t  scheduleActive;        /* 1 = autonomous schedule running */
+        uint32_t lastGpsSyncTick;       /* HAL tick of last GPS→RTC sync */
+        uint32_t gpsDutyCycleSec;       /* GPS wake interval during recording (0=off) */
+    } pwr;
 
     struct {
         volatile uint8_t  modelLoaded;

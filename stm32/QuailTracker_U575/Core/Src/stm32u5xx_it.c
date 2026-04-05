@@ -70,6 +70,7 @@ static void hf_hex32(uint32_t v) {
 extern DMA_NodeTypeDef Node_GPDMA1_Channel0;
 extern DMA_QListTypeDef List_GPDMA1_Channel0;
 extern DMA_HandleTypeDef handle_GPDMA1_Channel0;
+extern DMA_HandleTypeDef handle_GPDMA1_Channel1;
 extern TIM_HandleTypeDef htim17;
 
 /* USER CODE BEGIN EV */
@@ -219,6 +220,11 @@ void GPDMA1_Channel0_IRQHandler(void)
   /* USER CODE END GPDMA1_Channel0_IRQn 1 */
 }
 
+void GPDMA1_Channel1_IRQHandler(void)
+{
+  HAL_DMA_IRQHandler(&handle_GPDMA1_Channel1);
+}
+
 /**
   * @brief This function handles TIM17 global interrupt.
   */
@@ -241,6 +247,12 @@ void RTC_IRQHandler(void)
     HAL_RTCEx_WakeUpTimerIRQHandler(&hrtc);
 }
 
+void EXTI12_IRQHandler(void)
+{
+    /* ESP32 CS wake (PB12) — clear pending, wake source checked in enterStop2() */
+    HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_12);
+}
+
 void EXTI4_IRQHandler(void)
 {
     HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_4);
@@ -259,16 +271,6 @@ void USART1_IRQHandler(void)
         osMessageQueuePut(gpsRxQueue, &ch, 0, 0);
     }
     USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
-}
-
-void USART2_IRQHandler(void)
-{
-    if (USART2->ISR & USART_ISR_RXNE_RXFNE) {
-        uint8_t ch = (uint8_t)(USART2->RDR & 0xFF);
-        extern osMessageQueueId_t bleRxQueue;
-        osMessageQueuePut(bleRxQueue, &ch, 0, 0);
-    }
-    USART2->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
 }
 
 void USART3_IRQHandler(void)

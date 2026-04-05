@@ -35,6 +35,10 @@ stm32/**/.osx.project
 stm32/**/.settings/
 stm32/**/*/com.st.stm32cube.ide.mcu.sfrview.prefs
 
+# ESP32 bridge auto-generated
+esp32_bridge/src/web_data.h
+esp32_bridge/sdkconfig.esp32c3
+
 # Audio recordings
 *.wav
 
@@ -65,3 +69,4 @@ obj/
 
 # Datasheets
 datasheets/
+audio/
