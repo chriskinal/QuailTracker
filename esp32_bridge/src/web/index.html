@@ -916,18 +916,18 @@
                     return;
                 }
 
-                /* OTA error via WebSocket (both ESP32 and STM32) */
+                /* ESP32 OTA error */
                 if (d.otaErr !== undefined) {
-                    var stmEl = document.getElementById('stm32OtaStatus');
-                    var espEl = document.getElementById('otaStatus');
-                    var msg = d.otaErr;
-                    if (msg.indexOf('STM32') >= 0 || msg.indexOf('stm32') >= 0 ||
-                        window._stm32flashing) {
-                        if (stmEl) { stmEl.textContent = msg; stmEl.style.color = '#f44336'; }
-                        window._stm32flashing = false;
-                    } else {
-                        if (espEl) { espEl.textContent = msg; espEl.style.color = '#f44336'; }
-                    }
+                    var el = document.getElementById('otaStatus');
+                    if (el) { el.textContent = d.otaErr; el.style.color = '#f44336'; }
+                    return;
+                }
+
+                /* STM32 OTA error */
+                if (d.stm32Err !== undefined) {
+                    var el = document.getElementById('stm32OtaStatus');
+                    if (el) { el.textContent = d.stm32Err; el.style.color = '#f44336'; }
+                    window._stm32flashing = false;
                     return;
                 }
 

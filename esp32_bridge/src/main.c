@@ -387,7 +387,7 @@ static esp_err_t stm32_ota_handler(httpd_req_t *req)
     ESP_LOGI(TAG, "STM32 flash started, content_len=%d", req->content_len);
 
     if (req->content_len <= 0 || req->content_len > 512 * 1024) {
-        ws_broadcast("{\"otaErr\":\"Invalid firmware size\"}");
+        ws_broadcast("{\"stm32Err\":\"Invalid firmware size\"}");
         httpd_resp_sendstr(req, "ERR");
         return ESP_FAIL;
     }
@@ -396,7 +396,7 @@ static esp_err_t stm32_ota_handler(httpd_req_t *req)
     char buf[1024];
     int ret = httpd_req_recv(req, buf, sizeof(buf));
     if (ret < 8) {
-        ws_broadcast("{\"otaErr\":\"No data received\"}");
+        ws_broadcast("{\"stm32Err\":\"No data received\"}");
         httpd_resp_sendstr(req, "ERR");
         return ESP_FAIL;
     }
@@ -409,7 +409,7 @@ static esp_err_t stm32_ota_handler(httpd_req_t *req)
     if ((sp & 0xFFF00000) != 0x20000000 || (rv & 0xFFF00000) != 0x08000000) {
         ESP_LOGE(TAG, "Not STM32 firmware (SP=0x%08lx RV=0x%08lx)",
                  (unsigned long)sp, (unsigned long)rv);
-        ws_broadcast("{\"otaErr\":\"Invalid firmware — not an STM32 binary\"}");
+        ws_broadcast("{\"stm32Err\":\"Invalid firmware — not an STM32 binary\"}");
         httpd_resp_sendstr(req, "ERR");
         return ESP_FAIL;
     }
@@ -418,7 +418,7 @@ static esp_err_t stm32_ota_handler(httpd_req_t *req)
     const esp_partition_t *part = esp_partition_find_first(
         ESP_PARTITION_TYPE_DATA, 0x80, STM32FW_PARTITION_LABEL);
     if (!part) {
-        ws_broadcast("{\"otaErr\":\"No staging partition\"}");
+        ws_broadcast("{\"stm32Err\":\"No staging partition\"}");
         httpd_resp_sendstr(req, "ERR");
         return ESP_FAIL;
     }
@@ -426,7 +426,7 @@ static esp_err_t stm32_ota_handler(httpd_req_t *req)
     /* Erase the staging partition */
     esp_err_t err = esp_partition_erase_range(part, 0, part->size);
     if (err != ESP_OK) {
-        ws_broadcast("{\"otaErr\":\"Partition erase failed\"}");
+        ws_broadcast("{\"stm32Err\":\"Partition erase failed\"}");
         httpd_resp_sendstr(req, "ERR");
         return ESP_FAIL;
     }
@@ -434,7 +434,7 @@ static esp_err_t stm32_ota_handler(httpd_req_t *req)
     /* Write first chunk that we already read */
     err = esp_partition_write(part, 0, buf, ret);
     if (err != ESP_OK) {
-        ws_broadcast("{\"otaErr\":\"Write failed\"}");
+        ws_broadcast("{\"stm32Err\":\"Write failed\"}");
         httpd_resp_sendstr(req, "ERR");
         return ESP_FAIL;
     }
@@ -446,14 +446,14 @@ static esp_err_t stm32_ota_handler(httpd_req_t *req)
         ret = httpd_req_recv(req, buf, sizeof(buf));
         if (ret <= 0) {
             if (ret == HTTPD_SOCK_ERR_TIMEOUT) continue;
-            ws_broadcast("{\"otaErr\":\"Receive error\"}");
+            ws_broadcast("{\"stm32Err\":\"Receive error\"}");
             httpd_resp_sendstr(req, "ERR");
             return ESP_FAIL;
         }
 
         err = esp_partition_write(part, received, buf, ret);
         if (err != ESP_OK) {
-            ws_broadcast("{\"otaErr\":\"Write failed\"}");
+            ws_broadcast("{\"stm32Err\":\"Write failed\"}");
             httpd_resp_sendstr(req, "ERR");
             return ESP_FAIL;
         }
