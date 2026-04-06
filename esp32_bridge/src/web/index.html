@@ -740,7 +740,7 @@
                 trigPost: parseInt(document.getElementById('cfgTrigPost').value),
                 lowBat: parseInt(document.getElementById('cfgLowBat').value),
                 autoStop: document.getElementById('cfgAutoStop').checked ? 1 : 0,
-                micHdg: parseInt(document.getElementById('cfgMicHdg').value) || 65535
+                micHdg: document.getElementById('cfgMicHdg').value !== '' ? parseInt(document.getElementById('cfgMicHdg').value) : 65535
             };
             if (ws && ws.readyState === 1) {
                 ws.send(JSON.stringify(obj));
@@ -1136,7 +1136,7 @@
                     document.getElementById('lastDetTime').textContent = d.detTm;
 
                 /* Detection config — only set controls on first load */
-                if (d.mission !== undefined && !window._detCfgLoaded) {
+                if (d.mission !== undefined && d.synced && !window._detCfgLoaded) {
                     document.getElementById('cfgMission').value = d.mission;
                     document.getElementById('cfgConf').value = d.conf;
                     document.getElementById('confVal').textContent = d.conf + '%';
@@ -1145,7 +1145,7 @@
                 }
 
                 /* Schedule — only set controls on first load */
-                if (d.sunEn !== undefined && !window._schLoaded) {
+                if (d.sunEn !== undefined && d.synced && !window._schLoaded) {
                     document.getElementById('schSunrise').checked = !!d.sunEn;
                     document.getElementById('schSunBefore').value = d.sunB;
                     document.getElementById('schSunAfter').value = d.sunA;
@@ -1168,8 +1168,8 @@
                     window._schLoaded = true;
                 }
 
-                /* Config — populate controls on first load or after Load button */
-                if (d.gain !== undefined && !window._cfgLoaded) {
+                /* Config — populate controls on first load (after STM32 sync) or after Load button */
+                if (d.gain !== undefined && d.synced && !window._cfgLoaded) {
                     try {
                         document.getElementById('cfgStationIn').value = d.station || '';
                         document.getElementById('cfgMicHdg').value = (d.micHdg !== undefined && d.micHdg !== 65535) ? d.micHdg : '';

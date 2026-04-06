@@ -1456,6 +1456,7 @@ void app_main(void)
 
     /* Initialize binary SPI protocol state */
     memset(&local_cfg, 0, sizeof(local_cfg));
+    local_cfg.micHeading = 0xFFFF;  /* unset until synced from STM32 */
     memset(&local_state, 0, sizeof(local_state));
     local_cfg_seq = 0;
     stm32_synced = false;
