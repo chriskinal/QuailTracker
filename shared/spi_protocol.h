@@ -67,6 +67,7 @@ typedef enum {
     SPI_CMD_ESP_VERSION    = 12,
     SPI_CMD_SET_DETECT     = 13,
     SPI_CMD_MODEL_RELOAD   = 14,
+    SPI_CMD_AUDIO_STREAM   = 15,
 } spi_cmd_type_t;
 
 /* ── Command slot (64 bytes) ─────────────────────────────────── */
@@ -239,6 +240,19 @@ typedef struct __attribute__((packed)) {
 _Static_assert(sizeof(device_config_t) == 128, "device_config_t must be 128 bytes");
 
 #endif /* DEVICE_STATE_H */
+
+/* ── Audio streaming payload (fits in _reserved region) ─────── */
+
+typedef struct __attribute__((packed)) {
+    uint8_t  audio_active;    /* 1 = samples present */
+    uint8_t  channel;         /* 0 = left, 1 = right */
+    uint16_t num_samples;     /* count of int16 samples, max 214 */
+    int16_t  samples[214];    /* 8 kHz int16 PCM */
+} spi_audio_payload_t;
+
+_Static_assert(sizeof(spi_audio_payload_t) == 432, "spi_audio_payload_t must be 432 bytes");
+
+/* ── Complete SPI frame (1024 bytes) ─────────────────────────── */
 
 typedef struct __attribute__((packed)) {
     spi_frame_header_t header;       /* 16 bytes */

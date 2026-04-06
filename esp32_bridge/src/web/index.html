@@ -280,6 +280,24 @@
                     Start Recording
                 </button>
             </div>
+            <!-- Live Listen -->
+            <div class="card">
+                <div class="row">
+                    <span class="sect">Live Listen</span>
+                    <span class="spacer"></span>
+                    <select id="listenCh" style="background:#0d1b2a;color:#e0e0e0;border:1px solid #444;border-radius:4px;padding:4px 8px;font-size:12px">
+                        <option value="0">Left</option>
+                        <option value="1">Right</option>
+                    </select>
+                </div>
+                <div style="margin-top:6px">
+                    <div style="height:6px;background:#0d1b2a;border-radius:3px;overflow:hidden">
+                        <div id="audioLevel" style="height:100%;width:0%;background:#4CAF50;transition:width 0.1s"></div>
+                    </div>
+                </div>
+                <button class="btn btn-green" id="listenBtn" onclick="toggleListen()">Listen</button>
+            </div>
+
             <!-- SD Card -->
             <div class="card">
                 <div class="row">
@@ -1202,6 +1220,111 @@
               }
             };
         }
+
+        /* ── Live Listen (scheduled AudioBuffer chunks) ─── */
+        var _audioCtx = null, _audioWs = null, _listening = false;
+        var _nextPlayTime = 0;
+
+        function toggleListen() {
+            if (_listening) stopListen(); else startListen();
+        }
+
+        function _updateLevel(int16) {
+            var peak = 0;
+            for (var i = 0; i < int16.length; i++) {
+                var a = Math.abs(int16[i]);
+                if (a > peak) peak = a;
+            }
+            var pct = Math.min(100, Math.round(peak / 327.68));
+            var el = document.getElementById('audioLevel');
+            el.style.width = pct + '%';
+            el.style.background = pct > 80 ? '#F44336' : pct > 50 ? '#FF9800' : '#4CAF50';
+        }
+
+        function startListen() {
+            var AC = window.AudioContext || window.webkitAudioContext;
+            if (!AC) {
+                document.getElementById('listenBtn').textContent = 'Not supported';
+                return;
+            }
+
+            try { _audioCtx = new AC(); } catch(e) {
+                document.getElementById('listenBtn').textContent = 'Audio error';
+                return;
+            }
+
+            if (_audioCtx.state === 'suspended') _audioCtx.resume();
+            _nextPlayTime = 0;
+
+            var ch = parseInt(document.getElementById('listenCh').value);
+            _audioWs = new WebSocket('ws://' + location.host + '/ws_audio');
+            _audioWs.binaryType = 'arraybuffer';
+
+            _audioWs.onopen = function() {
+                if (ws && ws.readyState === 1) {
+                    ws.send(JSON.stringify({cmd:'audio_stream', ch:ch, en:1}));
+                }
+                _listening = true;
+                document.getElementById('listenBtn').textContent = 'Stop';
+                document.getElementById('listenBtn').className = 'btn btn-red';
+            };
+
+            _audioWs.onmessage = function(ev) {
+                if (!(ev.data instanceof ArrayBuffer) || !_audioCtx) return;
+                var int16 = new Int16Array(ev.data);
+                if (int16.length === 0) return;
+
+                /* Create AudioBuffer at 8kHz — browser resamples to output rate */
+                var buf = _audioCtx.createBuffer(1, int16.length, 8000);
+                var ch = buf.getChannelData(0);
+                for (var i = 0; i < int16.length; i++) {
+                    ch[i] = int16[i] / 32768.0;
+                }
+
+                var src = _audioCtx.createBufferSource();
+                src.buffer = buf;
+                src.connect(_audioCtx.destination);
+
+                /* Schedule chunk right after previous one */
+                var now = _audioCtx.currentTime;
+                if (_nextPlayTime < now) _nextPlayTime = now + 0.05; /* 50ms initial buffer */
+                src.start(_nextPlayTime);
+                _nextPlayTime += buf.duration;
+
+                /* If we're drifting too far ahead, reset to prevent growing latency */
+                if (_nextPlayTime - now > 0.3) {
+                    _nextPlayTime = now + 0.05;
+                }
+
+                _updateLevel(int16);
+            };
+
+            _audioWs.onclose = function() { stopListen(); };
+            _audioWs.onerror = function() { stopListen(); };
+        }
+
+        function stopListen() {
+            _listening = false;
+            if (ws && ws.readyState === 1) {
+                ws.send(JSON.stringify({cmd:'audio_stream', en:0}));
+            }
+            if (_audioWs) { try { _audioWs.onclose = null; _audioWs.close(); } catch(e){} _audioWs = null; }
+            if (_audioCtx) { try { _audioCtx.close(); } catch(e){} _audioCtx = null; }
+            document.getElementById('listenBtn').textContent = 'Listen';
+            document.getElementById('listenBtn').className = 'btn btn-green';
+            document.getElementById('audioLevel').style.width = '0%';
+        }
+
+        window.addEventListener('beforeunload', stopListen);
+
+        /* Channel change while listening */
+        document.getElementById('listenCh').addEventListener('change', function() {
+            if (_listening) {
+                var ch = parseInt(this.value);
+                if (ws && ws.readyState === 1)
+                    ws.send(JSON.stringify({cmd:'audio_stream', ch:ch, en:1}));
+            }
+        });
 
         connect();
     </script>

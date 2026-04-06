@@ -197,8 +197,17 @@ extern SPI_HandleTypeDef hspi2;
 #define SPI2_CS_PORT  GPIOB
 #define SPI2_CS_PIN   GPIO_PIN_12
 #define SPI2_BUF_SIZE 1024
-#define SPI2_POLL_MS  250  /* SPI command poll + status push interval */
+#define SPI2_POLL_MS       250  /* SPI command poll + status push interval */
+#define SPI2_POLL_STREAM_MS 20  /* faster poll when audio streaming (must align with osDelay) */
 static uint32_t lastSpiPollTick = 0;
+
+/* ---- Live audio streaming state ---- */
+static volatile uint8_t streamActive = 0;
+static volatile uint8_t streamChannel = 0;  /* 0=L, 1=R */
+static uint32_t streamTailL = 0;   /* independent ring tail for left channel */
+static uint32_t streamTailR = 0;   /* independent ring tail for right channel */
+static uint32_t streamLastSpiTick = 0;  /* auto-stop timeout */
+#define STREAM_TIMEOUT_MS 1000
 
 /* ---- Power management ---- */
 #define GPS_DUTY_CYCLE_DEFAULT_SEC  300  /* GPS wake every 5 min during recording */
@@ -1919,6 +1928,45 @@ void diagLog(const char *event)
     printf("DIAG: %s", line);
 }
 
+/* ========================= Audio Stream Decimation ========================= */
+
+/* Decimate 48kHz int32 ring buffer → 8kHz int16 output.
+ * Averages groups of 6 consecutive samples. Uses independent tail pointer
+ * so streaming doesn't affect recording. Returns number of output samples. */
+static uint16_t decimate_8k(int16_t *out, uint16_t maxSamples)
+{
+    int32_t *ring;
+    volatile uint32_t *head;
+    uint32_t *tail;
+
+    if (streamChannel == 0) {
+        ring = pcmRing;
+        head = &ringHead;
+        tail = &streamTailL;
+    } else {
+        ring = pcmRingR;
+        head = &ringHeadR;
+        tail = &streamTailR;
+    }
+
+    uint16_t count = 0;
+    uint32_t h = *head;
+    uint32_t t = *tail;
+
+    while (count < maxSamples && (h - t) >= 6) {
+        int32_t sum = 0;
+        for (int i = 0; i < 6; i++) {
+            /* Ring stores 24-bit (>>8 from ADF). Shift >>8 more for int16 range. */
+            sum += (ring[(t + i) & PCM_RING_MASK] >> 8);
+        }
+        t += 6;
+        out[count++] = (int16_t)(sum / 6);
+    }
+
+    *tail = t;
+    return count;
+}
+
 /* ========================= Bridge Task (SPI2 + housekeeping) ========================= */
 
 static void StartBridgeTask(void *argument)
@@ -1975,8 +2023,15 @@ static void StartBridgeTask(void *argument)
             sd_space_refresh();
         }
 
-        /* Fast SPI2 poll — push status + receive commands every 250ms */
-        if ((HAL_GetTick() - lastSpiPollTick) >= SPI2_POLL_MS) {
+        /* Auto-stop streaming if no SPI exchange for 1s */
+        if (streamActive && (HAL_GetTick() - streamLastSpiTick) > STREAM_TIMEOUT_MS) {
+            streamActive = 0;
+            printf("Stream: auto-stopped (SPI timeout)\r\n");
+        }
+
+        /* SPI2 poll — 25ms when streaming, 250ms otherwise */
+        uint32_t spiPollMs = streamActive ? SPI2_POLL_STREAM_MS : SPI2_POLL_MS;
+        if ((HAL_GetTick() - lastSpiPollTick) >= spiPollMs) {
             lastSpiPollTick = HAL_GetTick();
 
             /* Build binary SPI frame */
@@ -1996,6 +2051,16 @@ static void StartBridgeTask(void *argument)
 
             spi_frame_build(&spi_tx_frame, &cfg, &dev, &health, solar_st, 0);
 
+            /* Fill audio streaming payload into reserved region */
+            if (streamActive) {
+                spi_audio_payload_t *ap = (spi_audio_payload_t *)spi_tx_frame._reserved;
+                ap->channel = streamChannel;
+                ap->num_samples = decimate_8k(ap->samples, 214);
+                ap->audio_active = (ap->num_samples > 0) ? 1 : 0;
+                /* Recompute CRC since we modified the frame */
+                spi_tx_frame.header.crc16 = spi_frame_crc(&spi_tx_frame);
+            }
+
             HAL_GPIO_WritePin(SPI2_CS_PORT, SPI2_CS_PIN, GPIO_PIN_RESET);
             HAL_StatusTypeDef spiResult = HAL_SPI_TransmitReceive(&hspi2,
                 (uint8_t *)&spi_tx_frame, (uint8_t *)&spi_rx_frame, SPI2_BUF_SIZE, 100);
@@ -2006,9 +2071,12 @@ static void StartBridgeTask(void *argument)
                 dev.comms.espReady = 1;
                 dev.comms.spiTransactions++;
                 dev.comms.lastSpiTick = HAL_GetTick();
+                if (streamActive)
+                    streamLastSpiTick = HAL_GetTick();
             }
 
             /* Process received frame — binary protocol */
+            static uint32_t lastCmdSeq = 0;  /* dedup: skip already-processed commands */
             if (spi_rx_frame.header.magic == SPI_FRAME_MAGIC) {
                 uint8_t cmd = SPI_CMD_NONE;
                 uint8_t cmd_payload[56];
@@ -2020,6 +2088,15 @@ static void StartBridgeTask(void *argument)
                     config_apply(&cfg);
                     configSave();
                     printf("SPI: config adopted (seq=%lu)\r\n", (unsigned long)cfg.cfg_seq);
+                }
+
+                /* Dedup: ESP32 sends same command in multiple frames for reliability.
+                 * Skip if we already processed this seq number. */
+                if (cmd != SPI_CMD_NONE && cmd_seq != 0 && cmd_seq == lastCmdSeq) {
+                    cmd = SPI_CMD_NONE;
+                }
+                if (cmd != SPI_CMD_NONE && cmd_seq != 0) {
+                    lastCmdSeq = cmd_seq;
                 }
 
                 /* Extract ESP32 firmware version from CMD_ESP_VERSION */
@@ -2119,6 +2196,23 @@ static void StartBridgeTask(void *argument)
                     }
                     printf("SPI cmd: dev_mode=%d\r\n", dev.pwr.devMode);
                     break;
+                case SPI_CMD_AUDIO_STREAM: {
+                    uint8_t ch = cmd_payload[0];
+                    uint8_t en = cmd_payload[1];
+                    if (en) {
+                        streamChannel = ch;
+                        /* Start at live edge — no backlog */
+                        streamTailL = ringHead;
+                        streamTailR = ringHeadR;
+                        streamLastSpiTick = HAL_GetTick();
+                        streamActive = 1;
+                        printf("Stream: START ch=%d\r\n", ch);
+                    } else {
+                        streamActive = 0;
+                        printf("Stream: STOP\r\n");
+                    }
+                    break;
+                }
                 default:
                     break;
                 }

@@ -91,6 +91,38 @@ static uint32_t        local_cfg_seq = 0;
 static bool            stm32_synced = false;
 static bool            first_boot = true;
 
+/* ── Audio streaming state ────────────────────────────────────── */
+
+#define AUDIO_RING_SIZE 4096   /* ~256ms at 8kHz */
+#define AUDIO_RING_MASK (AUDIO_RING_SIZE - 1)
+static int16_t audio_ring[AUDIO_RING_SIZE];
+static volatile uint32_t audio_ring_head = 0;
+static volatile uint32_t audio_ring_tail = 0;
+static volatile bool audio_streaming = false;
+
+/* Audio WebSocket clients (separate from status WS) */
+#define MAX_AUDIO_CLIENTS 2
+static int audio_ws_fds[MAX_AUDIO_CLIENTS] = {0};
+
+static void audio_ws_add(int fd) {
+    for (int i = 0; i < MAX_AUDIO_CLIENTS; i++) {
+        if (audio_ws_fds[i] == 0) { audio_ws_fds[i] = fd; return; }
+    }
+}
+
+static void audio_ws_remove(int fd) {
+    for (int i = 0; i < MAX_AUDIO_CLIENTS; i++) {
+        if (audio_ws_fds[i] == fd) { audio_ws_fds[i] = 0; return; }
+    }
+}
+
+static int audio_ws_count(void) {
+    int n = 0;
+    for (int i = 0; i < MAX_AUDIO_CLIENTS; i++)
+        if (audio_ws_fds[i] != 0) n++;
+    return n;
+}
+
 /* Command queue: browser → SPI (ring buffer, 8 deep) */
 #define CMD_QUEUE_SIZE 8
 static qt_spi_cmd_t cmd_queue[CMD_QUEUE_SIZE];
@@ -200,6 +232,14 @@ static void ws_broadcast(const char *json)
 static void on_sock_close(httpd_handle_t hd, int sockfd)
 {
     ws_remove_client(sockfd);
+    audio_ws_remove(sockfd);
+    /* Auto-stop streaming when last audio client disconnects */
+    if (audio_streaming && audio_ws_count() == 0) {
+        uint8_t payload[2] = {0, 0};  /* channel=0, enable=0 */
+        cmd_enqueue(SPI_CMD_AUDIO_STREAM, payload, 2);
+        audio_streaming = false;
+        ESP_LOGI(TAG, "Audio: auto-stopped (last client gone)");
+    }
     close(sockfd);
 }
 
@@ -288,6 +328,25 @@ static void ws_process_command(const char *json)
     if (strstr(json, "schedule_off"))   { cmd_enqueue(SPI_CMD_SCHEDULE_OFF, NULL, 0); return; }
     if (strstr(json, "dev_mode"))       { cmd_enqueue(SPI_CMD_DEV_MODE, NULL, 0); return; }
     if (strstr(json, "model_reload"))   { cmd_enqueue(SPI_CMD_MODEL_RELOAD, NULL, 0); return; }
+
+    if (strstr(json, "audio_stream")) {
+        char *p;
+        uint8_t ch = 0, en = 1;
+        if ((p = strstr(json, "\"ch\":")) != NULL)
+            ch = (uint8_t)atoi(p + 5);
+        if ((p = strstr(json, "\"en\":")) != NULL)
+            en = (uint8_t)atoi(p + 5);
+        uint8_t payload[2] = {ch, en};
+        cmd_enqueue(SPI_CMD_AUDIO_STREAM, payload, 2);
+        audio_streaming = (en != 0);
+        if (!audio_streaming) {
+            /* Reset ring buffer on stop */
+            audio_ring_head = 0;
+            audio_ring_tail = 0;
+        }
+        ESP_LOGI(TAG, "Audio stream: ch=%d en=%d", ch, en);
+        return;
+    }
 
     /* Config changes → update local_cfg + bump seq so STM32 adopts */
     if (strstr(json, "set_config")) {
@@ -700,6 +759,37 @@ static esp_err_t stm32_ota_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* ── Audio WebSocket Handler ────────────────────────────────────── */
+
+static esp_err_t ws_audio_handler(httpd_req_t *req)
+{
+    if (req->method == HTTP_GET) {
+        int fd = httpd_req_to_sockfd(req);
+        audio_ws_add(fd);
+        ESP_LOGI(TAG, "Audio WS handshake: fd=%d", fd);
+        return ESP_OK;
+    }
+
+    /* Receive command from browser (start/stop/channel change) */
+    httpd_ws_frame_t ws_pkt = {0};
+    ws_pkt.type = HTTPD_WS_TYPE_TEXT;
+
+    esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0);
+    if (ret != ESP_OK || ws_pkt.len == 0 || ws_pkt.len >= 256)
+        return ESP_OK;
+
+    uint8_t *buf = calloc(1, ws_pkt.len + 1);
+    if (!buf) return ESP_OK;
+    ws_pkt.payload = buf;
+    ret = httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
+    if (ret == ESP_OK) {
+        buf[ws_pkt.len] = '\0';
+        ws_process_command((char *)buf);
+    }
+    free(buf);
+    return ESP_OK;
+}
+
 static httpd_handle_t start_webserver(void)
 {
     if (ws_server) return ws_server;  /* already running */
@@ -726,6 +816,14 @@ static httpd_handle_t start_webserver(void)
             .is_websocket = true,
         };
         httpd_register_uri_handler(server, &ws);
+
+        httpd_uri_t ws_audio = {
+            .uri = "/ws_audio",
+            .method = HTTP_GET,
+            .handler = ws_audio_handler,
+            .is_websocket = true,
+        };
+        httpd_register_uri_handler(server, &ws_audio);
 
         httpd_uri_t ota = {
             .uri = "/ota",
@@ -1091,11 +1189,20 @@ static void spi_task(void *arg)
         /* Copy local config into frame */
         memcpy(&tx->config, &local_cfg, sizeof(device_config_t));
 
-        /* Dequeue one command */
-        qt_spi_cmd_t cmd;
-        if (cmd_dequeue(&cmd)) {
-            memcpy(&tx->command, &cmd, sizeof(qt_spi_cmd_t));
+        /* Dequeue command — keep in TX frame for up to 5 exchanges
+         * to survive SPI CRC errors. STM32 dedup via cmd_seq. */
+        static qt_spi_cmd_t pending_cmd = {0};
+        static int pending_ttl = 0;
+
+        qt_spi_cmd_t new_cmd;
+        if (cmd_dequeue(&new_cmd)) {
+            memcpy(&pending_cmd, &new_cmd, sizeof(qt_spi_cmd_t));
+            pending_ttl = 5;
+        }
+        if (pending_ttl > 0) {
+            memcpy(&tx->command, &pending_cmd, sizeof(qt_spi_cmd_t));
             flags |= SPI_FLAG_CMD_PENDING;
+            pending_ttl--;
         }
 
         tx->header.flags = flags;
@@ -1138,6 +1245,21 @@ static void spi_task(void *arg)
                 if (rx->header.flags & SPI_FLAG_STATE_VALID) {
                     memcpy(&local_state, &rx->state, sizeof(spi_state_t));
                     new_spi_data = true;
+                }
+
+                /* Extract audio samples from reserved region */
+                if (audio_streaming) {
+                    const spi_audio_payload_t *ap =
+                        (const spi_audio_payload_t *)rx->_reserved;
+                    if (ap->audio_active && ap->num_samples > 0 &&
+                        ap->num_samples <= 214) {
+                        uint32_t h = audio_ring_head;
+                        for (uint16_t i = 0; i < ap->num_samples; i++) {
+                            audio_ring[h & AUDIO_RING_MASK] = ap->samples[i];
+                            h++;
+                        }
+                        audio_ring_head = h;
+                    }
                 }
 
                 /* Update BLE advertising from state */
@@ -1303,6 +1425,60 @@ static void ws_push_task(void *arg)
         ble_beacon_update_data(local_state.env_battMv,
                                local_state.rec_active,
                                local_state.pwr_state);
+    }
+}
+
+/* ── Audio Push Task ───────────────────────────────────────────── */
+
+static void audio_push_task(void *arg)
+{
+    /* Buffer for binary WS frame: up to 214 samples = 428 bytes */
+    static int16_t push_buf[214];
+
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(25));
+
+        if (!audio_streaming || !ws_server || audio_ws_count() == 0) {
+            /* Drain ring to avoid stale data accumulating */
+            audio_ring_tail = audio_ring_head;
+            continue;
+        }
+
+        /* Copy available samples from ring */
+        uint32_t h = audio_ring_head;
+        uint32_t t = audio_ring_tail;
+        uint32_t avail = h - t;
+        if (avail == 0) continue;
+        if (avail > 214) {
+            /* Drop excess to prevent growing latency */
+            t = h - 214;
+        }
+
+        uint16_t count = 0;
+        while (t != h && count < 214) {
+            push_buf[count++] = audio_ring[t & AUDIO_RING_MASK];
+            t++;
+        }
+        audio_ring_tail = t;
+
+        if (count == 0) continue;
+
+        /* Send binary frame to all audio WS clients */
+        httpd_ws_frame_t ws_pkt = {
+            .type = HTTPD_WS_TYPE_BINARY,
+            .payload = (uint8_t *)push_buf,
+            .len = count * sizeof(int16_t),
+        };
+
+        for (int i = 0; i < MAX_AUDIO_CLIENTS; i++) {
+            if (audio_ws_fds[i] != 0) {
+                esp_err_t ret = httpd_ws_send_frame_async(
+                    ws_server, audio_ws_fds[i], &ws_pkt);
+                if (ret != ESP_OK) {
+                    audio_ws_remove(audio_ws_fds[i]);
+                }
+            }
+        }
     }
 }
 
@@ -1478,6 +1654,7 @@ void app_main(void)
 
     xTaskCreate(spi_task, "spi_task", 4096, NULL, 3, &spi_task_handle);
     xTaskCreate(ws_push_task, "ws_push", 4096, NULL, 4, NULL);
+    xTaskCreate(audio_push_task, "audio_push", 3072, NULL, 4, NULL);
     xTaskCreate(power_mgmt_task, "pwr_mgmt", 4096, NULL, 2, NULL);
     xTaskCreate(dns_task, "dns", 4096, NULL, 2, NULL);
 
