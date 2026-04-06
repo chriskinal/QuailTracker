@@ -278,6 +278,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
                     <DataGridTextColumn Header="Common Name" Binding="{Binding CommonName}" Width="2*" />
                     <DataGridTextColumn Header="Scientific Name" Binding="{Binding ScientificName}" Width="2*" />
                     <DataGridTextColumn Header="Confidence" Binding="{Binding ConfidencePercent}" Width="*" />
+                    <DataGridTextColumn Header="Bearing" Binding="{Binding BearingDisplay}" Width="70" />
                 </DataGrid.Columns>
             </DataGrid>
         </Grid>

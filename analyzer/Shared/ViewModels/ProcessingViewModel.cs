@@ -32,6 +32,7 @@ public partial class ProcessingViewModel : ObservableObject
 {
     private readonly IAudioFileService _audioFileService;
     private readonly IBirdNetService _birdNetService;
+    private readonly StereoBearingService _bearingService;
     private readonly ObservableCollection<AudioFile> _audioFiles;
     private readonly ObservableCollection<Detection> _detections;
     [ObservableProperty]
@@ -108,6 +109,7 @@ public partial class ProcessingViewModel : ObservableObject
     {
         _audioFileService = audioFileService;
         _birdNetService = birdNetService;
+        _bearingService = new StereoBearingService(audioFileService);
         _audioFiles = audioFiles;
         _detections = detections;
         _setStatus = msg => StatusMessage = msg;
@@ -197,12 +199,30 @@ public partial class ProcessingViewModel : ObservableObject
                 MaxThreads,
                 _cts.Token);
 
+            // Compute stereo bearings for detections from stereo files
+            var stereoDetections = new System.Collections.Generic.List<Detection>();
             foreach (var detection in newDetections)
             {
                 _detections.Add(detection);
+
+                // Check if source file is stereo
+                var af = filesToProcess.FirstOrDefault(f => f.FilePath == detection.AudioFilePath);
+                if (af?.Channels == 2)
+                    stereoDetections.Add(detection);
             }
 
-            _setStatus($"Processing complete. Found {newDetections.Count} detections.");
+            if (stereoDetections.Count > 0)
+            {
+                _setStatus($"Computing stereo bearings for {stereoDetections.Count} detections...");
+                await _bearingService.ComputeBearingsAsync(
+                    stereoDetections,
+                    ct: _cts.Token);
+            }
+
+            var withBearing = newDetections.Count(d => !double.IsNaN(d.BearingDeg));
+            _setStatus(withBearing > 0
+                ? $"Processing complete. {newDetections.Count} detections, {withBearing} with bearing."
+                : $"Processing complete. Found {newDetections.Count} detections.");
         }
         catch (OperationCanceledException)
         {

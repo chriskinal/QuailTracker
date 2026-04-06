@@ -40,6 +40,7 @@ public partial class SingleAnalysisViewModel : ObservableObject
     private readonly NoiseReductionService _noiseReduction;
     private readonly ConfigService _configService;
     private readonly AppStateService _appState;
+    private readonly StereoBearingService _bearingService;
     [ObservableProperty]
     private string _statusMessage = string.Empty;
 
@@ -134,6 +135,7 @@ public partial class SingleAnalysisViewModel : ObservableObject
         _spectrogramService.NoiseReduction = noiseReduction;
         _configService = configService;
         _appState = appState;
+        _bearingService = new StereoBearingService(audioFileService);
         _setStatus = msg => StatusMessage = msg;
 
         // Sync from service in case model was already loaded elsewhere
@@ -292,7 +294,29 @@ public partial class SingleAnalysisViewModel : ObservableObject
             foreach (var detection in detections)
                 Detections.Add(detection);
 
-            _setStatus($"Analysis complete. Found {detections.Count} detections.");
+            // Compute stereo bearings if file is stereo
+            if (_loadedFile.Channels == 2 && detections.Count > 0)
+            {
+                _setStatus($"Computing stereo bearings for {detections.Count} detections...");
+                var bearingProgress = new Progress<(int current, int total)>(p =>
+                    _setStatus($"Computing bearing {p.current}/{p.total}..."));
+
+                await _bearingService.ComputeBearingsAsync(
+                    detections,
+                    _loadedFile.SampleRate > 0 ? _loadedFile.SampleRate : 48000,
+                    bearingProgress,
+                    _analysisCts!.Token);
+
+                var withBearing = 0;
+                foreach (var d in detections)
+                    if (!double.IsNaN(d.BearingDeg)) withBearing++;
+
+                _setStatus($"Analysis complete. {detections.Count} detections, {withBearing} with bearing.");
+            }
+            else
+            {
+                _setStatus($"Analysis complete. Found {detections.Count} detections.");
+            }
         }
         catch (OperationCanceledException)
         {

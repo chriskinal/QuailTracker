@@ -64,6 +64,7 @@ public class Detection
 
     public string DisplayName => string.IsNullOrEmpty(CommonName) ? ScientificName : CommonName;
     public string ConfidencePercent => $"{Confidence:P0}";
+    public string BearingDisplay => double.IsNaN(BearingDeg) ? "--" : $"{BearingDeg:F1}°";
 
     public override string ToString() =>
         $"{DisplayName} ({ConfidencePercent}) at {Timestamp:HH:mm:ss}";

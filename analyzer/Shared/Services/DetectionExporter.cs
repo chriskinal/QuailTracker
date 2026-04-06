@@ -28,29 +28,33 @@ public static class DetectionExporter
     public static void WriteBirdNetCsv(IList<Detection> detections, string path)
     {
         using var writer = new StreamWriter(path);
-        writer.WriteLine("Start (s),End (s),Scientific name,Common name,Confidence,File");
+        writer.WriteLine("Start (s),End (s),Scientific name,Common name,Confidence,Bearing (deg),TDOA confidence,File");
         foreach (var d in detections)
         {
             var end = d.OffsetSeconds + d.DurationSeconds;
             var file = Path.GetFileName(d.AudioFilePath);
+            var bearing = double.IsNaN(d.BearingDeg) ? "" : d.BearingDeg.ToString("F1", CultureInfo.InvariantCulture);
+            var tdoaConf = d.TdoaConfidence > 0 ? d.TdoaConfidence.ToString("F3", CultureInfo.InvariantCulture) : "";
             writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
-                "{0:F1},{1:F1},{2},{3},{4:F4},{5}",
-                d.OffsetSeconds, end, d.ScientificName, d.CommonName, d.Confidence, file));
+                "{0:F1},{1:F1},{2},{3},{4:F4},{5},{6},{7}",
+                d.OffsetSeconds, end, d.ScientificName, d.CommonName, d.Confidence, bearing, tdoaConf, file));
         }
     }
 
     public static void WriteRavenTable(IList<Detection> detections, string path)
     {
         using var writer = new StreamWriter(path);
-        writer.WriteLine("Selection\tView\tChannel\tBegin Time (s)\tEnd Time (s)\tLow Freq (Hz)\tHigh Freq (Hz)\tCommon Name\tSpecies Code\tConfidence\tBegin Path\tFile Offset (s)");
+        writer.WriteLine("Selection\tView\tChannel\tBegin Time (s)\tEnd Time (s)\tLow Freq (Hz)\tHigh Freq (Hz)\tCommon Name\tSpecies Code\tConfidence\tBearing (deg)\tTDOA Confidence\tBegin Path\tFile Offset (s)");
         for (int i = 0; i < detections.Count; i++)
         {
             var d = detections[i];
             var end = d.OffsetSeconds + d.DurationSeconds;
             var file = Path.GetFileName(d.AudioFilePath);
+            var bearing = double.IsNaN(d.BearingDeg) ? "" : d.BearingDeg.ToString("F1", CultureInfo.InvariantCulture);
+            var tdoaConf = d.TdoaConfidence > 0 ? d.TdoaConfidence.ToString("F3", CultureInfo.InvariantCulture) : "";
             writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
-                "{0}\tSpectrogram 1\t1\t{1:F1}\t{2:F1}\t0\t15000\t{3}\t\t{4:F4}\t{5}\t{6:F1}",
-                i + 1, d.OffsetSeconds, end, d.CommonName, d.Confidence, file, d.OffsetSeconds));
+                "{0}\tSpectrogram 1\t1\t{1:F1}\t{2:F1}\t0\t15000\t{3}\t\t{4:F4}\t{5}\t{6}\t{7}\t{8:F1}",
+                i + 1, d.OffsetSeconds, end, d.CommonName, d.Confidence, bearing, tdoaConf, file, d.OffsetSeconds));
         }
     }
 }
