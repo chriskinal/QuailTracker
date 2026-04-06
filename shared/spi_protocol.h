@@ -230,8 +230,9 @@ typedef struct __attribute__((packed)) {
     uint8_t  detConfThresh;
     uint8_t  detWindowStep;
     uint8_t  chunkMinutes;
+    uint16_t micHeading;                       /* mic axis compass heading 0-359, 0xFFFF=unset */
     uint32_t cfg_seq;                          /* config sequence number */
-    uint8_t  _pad[128 - 104 - 4];             /* pad to 128 bytes */
+    uint8_t  _pad[128 - 106 - 4];             /* pad to 128 bytes */
     uint32_t crc32;
 } device_config_t;
 

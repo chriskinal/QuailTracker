@@ -338,6 +338,15 @@ void writeGuanoChunk(FIL *fp, uint32_t audioDataBytes)
     len += snprintf(buf + len, sizeof(buf) - len,
                     "QuailTracker|Station ID: %s\n", deviceStationId);
 
+    /* Mic axis heading for stereo TDOA bearing */
+    {
+        extern uint16_t configGetMicHeading(void);
+        uint16_t hdg = configGetMicHeading();
+        if (hdg != 0xFFFF)
+            len += snprintf(buf + len, sizeof(buf) - len,
+                            "QuailTracker|Mic Heading: %u\n", (unsigned)hdg);
+    }
+
     /* PPS-sample correlation for TDOA */
     if (recPpsEdgesInRec > 0) {
         len += snprintf(buf + len, sizeof(buf) - len,
@@ -446,6 +455,14 @@ void writeFlacVorbisComment(FIL *fp)
     snprintf(tags[ntags++], 80, "ARTIST=QuailTracker STM32U575-ARU");
     snprintf(tags[ntags++], 80, "ENCODER=QuailTracker " FW_VERSION);
     snprintf(tags[ntags++], 80, "SAMPLERATE=%lu", (unsigned long)SAMPLE_RATE);
+
+    /* Mic axis heading for stereo TDOA bearing */
+    {
+        extern uint16_t configGetMicHeading(void);
+        uint16_t hdg = configGetMicHeading();
+        if (hdg != 0xFFFF)
+            snprintf(tags[ntags++], 80, "MIC_HEADING=%u", (unsigned)hdg);
+    }
 
     /* Temperature and humidity from SHT30 */
     {

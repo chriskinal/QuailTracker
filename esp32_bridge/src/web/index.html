@@ -453,6 +453,11 @@
                     <span class="sect">Station</span>
                     <input type="text" class="num" style="width:auto;flex:1;margin-left:8px;text-align:left" id="cfgStationIn" maxlength="15" value="">
                 </div>
+                <div class="row" style="margin-top:8px">
+                    <span class="sect">Mic Heading</span>
+                    <input type="number" class="num" style="width:60px;margin-left:8px" id="cfgMicHdg" min="0" max="359" value="">
+                    <span class="val-sm" style="color:#888;margin-left:4px">deg (0-359, arrow direction)</span>
+                </div>
                 <div class="row" style="margin-top:8px;gap:8px">
                     <div style="flex:1">
                         <div class="val-sm" style="color:#888">Gain</div>
@@ -734,7 +739,8 @@
                 trigPre: parseInt(document.getElementById('cfgTrigPre').value),
                 trigPost: parseInt(document.getElementById('cfgTrigPost').value),
                 lowBat: parseInt(document.getElementById('cfgLowBat').value),
-                autoStop: document.getElementById('cfgAutoStop').checked ? 1 : 0
+                autoStop: document.getElementById('cfgAutoStop').checked ? 1 : 0,
+                micHdg: parseInt(document.getElementById('cfgMicHdg').value) || 65535
             };
             if (ws && ws.readyState === 1) {
                 ws.send(JSON.stringify(obj));
@@ -1166,6 +1172,7 @@
                 if (d.gain !== undefined && !window._cfgLoaded) {
                     try {
                         document.getElementById('cfgStationIn').value = d.station || '';
+                        document.getElementById('cfgMicHdg').value = (d.micHdg !== undefined && d.micHdg !== 65535) ? d.micHdg : '';
                         document.getElementById('cfgGainSel').value = d.gain;
                         document.getElementById('cfgFmtSel').value = d.fmt;
                         document.getElementById('cfgHpf').value = d.hpf;

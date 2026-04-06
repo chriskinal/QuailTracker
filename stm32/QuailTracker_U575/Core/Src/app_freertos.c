@@ -43,7 +43,7 @@
 
 /* ---- Flash config/health constants (types now in device_state.h) ---- */
 #define CONFIG_MAGIC      0x51544346   /* "QTCF" */
-#define CONFIG_VERSION    8
+#define CONFIG_VERSION    9
 #define CONFIG_FLASH_ADDR 0x080FE000   /* Last page of Bank 1 on 2MB (Nucleo ZI), Bank 2 page 63 on 1MB (VGT6) */
 
 #define HEALTH_MAGIC       0x51544853   /* "QTHS" */
@@ -1836,6 +1836,7 @@ uint32_t configGetSurveyCount(void) { return cfg.surveyCount; }
 float configGetSurveyLat(void) { return cfg.surveyLat; }
 float configGetSurveyLon(void) { return cfg.surveyLon; }
 float configGetSurveyAlt(void) { return cfg.surveyAlt; }
+uint16_t configGetMicHeading(void) { return cfg.micHeading; }
 
 /* ========================= Survey-In ========================= */
 
@@ -2193,6 +2194,7 @@ static void configSetDefaults(device_config_t *c)
     c->detConfThresh = 50;   /* 50% default threshold */
     c->detWindowStep = 3;    /* 3 seconds */
     c->chunkMinutes = 30;    /* 30-minute file chunks */
+    c->micHeading = 0xFFFF;  /* unset — installer enters via web UI */
     c->cfg_seq = 1;          /* start at 1 so ESP32 (seq=0) adopts on first sync */
     memset(c->_pad, 0xFF, sizeof(c->_pad));
     c->crc32 = 0;

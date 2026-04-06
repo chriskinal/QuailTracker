@@ -324,6 +324,8 @@ static void ws_process_command(const char *json)
             local_cfg.lowBatPct = (uint8_t)atoi(p + 9);
         if ((p = strstr(json, "\"autoStop\":")) != NULL)
             local_cfg.autoStop = (uint8_t)atoi(p + 11);
+        if ((p = strstr(json, "\"micHdg\":")) != NULL)
+            local_cfg.micHeading = (uint16_t)atoi(p + 9);
 
         local_cfg_seq++;
         local_cfg.cfg_seq = local_cfg_seq;
@@ -1224,7 +1226,7 @@ static void ws_push_task(void *arg)
                 "\"nWin\":%d,\"wins\":[%s],"
                 "\"gain\":%d,\"fmt\":%d,\"hpf\":%u,\"lpf\":%u,\"chunk\":%d,"
                 "\"trigEn\":%d,\"trigDb\":%d,\"trigPre\":%d,\"trigPost\":%d,"
-                "\"lowBat\":%d,\"autoStop\":%d,"
+                "\"lowBat\":%d,\"autoStop\":%d,\"micHdg\":%u,"
                 "\"pwrState\":%d,\"devMode\":%d,\"schedActive\":%d,\"rtcSync\":%d,"
                 "\"synced\":%d}",
                 (unsigned)s->env_battMv,
@@ -1286,6 +1288,7 @@ static void ws_push_task(void *arg)
                 (int)c->trigPost,
                 (int)c->lowBatPct,
                 (int)c->autoStop,
+                (unsigned)c->micHeading,
                 (int)s->pwr_state,
                 (int)s->pwr_devMode,
                 (int)s->pwr_schedActive,
