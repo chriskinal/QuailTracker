@@ -33,6 +33,7 @@
 #include "tflite_inference.h"
 #include "SEGGER_RTT.h"
 #include "device_state.h"
+#include "spi_bridge.h"
 #include "solar.h"
 #include "schedule.h"
 /* USER CODE END Includes */
@@ -42,7 +43,7 @@
 
 /* ---- Flash config/health constants (types now in device_state.h) ---- */
 #define CONFIG_MAGIC      0x51544346   /* "QTCF" */
-#define CONFIG_VERSION    7
+#define CONFIG_VERSION    8
 #define CONFIG_FLASH_ADDR 0x080FE000   /* Last page of Bank 1 on 2MB (Nucleo ZI), Bank 2 page 63 on 1MB (VGT6) */
 
 #define HEALTH_MAGIC       0x51544853   /* "QTHS" */
@@ -1930,13 +1931,7 @@ static void StartBridgeTask(void *argument)
     configLoad();
 
     /* Apply persisted config to runtime state */
-    extern MDF_FilterConfigTypeDef MdfFilterConfig0, MdfFilterConfig1;
-    extern MDF_HandleTypeDef MdfHandle0, MdfHandle1;
-    MdfFilterConfig0.Gain = (int32_t)cfg.gain;
-    MdfFilterConfig1.Gain = (int32_t)cfg.gain;
-    HAL_MDF_SetGain(&MdfHandle0, (int32_t)cfg.gain);
-    HAL_MDF_SetGain(&MdfHandle1, (int32_t)cfg.gain);
-    dev.rec.format = cfg.recFormat;
+    config_apply(&cfg);
 
     /* Initialize power management state — default to dev mode (everything on) */
     dev.pwr.state = PWR_DEV_MODE;
@@ -1983,142 +1978,26 @@ static void StartBridgeTask(void *argument)
         if ((HAL_GetTick() - lastSpiPollTick) >= SPI2_POLL_MS) {
             lastSpiPollTick = HAL_GetTick();
 
-            uint8_t spi_tx[SPI2_BUF_SIZE];
-            uint8_t spi_rx[SPI2_BUF_SIZE];
-            memset(spi_tx, 0, SPI2_BUF_SIZE);
+            /* Build binary SPI frame */
+            static spi_frame_t spi_tx_frame __attribute__((aligned(4)));
+            static spi_frame_t spi_rx_frame __attribute__((aligned(4)));
 
-            uint32_t mv = batteryMv;
-            int32_t t = sht30TempC100;
-            int tSign = (t < 0) ? -1 : 1;
-            int tWhole = t / 100;
-            int tFrac = (t % 100) * tSign;
-
-            int chrg = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_0);
-            int done_pin = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_1);
-            const char *solar;
-            if (!chrg && done_pin)       solar = "Charging";
-            else if (chrg && !done_pin)  solar = "Complete";
-            else if (!chrg && !done_pin) solar = "Fault";
-            else                         solar = "Standby";
-
-            char gpsTimeStr[12] = "--:--:--";
-            if (gpsData.utc_time) {
-                snprintf(gpsTimeStr, sizeof(gpsTimeStr), "%02lu:%02lu:%02lu",
-                         (unsigned long)(gpsData.utc_time / 10000),
-                         (unsigned long)((gpsData.utc_time / 100) % 100),
-                         (unsigned long)(gpsData.utc_time % 100));
-            }
-
-            int32_t latI = (int32_t)(gpsData.latitude * 100000);
-            int32_t lonI = (int32_t)(gpsData.longitude * 100000);
-            int32_t altI = (int32_t)(gpsData.altitude * 10);
-            int32_t tMin = health.tempMinC100;
-            int32_t tMax = health.tempMaxC100;
-            int32_t svLatI = (int32_t)(cfg.surveyLat * 100000);
-
-            /* Build windows JSON array: "600,900,1800,2100" */
-            char winBuf[128] = "";
+            /* Determine solar charge state */
+            uint8_t solar_st;
             {
-                int pos = 0;
-                for (int i = 0; i < cfg.numWindows && i < 8; i++) {
-                    if (i > 0) winBuf[pos++] = ',';
-                    pos += snprintf(winBuf + pos, sizeof(winBuf) - pos,
-                                    "%u,%u", cfg.windows[i*2], cfg.windows[i*2+1]);
-                }
+                int chrg = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_0);
+                int done_pin = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_1);
+                if (!chrg && done_pin)       solar_st = SOLAR_CHARGING;
+                else if (chrg && !done_pin)  solar_st = SOLAR_COMPLETE;
+                else if (!chrg && !done_pin) solar_st = SOLAR_FAULT;
+                else                         solar_st = SOLAR_STANDBY;
             }
-            int32_t svLonI = (int32_t)(cfg.surveyLon * 100000);
 
-            snprintf((char *)spi_tx, SPI2_BUF_SIZE,
-                "{\"bat\":%lu,\"temp\":%d.%02d,\"hum\":%u.%u,"
-                "\"rec\":%d,\"sd\":%d,\"gps\":%d,\"sat\":%d,"
-                "\"station\":\"%s\",\"fw\":\"%s\","
-                "\"lat5\":%ld,\"lon5\":%ld,\"alt1\":%ld,"
-                "\"gpsTime\":\"%s\",\"pps\":%d,\"ppsCnt\":%lu,"
-                "\"sdFree\":%lu,\"sdTotal\":%lu,"
-                "\"solar\":\"%s\","
-                "\"recBytes\":%lu,\"ovf\":%lu,\"clip\":%lu,"
-                "\"svLat5\":%ld,\"svLon5\":%ld,\"svCnt\":%lu,"
-                "\"hFiles\":%lu,\"hSecs\":%lu,\"hDet\":%lu,"
-                "\"hBatMin\":%lu,\"hBatMax\":%lu,"
-                "\"hTmpMin\":%ld,\"hTmpMax\":%ld,"
-                "\"hBoots\":%lu,\"hSdErr\":%lu,\"hGpsLoss\":%lu,"
-                "\"mdl\":%d,\"mdlSz\":%lu,\"mdlCls\":%d,"
-                "\"detWin\":%lu,\"detHit\":%lu,"
-                "\"detSp\":\"%s\",\"detPct\":%d,\"detTm\":\"%s\","
-                "\"mission\":%d,\"conf\":%d,\"winStep\":%d,"
-                "\"sunEn\":%d,\"sunB\":%u,\"sunA\":%u,"
-                "\"setEn\":%d,\"setB\":%u,\"setA\":%u,"
-                "\"nWin\":%d,\"wins\":[%s],"
-                "\"gain\":%d,\"fmt\":%d,\"hpf\":%u,\"lpf\":%u,\"chunk\":%d,"
-                "\"trigEn\":%d,\"trigDb\":%d,\"trigPre\":%d,\"trigPost\":%d,"
-                "\"lowBat\":%d,\"autoStop\":%d,"
-                "\"pwrState\":%d,\"devMode\":%d,\"schedActive\":%d,\"rtcSync\":%d}",
-                (unsigned long)mv,
-                tWhole, tFrac,
-                (unsigned)(sht30HumRH100 / 100),
-                (unsigned)(sht30HumRH100 / 10 % 10),
-                (int)isRecording,
-                (int)sdMounted,
-                (int)gpsData.valid,
-                (int)gpsData.satellites,
-                cfg.stationId, FW_VERSION,
-                (long)latI, (long)lonI, (long)altI,
-                gpsTimeStr,
-                (int)ppsSynced, (unsigned long)ppsCount,
-                (unsigned long)dev.rec.sdFreeKb,
-                (unsigned long)dev.rec.sdTotalKb,
-                solar,
-                (unsigned long)totalDataBytes,
-                (unsigned long)ringOverruns,
-                (unsigned long)limiterClipCount,
-                (long)svLatI, (long)svLonI,
-                (unsigned long)cfg.surveyCount,
-                (unsigned long)health.filesWritten,
-                (unsigned long)health.recordingSecs,
-                (unsigned long)health.detections,
-                (unsigned long)health.battMinMv,
-                (unsigned long)health.battMaxMv,
-                (long)tMin, (long)tMax,
-                (unsigned long)health.bootCount,
-                (unsigned long)health.sdErrors,
-                (unsigned long)health.gpsFixLosses,
-                (int)modelLoaded,
-                (unsigned long)modelBufSize,
-                (int)modelNumLabels,
-                (unsigned long)detWindowsProcessed,
-                (unsigned long)detHits,
-                detLastSpecies,
-                (int)detLastConf,
-                detLastTime,
-                (int)cfg.missionMode,
-                (int)cfg.detConfThresh,
-                (int)cfg.detWindowStep,
-                (int)cfg.sunriseEnabled,
-                (unsigned)cfg.sunriseBefore,
-                (unsigned)cfg.sunriseAfter,
-                (int)cfg.sunsetEnabled,
-                (unsigned)cfg.sunsetBefore,
-                (unsigned)cfg.sunsetAfter,
-                (int)cfg.numWindows,
-                winBuf,
-                (int)cfg.gain,
-                (int)cfg.recFormat,
-                (unsigned)cfg.bpfLow,
-                (unsigned)cfg.bpfHigh,
-                (int)cfg.chunkMinutes,
-                (int)cfg.trigEnabled,
-                (int)cfg.trigDb,
-                (int)cfg.trigPre,
-                (int)cfg.trigPost,
-                (int)cfg.lowBatPct,
-                (int)cfg.autoStop,
-                (int)dev.pwr.state,
-                (int)dev.pwr.devMode,
-                (int)dev.pwr.scheduleActive,
-                (int)dev.pwr.rtcSynced);
+            spi_frame_build(&spi_tx_frame, &cfg, &dev, &health, solar_st, 0);
 
             HAL_GPIO_WritePin(SPI2_CS_PORT, SPI2_CS_PIN, GPIO_PIN_RESET);
-            HAL_StatusTypeDef spiResult = HAL_SPI_TransmitReceive(&hspi2, spi_tx, spi_rx, SPI2_BUF_SIZE, 100);
+            HAL_StatusTypeDef spiResult = HAL_SPI_TransmitReceive(&hspi2,
+                (uint8_t *)&spi_tx_frame, (uint8_t *)&spi_rx_frame, SPI2_BUF_SIZE, 100);
             HAL_GPIO_WritePin(SPI2_CS_PORT, SPI2_CS_PIN, GPIO_PIN_SET);
 
             /* Track ESP32 comms status */
@@ -2128,31 +2007,37 @@ static void StartBridgeTask(void *argument)
                 dev.comms.lastSpiTick = HAL_GetTick();
             }
 
-            /* Check for commands/status from ESP32 (browser → WebSocket → SPI) */
-            if (spi_rx[0] == '{') {
-                spi_rx[SPI2_BUF_SIZE - 1] = '\0';
-                char *rx = (char *)spi_rx;
+            /* Process received frame — binary protocol */
+            if (spi_rx_frame.header.magic == SPI_FRAME_MAGIC) {
+                uint8_t cmd = SPI_CMD_NONE;
+                uint8_t cmd_payload[56];
+                uint32_t cmd_seq = 0;
 
-                /* Parse ESP32 firmware version if present */
-                {
-                    char *fwp = strstr(rx, "\"espFw\":\"");
-                    if (fwp) {
-                        fwp += 9;
-                        char *end = strchr(fwp, '"');
-                        if (end) {
-                            int vlen = end - fwp;
-                            if (vlen > 15) vlen = 15;
-                            memcpy(dev.comms.espFwVersion, fwp, vlen);
-                            dev.comms.espFwVersion[vlen] = '\0';
-                        }
-                    }
+                int adopted = spi_frame_process_rx(&spi_rx_frame, &cfg,
+                                                   &cmd, cmd_payload, &cmd_seq);
+                if (adopted) {
+                    config_apply(&cfg);
+                    configSave();
+                    printf("SPI: config adopted (seq=%lu)\r\n", (unsigned long)cfg.cfg_seq);
                 }
 
-                if (strstr(rx, "rec_toggle")) {
+                /* Extract ESP32 firmware version from CMD_ESP_VERSION */
+                if (cmd == SPI_CMD_ESP_VERSION) {
+                    int vlen = strnlen((char *)cmd_payload, sizeof(cmd_payload));
+                    if (vlen > 15) vlen = 15;
+                    memcpy(dev.comms.espFwVersion, cmd_payload, vlen);
+                    dev.comms.espFwVersion[vlen] = '\0';
+                }
+
+                /* Dispatch command */
+                switch (cmd) {
+                case SPI_CMD_REC_TOGGLE: {
                     uint8_t c = isRecording ? CMD_STOP_REC : CMD_START_REC;
                     osMessageQueuePut(audioCmdQueueHandle, &c, 0, 0);
                     printf("SPI cmd: rec_toggle\r\n");
-                } else if (strstr(rx, "sd_mount")) {
+                    break;
+                }
+                case SPI_CMD_SD_MOUNT:
                     if (!sdMounted) {
                         extern FATFS USERFatFS;
                         extern char USERPath[];
@@ -2162,7 +2047,8 @@ static void StartBridgeTask(void *argument)
                         osMutexRelease(fileMtxHandle);
                     }
                     printf("SPI cmd: sd_mount\r\n");
-                } else if (strstr(rx, "sd_eject")) {
+                    break;
+                case SPI_CMD_SD_EJECT:
                     if (sdMounted && !isRecording) {
                         extern char USERPath[];
                         osMutexAcquire(fileMtxHandle, osWaitForever);
@@ -2172,7 +2058,8 @@ static void StartBridgeTask(void *argument)
                         osMutexRelease(fileMtxHandle);
                     }
                     printf("SPI cmd: sd_eject\r\n");
-                } else if (strstr(rx, "sd_format")) {
+                    break;
+                case SPI_CMD_SD_FORMAT:
                     if (!isRecording) {
                         osMutexAcquire(fileMtxHandle, osWaitForever);
                         extern int formatSD(void);
@@ -2180,7 +2067,8 @@ static void StartBridgeTask(void *argument)
                         osMutexRelease(fileMtxHandle);
                     }
                     printf("SPI cmd: sd_format\r\n");
-                } else if (strstr(rx, "survey_start")) {
+                    break;
+                case SPI_CMD_SURVEY_START:
                     if (!surveyActive && gpsData.fix >= 1) {
                         cfg.surveyLat = 0.0f;
                         cfg.surveyLon = 0.0f;
@@ -2190,7 +2078,8 @@ static void StartBridgeTask(void *argument)
                         surveyStartTick = HAL_GetTick();
                     }
                     printf("SPI cmd: survey_start\r\n");
-                } else if (strstr(rx, "survey_clear")) {
+                    break;
+                case SPI_CMD_SURVEY_CLEAR:
                     surveyActive = 0;
                     cfg.surveyLat = 0.0f;
                     cfg.surveyLon = 0.0f;
@@ -2198,109 +2087,61 @@ static void StartBridgeTask(void *argument)
                     cfg.surveyCount = 0;
                     configSave();
                     printf("SPI cmd: survey_clear\r\n");
-                } else if (strstr(rx, "set_detect")) {
-                    /* Parse mission, conf, winStep from JSON */
-                    char *p;
-                    if ((p = strstr(rx, "\"mission\":")) != NULL)
-                        cfg.missionMode = (uint8_t)atoi(p + 10);
-                    if ((p = strstr(rx, "\"conf\":")) != NULL)
-                        cfg.detConfThresh = (uint8_t)atoi(p + 7);
-                    if ((p = strstr(rx, "\"winStep\":")) != NULL)
-                        cfg.detWindowStep = (uint8_t)atoi(p + 10);
-                    configSave();
-                    printf("SPI cmd: set_detect mission=%d conf=%d step=%d\r\n",
-                           cfg.missionMode, cfg.detConfThresh, cfg.detWindowStep);
-                } else if (strstr(rx, "model_reload")) {
-                    /* TODO: trigger model reload from SD */
+                    break;
+                case SPI_CMD_SET_DETECT:
+                    /* Config fields already adopted via config sync.
+                     * If cmd sent without config change, no-op. */
+                    printf("SPI cmd: set_detect\r\n");
+                    break;
+                case SPI_CMD_MODEL_RELOAD:
                     printf("SPI cmd: model_reload\r\n");
-                } else if (strstr(rx, "set_schedule")) {
-                    char *p;
-                    if ((p = strstr(rx, "\"sunEn\":")) != NULL)
-                        cfg.sunriseEnabled = (uint8_t)atoi(p + 8);
-                    if ((p = strstr(rx, "\"sunB\":")) != NULL)
-                        cfg.sunriseBefore = (uint16_t)atoi(p + 7);
-                    if ((p = strstr(rx, "\"sunA\":")) != NULL)
-                        cfg.sunriseAfter = (uint16_t)atoi(p + 7);
-                    if ((p = strstr(rx, "\"setEn\":")) != NULL)
-                        cfg.sunsetEnabled = (uint8_t)atoi(p + 8);
-                    if ((p = strstr(rx, "\"setB\":")) != NULL)
-                        cfg.sunsetBefore = (uint16_t)atoi(p + 7);
-                    if ((p = strstr(rx, "\"setA\":")) != NULL)
-                        cfg.sunsetAfter = (uint16_t)atoi(p + 7);
-                    if ((p = strstr(rx, "\"nWin\":")) != NULL)
-                        cfg.numWindows = (uint8_t)atoi(p + 7);
-                    /* Parse wins array: [600,900,1800,2100] */
-                    if ((p = strstr(rx, "\"wins\":[")) != NULL) {
-                        p += 8;
-                        for (int i = 0; i < cfg.numWindows * 2 && i < 16; i++) {
-                            cfg.windows[i] = (uint16_t)atoi(p);
-                            char *next = strchr(p, ',');
-                            if (next) p = next + 1; else break;
-                        }
-                    }
-                    configSave();
-                    printf("SPI cmd: set_schedule sun=%d/%u/%u set=%d/%u/%u wins=%d\r\n",
-                           cfg.sunriseEnabled, cfg.sunriseBefore, cfg.sunriseAfter,
-                           cfg.sunsetEnabled, cfg.sunsetBefore, cfg.sunsetAfter,
-                           cfg.numWindows);
-                } else if (strstr(rx, "set_config")) {
-                    char *p;
-                    /* Station ID */
-                    if ((p = strstr(rx, "\"stId\":\"")) != NULL) {
-                        p += 8;
-                        char *end = strchr(p, '"');
-                        if (end) {
-                            int len = end - p;
-                            if (len > 15) len = 15;
-                            memcpy(cfg.stationId, p, len);
-                            cfg.stationId[len] = '\0';
-                        }
-                    }
-                    if ((p = strstr(rx, "\"gain\":")) != NULL)
-                        cfg.gain = (uint8_t)atoi(p + 7);
-                    if ((p = strstr(rx, "\"fmt\":")) != NULL)
-                        cfg.recFormat = (uint8_t)atoi(p + 6);
-                    if ((p = strstr(rx, "\"hpf\":")) != NULL)
-                        cfg.bpfLow = (uint16_t)atoi(p + 6);
-                    if ((p = strstr(rx, "\"lpf\":")) != NULL)
-                        cfg.bpfHigh = (uint16_t)atoi(p + 6);
-                    if ((p = strstr(rx, "\"chunk\":")) != NULL)
-                        cfg.chunkMinutes = (uint8_t)atoi(p + 8);
-                    if ((p = strstr(rx, "\"trigEn\":")) != NULL)
-                        cfg.trigEnabled = (uint8_t)atoi(p + 9);
-                    if ((p = strstr(rx, "\"trigDb\":")) != NULL)
-                        cfg.trigDb = (int8_t)atoi(p + 9);
-                    if ((p = strstr(rx, "\"trigPre\":")) != NULL)
-                        cfg.trigPre = (uint8_t)atoi(p + 10);
-                    if ((p = strstr(rx, "\"trigPost\":")) != NULL)
-                        cfg.trigPost = (uint8_t)atoi(p + 11);
-                    if ((p = strstr(rx, "\"lowBat\":")) != NULL)
-                        cfg.lowBatPct = (uint8_t)atoi(p + 9);
-                    if ((p = strstr(rx, "\"autoStop\":")) != NULL)
-                        cfg.autoStop = (uint8_t)atoi(p + 11);
-                    dev.rec.format = cfg.recFormat;
-                    configSave();
-                    printf("SPI cmd: set_config station=%s gain=%d fmt=%d\r\n",
-                           cfg.stationId, cfg.gain, cfg.recFormat);
-                } else if (strstr(rx, "schedule_on")) {
+                    break;
+                case SPI_CMD_SCHEDULE_ON:
                     if (dev.pwr.rtcSynced && schedule_has_windows(&cfg)) {
                         dev.pwr.scheduleActive = 1;
                         dev.pwr.devMode = 0;
                         dev.pwr.state = PWR_SCHEDULED_REC;
                         printf("SPI cmd: schedule_on\r\n");
                     }
-                } else if (strstr(rx, "schedule_off")) {
+                    break;
+                case SPI_CMD_SCHEDULE_OFF:
                     dev.pwr.scheduleActive = 0;
                     dev.pwr.devMode = 1;
                     dev.pwr.state = PWR_DEV_MODE;
                     printf("SPI cmd: schedule_off\r\n");
-                } else if (strstr(rx, "dev_mode")) {
+                    break;
+                case SPI_CMD_DEV_MODE:
                     dev.pwr.devMode = !dev.pwr.devMode;
                     if (dev.pwr.devMode) {
                         dev.pwr.scheduleActive = 0;
                         dev.pwr.state = PWR_DEV_MODE;
                     }
                     printf("SPI cmd: dev_mode=%d\r\n", dev.pwr.devMode);
+                    break;
+                default:
+                    break;
+                }
+            }
+            /* Backward compat: fall back to JSON if ESP32 sends old format */
+            else if (((uint8_t *)&spi_rx_frame)[0] == '{') {
+                char *rx = (char *)&spi_rx_frame;
+                rx[SPI2_BUF_SIZE - 1] = '\0';
+                /* Parse ESP32 firmware version */
+                char *fwp = strstr(rx, "\"espFw\":\"");
+                if (fwp) {
+                    fwp += 9;
+                    char *end = strchr(fwp, '"');
+                    if (end) {
+                        int vlen = end - fwp;
+                        if (vlen > 15) vlen = 15;
+                        memcpy(dev.comms.espFwVersion, fwp, vlen);
+                        dev.comms.espFwVersion[vlen] = '\0';
+                    }
+                }
+                /* Parse legacy JSON commands */
+                if (strstr(rx, "rec_toggle")) {
+                    uint8_t c = isRecording ? CMD_STOP_REC : CMD_START_REC;
+                    osMessageQueuePut(audioCmdQueueHandle, &c, 0, 0);
                 }
             }
         }
@@ -2352,6 +2193,7 @@ static void configSetDefaults(device_config_t *c)
     c->detConfThresh = 50;   /* 50% default threshold */
     c->detWindowStep = 3;    /* 3 seconds */
     c->chunkMinutes = 30;    /* 30-minute file chunks */
+    c->cfg_seq = 1;          /* start at 1 so ESP32 (seq=0) adopts on first sync */
     memset(c->_pad, 0xFF, sizeof(c->_pad));
     c->crc32 = 0;
 }
@@ -2429,6 +2271,7 @@ static void configLoad(void)
 
 int configSave(void)
 {
+    cfg.cfg_seq++;  /* bump sequence so ESP32 adopts on next SPI exchange */
     cfg.crc32 = configComputeCrc(&cfg);
 
     /* ICACHE must be disabled during flash erase/program on STM32U5 */

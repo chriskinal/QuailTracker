@@ -38,6 +38,7 @@
 #include "lwip/netdb.h"
 #include "ble_beacon.h"
 #include "stm32_flash.h"
+#include "spi_protocol.h"
 
 #define TAG "BRIDGE"
 #define ESP_FW_VERSION "0.2.0"
@@ -79,19 +80,55 @@ static volatile bool spi_task_stop = false;
 WORD_ALIGNED_ATTR uint8_t spi_rxBuf[TRANSFER_SIZE];
 WORD_ALIGNED_ATTR uint8_t spi_txBuf[TRANSFER_SIZE];
 
-/* Last received SPI data (for WebSocket push) */
-static char last_spi_msg[TRANSFER_SIZE + 1] = "(none)";
+/* Last received SPI data — binary state + config cache */
 static uint32_t spi_transaction_count = 0;
 static bool new_spi_data = false;
 
-/* Last known battery/state from SPI JSON (for BLE advertising) */
-static uint16_t last_battery_mv = 0;
-static uint8_t  last_recording = 0;
-static uint8_t  last_pwr_state = 0;
+/* Local binary caches (populated from SPI RX frames) */
+static device_config_t local_cfg;
+static spi_state_t     local_state;
+static uint32_t        local_cfg_seq = 0;
+static bool            stm32_synced = false;
+static bool            first_boot = true;
 
-/* Pending command from browser → STM32 (sent in next SPI tx) */
-static char pending_cmd[512] = "";
+/* Command queue: browser → SPI (ring buffer, 8 deep) */
+#define CMD_QUEUE_SIZE 8
+static qt_spi_cmd_t cmd_queue[CMD_QUEUE_SIZE];
+static volatile uint8_t cmd_head = 0, cmd_tail = 0;
 static portMUX_TYPE cmd_mux = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t cmd_seq_counter = 0;
+
+static void cmd_enqueue(uint8_t cmd_type, const uint8_t *payload, uint8_t payload_len)
+{
+    portENTER_CRITICAL(&cmd_mux);
+    uint8_t next = (cmd_head + 1) % CMD_QUEUE_SIZE;
+    if (next != cmd_tail) {  /* not full */
+        memset(&cmd_queue[cmd_head], 0, sizeof(qt_spi_cmd_t));
+        cmd_queue[cmd_head].cmd = cmd_type;
+        cmd_queue[cmd_head].seq = ++cmd_seq_counter;
+        if (payload && payload_len > 0) {
+            if (payload_len > 56) payload_len = 56;
+            memcpy(cmd_queue[cmd_head].payload, payload, payload_len);
+        }
+        cmd_head = next;
+    }
+    portEXIT_CRITICAL(&cmd_mux);
+}
+
+static bool cmd_dequeue(qt_spi_cmd_t *out)
+{
+    portENTER_CRITICAL(&cmd_mux);
+    if (cmd_tail == cmd_head) {
+        portEXIT_CRITICAL(&cmd_mux);
+        return false;
+    }
+    memcpy(out, &cmd_queue[cmd_tail], sizeof(qt_spi_cmd_t));
+    cmd_tail = (cmd_tail + 1) % CMD_QUEUE_SIZE;
+    portEXIT_CRITICAL(&cmd_mux);
+    return true;
+}
+
+/* Legacy JSON helpers — kept for parsing config from browser */
 
 /* ── WiFi AP Config ────────────────────────────────────────────── */
 
@@ -176,6 +213,24 @@ static esp_err_t root_handler(httpd_req_t *req)
 static int json_get_int(const char *json, const char *key, int def);
 void save_duty_cycle(void);
 
+/* State API: returns current config + state as JSON for initial page load */
+static esp_err_t api_state_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    /* Build a compact JSON with key fields for initial UI population */
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+        "{\"synced\":%d,\"station\":\"%s\",\"gain\":%d,\"fmt\":%d,"
+        "\"bat\":%u,\"rec\":%d,\"pwrState\":%d}",
+        (int)stm32_synced, local_cfg.stationId,
+        (int)local_cfg.gain, (int)local_cfg.recFormat,
+        (unsigned)local_state.env_battMv,
+        (int)local_state.rec_active,
+        (int)local_state.pwr_state);
+    httpd_resp_sendstr(req, buf);
+    return ESP_OK;
+}
+
 /* ESP32 config: GET returns JSON, POST sets values */
 static esp_err_t esp_config_get_handler(httpd_req_t *req)
 {
@@ -217,6 +272,111 @@ static esp_err_t catchall_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* Map browser JSON command string to SPI command enum + config update */
+static void ws_process_command(const char *json)
+{
+    ESP_LOGI(TAG, "WS cmd: %s", json);
+
+    /* Action commands → enqueue as SPI commands */
+    if (strstr(json, "rec_toggle"))     { cmd_enqueue(SPI_CMD_REC_TOGGLE, NULL, 0); return; }
+    if (strstr(json, "sd_mount"))       { cmd_enqueue(SPI_CMD_SD_MOUNT, NULL, 0); return; }
+    if (strstr(json, "sd_eject"))       { cmd_enqueue(SPI_CMD_SD_EJECT, NULL, 0); return; }
+    if (strstr(json, "sd_format"))      { cmd_enqueue(SPI_CMD_SD_FORMAT, NULL, 0); return; }
+    if (strstr(json, "survey_start"))   { cmd_enqueue(SPI_CMD_SURVEY_START, NULL, 0); return; }
+    if (strstr(json, "survey_clear"))   { cmd_enqueue(SPI_CMD_SURVEY_CLEAR, NULL, 0); return; }
+    if (strstr(json, "schedule_on"))    { cmd_enqueue(SPI_CMD_SCHEDULE_ON, NULL, 0); return; }
+    if (strstr(json, "schedule_off"))   { cmd_enqueue(SPI_CMD_SCHEDULE_OFF, NULL, 0); return; }
+    if (strstr(json, "dev_mode"))       { cmd_enqueue(SPI_CMD_DEV_MODE, NULL, 0); return; }
+    if (strstr(json, "model_reload"))   { cmd_enqueue(SPI_CMD_MODEL_RELOAD, NULL, 0); return; }
+
+    /* Config changes → update local_cfg + bump seq so STM32 adopts */
+    if (strstr(json, "set_config")) {
+        char *p;
+        if ((p = strstr(json, "\"stId\":\"")) != NULL) {
+            p += 8;
+            const char *end = strchr(p, '"');
+            if (end) {
+                int len = end - p;
+                if (len > 15) len = 15;
+                memcpy(local_cfg.stationId, p, len);
+                local_cfg.stationId[len] = '\0';
+            }
+        }
+        if ((p = strstr(json, "\"gain\":")) != NULL)
+            local_cfg.gain = (uint8_t)atoi(p + 7);
+        if ((p = strstr(json, "\"fmt\":")) != NULL)
+            local_cfg.recFormat = (uint8_t)atoi(p + 6);
+        if ((p = strstr(json, "\"hpf\":")) != NULL)
+            local_cfg.bpfLow = (uint16_t)atoi(p + 6);
+        if ((p = strstr(json, "\"lpf\":")) != NULL)
+            local_cfg.bpfHigh = (uint16_t)atoi(p + 6);
+        if ((p = strstr(json, "\"chunk\":")) != NULL)
+            local_cfg.chunkMinutes = (uint8_t)atoi(p + 8);
+        if ((p = strstr(json, "\"trigEn\":")) != NULL)
+            local_cfg.trigEnabled = (uint8_t)atoi(p + 9);
+        if ((p = strstr(json, "\"trigDb\":")) != NULL)
+            local_cfg.trigDb = (int8_t)atoi(p + 9);
+        if ((p = strstr(json, "\"trigPre\":")) != NULL)
+            local_cfg.trigPre = (uint8_t)atoi(p + 10);
+        if ((p = strstr(json, "\"trigPost\":")) != NULL)
+            local_cfg.trigPost = (uint8_t)atoi(p + 11);
+        if ((p = strstr(json, "\"lowBat\":")) != NULL)
+            local_cfg.lowBatPct = (uint8_t)atoi(p + 9);
+        if ((p = strstr(json, "\"autoStop\":")) != NULL)
+            local_cfg.autoStop = (uint8_t)atoi(p + 11);
+
+        local_cfg_seq++;
+        local_cfg.cfg_seq = local_cfg_seq;
+        ESP_LOGI(TAG, "Config updated (seq=%lu)", (unsigned long)local_cfg_seq);
+        return;
+    }
+
+    if (strstr(json, "set_detect")) {
+        char *p;
+        if ((p = strstr(json, "\"mission\":")) != NULL)
+            local_cfg.missionMode = (uint8_t)atoi(p + 10);
+        if ((p = strstr(json, "\"conf\":")) != NULL)
+            local_cfg.detConfThresh = (uint8_t)atoi(p + 7);
+        if ((p = strstr(json, "\"winStep\":")) != NULL)
+            local_cfg.detWindowStep = (uint8_t)atoi(p + 10);
+
+        local_cfg_seq++;
+        local_cfg.cfg_seq = local_cfg_seq;
+        cmd_enqueue(SPI_CMD_SET_DETECT, NULL, 0);
+        return;
+    }
+
+    if (strstr(json, "set_schedule")) {
+        char *p;
+        if ((p = strstr(json, "\"sunEn\":")) != NULL)
+            local_cfg.sunriseEnabled = (uint8_t)atoi(p + 8);
+        if ((p = strstr(json, "\"sunB\":")) != NULL)
+            local_cfg.sunriseBefore = (uint16_t)atoi(p + 7);
+        if ((p = strstr(json, "\"sunA\":")) != NULL)
+            local_cfg.sunriseAfter = (uint16_t)atoi(p + 7);
+        if ((p = strstr(json, "\"setEn\":")) != NULL)
+            local_cfg.sunsetEnabled = (uint8_t)atoi(p + 8);
+        if ((p = strstr(json, "\"setB\":")) != NULL)
+            local_cfg.sunsetBefore = (uint16_t)atoi(p + 7);
+        if ((p = strstr(json, "\"setA\":")) != NULL)
+            local_cfg.sunsetAfter = (uint16_t)atoi(p + 7);
+        if ((p = strstr(json, "\"nWin\":")) != NULL)
+            local_cfg.numWindows = (uint8_t)atoi(p + 7);
+        if ((p = strstr(json, "\"wins\":[")) != NULL) {
+            p += 8;
+            for (int i = 0; i < local_cfg.numWindows * 2 && i < 16; i++) {
+                local_cfg.windows[i] = (uint16_t)atoi(p);
+                char *next = strchr(p, ',');
+                if (next) p = next + 1; else break;
+            }
+        }
+
+        local_cfg_seq++;
+        local_cfg.cfg_seq = local_cfg_seq;
+        return;
+    }
+}
+
 static esp_err_t ws_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
@@ -227,22 +387,34 @@ static esp_err_t ws_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
-    /* Receive command from browser */
+    /* Receive command from browser — two-step: get length, then payload. */
     httpd_ws_frame_t ws_pkt = {0};
     ws_pkt.type = HTTPD_WS_TYPE_TEXT;
-    uint8_t buf[512];
-    ws_pkt.payload = buf;
-    esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, sizeof(buf));
-    if (ret == ESP_OK && ws_pkt.len > 0 && ws_pkt.len < sizeof(buf)) {
-        buf[ws_pkt.len] = '\0';
-        portENTER_CRITICAL(&cmd_mux);
-        strncpy(pending_cmd, (char *)buf, sizeof(pending_cmd) - 1);
-        pending_cmd[sizeof(pending_cmd) - 1] = '\0';
-        portEXIT_CRITICAL(&cmd_mux);
-        ESP_LOGI(TAG, "WS cmd: %s", pending_cmd);
-    } else if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "WS recv error: %s", esp_err_to_name(ret));
+
+    esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "WS recv header error: %s", esp_err_to_name(ret));
+        return ESP_OK;
     }
+    if (ws_pkt.len == 0 || ws_pkt.len >= 512) {
+        ESP_LOGW(TAG, "WS frame len=%d (skip)", (int)ws_pkt.len);
+        return ESP_OK;
+    }
+
+    uint8_t *buf = calloc(1, ws_pkt.len + 1);
+    if (!buf) {
+        ESP_LOGE(TAG, "WS malloc fail (%d bytes)", (int)ws_pkt.len);
+        return ESP_OK;
+    }
+    ws_pkt.payload = buf;
+    ret = httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
+    if (ret == ESP_OK && ws_pkt.len > 0) {
+        buf[ws_pkt.len] = '\0';
+        ws_process_command((char *)buf);
+    } else if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "WS recv payload error: %s", esp_err_to_name(ret));
+    }
+    free(buf);
     return ESP_OK;
 }
 
@@ -588,6 +760,13 @@ static httpd_handle_t start_webserver(void)
         };
         httpd_register_uri_handler(server, &esp_cfg_post);
 
+        httpd_uri_t api_state = {
+            .uri = "/api/state",
+            .method = HTTP_GET,
+            .handler = api_state_handler,
+        };
+        httpd_register_uri_handler(server, &api_state);
+
         /* Register captive portal probe URLs — return 204 so phones
          * don't show portal popup. Any URL typed by user gets resolved
          * to 192.168.9.1 by our DNS, hitting the root "/" handler. */
@@ -875,6 +1054,10 @@ static bool json_get_str(const char *json, const char *key, char *buf, int bufle
 
 static void spi_task(void *arg)
 {
+    /* Send ESP_VERSION on first exchange so STM32 knows our firmware */
+    cmd_enqueue(SPI_CMD_ESP_VERSION, (const uint8_t *)ESP_FW_VERSION,
+                strlen(ESP_FW_VERSION));
+
     while (1) {
         if (spi_task_stop) {
             ESP_LOGI(TAG, "SPI task stopping");
@@ -887,16 +1070,35 @@ static void spi_task(void *arg)
             continue;
         }
 
-        memset(spi_txBuf, 0, TRANSFER_SIZE);
-        portENTER_CRITICAL(&cmd_mux);
-        if (pending_cmd[0]) {
-            strncpy((char *)spi_txBuf, pending_cmd, TRANSFER_SIZE - 1);
-            pending_cmd[0] = '\0';
-        } else {
-            snprintf((char *)spi_txBuf, TRANSFER_SIZE,
-                     "{\"espFw\":\"%s\"}", ESP_FW_VERSION);
+        /* Build TX frame */
+        spi_frame_t *tx = (spi_frame_t *)spi_txBuf;
+        memset(tx, 0, TRANSFER_SIZE);
+
+        tx->header.magic = SPI_FRAME_MAGIC;
+        tx->header.frame_version = SPI_FRAME_VERSION;
+        tx->header.cfg_seq = local_cfg_seq;
+
+        uint16_t flags = 0;
+        if (first_boot) {
+            flags |= SPI_FLAG_BOOT;
+            first_boot = false;
         }
-        portEXIT_CRITICAL(&cmd_mux);
+        if (local_cfg_seq > 0)
+            flags |= SPI_FLAG_CONFIG_DIRTY;
+
+        /* Copy local config into frame */
+        memcpy(&tx->config, &local_cfg, sizeof(device_config_t));
+
+        /* Dequeue one command */
+        qt_spi_cmd_t cmd;
+        if (cmd_dequeue(&cmd)) {
+            memcpy(&tx->command, &cmd, sizeof(qt_spi_cmd_t));
+            flags |= SPI_FLAG_CMD_PENDING;
+        }
+
+        tx->header.flags = flags;
+        tx->header.crc16 = spi_frame_crc(tx);
+
         memset(spi_rxBuf, 0, TRANSFER_SIZE);
 
         spi_slave_transaction_t trans = {
@@ -906,38 +1108,45 @@ static void spi_task(void *arg)
         };
 
         esp_err_t ret = spi_slave_transmit(SPI_HOST, &trans, pdMS_TO_TICKS(1000));
-        vTaskDelay(pdMS_TO_TICKS(1));  /* yield to lower-priority tasks */
+        vTaskDelay(pdMS_TO_TICKS(1));
+
         if (ret == ESP_OK) {
             spi_transaction_count++;
 
-            int len = trans.trans_len / 8;
-            if (len > TRANSFER_SIZE) len = TRANSFER_SIZE;
-            if (len > 0 && spi_rxBuf[0] == '{') {
-                /* JSON status from STM32 — store and flag for broadcast */
-                memcpy(last_spi_msg, spi_rxBuf, len);
-                last_spi_msg[len] = '\0';
+            spi_frame_t *rx = (spi_frame_t *)spi_rxBuf;
+
+            if (rx->header.magic == SPI_FRAME_MAGIC) {
+                /* Validate CRC */
+                uint16_t expected_crc = spi_frame_crc(rx);
+                if (expected_crc != rx->header.crc16) {
+                    ESP_LOGW(TAG, "SPI CRC mismatch");
+                    continue;
+                }
+
+                /* Config sync: adopt if STM32 seq is higher */
+                if (rx->header.cfg_seq > local_cfg_seq) {
+                    memcpy(&local_cfg, &rx->config, sizeof(device_config_t));
+                    local_cfg_seq = rx->header.cfg_seq;
+                    stm32_synced = true;
+                    ESP_LOGI(TAG, "Config synced from STM32 (seq=%lu)",
+                             (unsigned long)local_cfg_seq);
+                }
+
+                /* Cache state for web UI */
+                if (rx->header.flags & SPI_FLAG_STATE_VALID) {
+                    memcpy(&local_state, &rx->state, sizeof(spi_state_t));
+                    new_spi_data = true;
+                }
+
+                /* Update BLE advertising from state */
+                update_device_name(local_cfg.stationId);
+            }
+            /* Backward compat: legacy JSON from old STM32 firmware */
+            else if (spi_rxBuf[0] == '{') {
+                /* Minimal legacy handling — just extract battery/state for BLE */
+                char *msg = (char *)spi_rxBuf;
+                msg[TRANSFER_SIZE - 1] = '\0';
                 new_spi_data = true;
-
-                /* Extract battery/state for BLE advertising */
-                last_battery_mv = (uint16_t)json_get_int(last_spi_msg, "bat", 0);
-                last_recording = (uint8_t)json_get_int(last_spi_msg, "rec", 0);
-                last_pwr_state = (uint8_t)json_get_int(last_spi_msg, "pwrState", 0);
-
-                /* Update device name from station ID if changed */
-                {
-                    char station[16];
-                    if (json_get_str(last_spi_msg, "station", station, sizeof(station))
-                        && station[0]) {
-                        update_device_name(station);
-                    }
-                }
-
-                /* Track STM32 sleep state for wake functionality */
-                if (json_get_int(last_spi_msg, "sleeping", -1) == 1) {
-                    stm32_sleeping = true;
-                }
-
-                /* SPI rx logging removed — runs 4x/sec, too noisy */
             }
         }
     }
@@ -945,26 +1154,152 @@ static void spi_task(void *arg)
 
 /* ── WebSocket Push Task ───────────────────────────────────────── */
 
+/* Solar state names for JSON */
+static const char *solar_names[] = { "Standby", "Charging", "Complete", "Fault" };
+
 static void ws_push_task(void *arg)
 {
+    static char json_buf[1500];
+
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(500));
 
         if (new_spi_data && ws_server) {
             new_spi_data = false;
-            /* Inject ESP32 firmware version into JSON before broadcasting.
-             * Replace trailing '}' with ',"espFw":"x.y.z"}' */
-            int len = strlen(last_spi_msg);
-            if (len > 1 && last_spi_msg[len - 1] == '}') {
-                snprintf(last_spi_msg + len - 1,
-                         sizeof(last_spi_msg) - len + 1,
-                         ",\"espFw\":\"%s\"}", ESP_FW_VERSION);
+
+            const spi_state_t *s = &local_state;
+            const device_config_t *c = &local_cfg;
+
+            /* Build GPS time string */
+            char gpsTime[12] = "--:--:--";
+            if (s->gps_utcTime) {
+                uint8_t hh = (uint8_t)(s->gps_utcTime / 10000);
+                uint8_t mm = (uint8_t)((s->gps_utcTime / 100) % 100);
+                uint8_t ss = (uint8_t)(s->gps_utcTime % 100);
+                snprintf(gpsTime, sizeof(gpsTime), "%02d:%02d:%02d",
+                         (int)hh, (int)mm, (int)ss);
             }
-            ws_broadcast(last_spi_msg);
+
+            /* Build windows array string */
+            char winBuf[128] = "";
+            {
+                int pos = 0;
+                for (int i = 0; i < c->numWindows && i < 8; i++) {
+                    if (i > 0) winBuf[pos++] = ',';
+                    pos += snprintf(winBuf + pos, sizeof(winBuf) - pos,
+                                    "%u,%u", c->windows[i*2], c->windows[i*2+1]);
+                }
+            }
+
+            /* Solar name */
+            const char *solar = (s->solar_state < 4) ? solar_names[s->solar_state] : "Unknown";
+
+            /* Temp formatting: sht30 is in 0.01°C */
+            int tWhole = s->env_tempC100 / 100;
+            int tFrac = (s->env_tempC100 % 100);
+            if (tFrac < 0) tFrac = -tFrac;
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
+            snprintf(json_buf, sizeof(json_buf),
+                "{\"bat\":%u,\"temp\":%d.%02d,\"hum\":%u.%u,"
+                "\"rec\":%d,\"sd\":%d,\"gps\":%d,\"sat\":%d,"
+                "\"station\":\"%s\",\"fw\":\"%s\",\"espFw\":\"%s\","
+                "\"lat5\":%ld,\"lon5\":%ld,\"alt1\":%ld,"
+                "\"gpsTime\":\"%s\",\"pps\":%d,\"ppsCnt\":%lu,"
+                "\"sdFree\":%lu,\"sdTotal\":%lu,"
+                "\"solar\":\"%s\","
+                "\"recBytes\":%lu,\"ovf\":%lu,\"clip\":%lu,"
+                "\"svLat5\":%ld,\"svLon5\":%ld,\"svCnt\":%lu,"
+                "\"hFiles\":%lu,\"hSecs\":%lu,\"hDet\":%lu,"
+                "\"hBatMin\":%lu,\"hBatMax\":%lu,"
+                "\"hTmpMin\":%ld,\"hTmpMax\":%ld,"
+                "\"hBoots\":%lu,\"hSdErr\":%lu,\"hGpsLoss\":%lu,"
+                "\"mdl\":%d,\"mdlSz\":%lu,\"mdlCls\":%d,"
+                "\"detWin\":%lu,\"detHit\":%lu,"
+                "\"detSp\":\"%s\",\"detPct\":%d,\"detTm\":\"%s\","
+                "\"mission\":%d,\"conf\":%d,\"winStep\":%d,"
+                "\"sunEn\":%d,\"sunB\":%u,\"sunA\":%u,"
+                "\"setEn\":%d,\"setB\":%u,\"setA\":%u,"
+                "\"nWin\":%d,\"wins\":[%s],"
+                "\"gain\":%d,\"fmt\":%d,\"hpf\":%u,\"lpf\":%u,\"chunk\":%d,"
+                "\"trigEn\":%d,\"trigDb\":%d,\"trigPre\":%d,\"trigPost\":%d,"
+                "\"lowBat\":%d,\"autoStop\":%d,"
+                "\"pwrState\":%d,\"devMode\":%d,\"schedActive\":%d,\"rtcSync\":%d,"
+                "\"synced\":%d}",
+                (unsigned)s->env_battMv,
+                tWhole, tFrac,
+                (unsigned)(s->env_humRH100 / 100),
+                (unsigned)(s->env_humRH100 / 10 % 10),
+                (int)s->rec_active,
+                (int)s->rec_sdMounted,
+                (int)s->gps_valid,
+                (int)s->gps_satellites,
+                c->stationId, s->comms_stm32FwVersion, ESP_FW_VERSION,
+                (long)s->gps_lat5, (long)s->gps_lon5, (long)s->gps_alt1,
+                gpsTime,
+                (int)s->gps_ppsSynced, (unsigned long)s->gps_ppsCount,
+                (unsigned long)s->rec_sdFreeKb,
+                (unsigned long)s->rec_sdTotalKb,
+                solar,
+                (unsigned long)s->rec_dataBytes,
+                (unsigned long)s->rec_overruns,
+                (unsigned long)s->audio_clipCount,
+                (long)s->survey_lat5, (long)s->survey_lon5,
+                (unsigned long)s->survey_count,
+                (unsigned long)s->health_filesWritten,
+                (unsigned long)s->health_recordingSecs,
+                (unsigned long)s->health_detections,
+                (unsigned long)s->health_battMinMv,
+                (unsigned long)s->health_battMaxMv,
+                (long)s->health_tempMinC100, (long)s->health_tempMaxC100,
+                (unsigned long)s->health_bootCount,
+                (unsigned long)s->health_sdErrors,
+                (unsigned long)s->health_gpsFixLosses,
+                (int)s->det_modelLoaded,
+                (unsigned long)s->det_modelBufSize,
+                (int)s->det_modelNumLabels,
+                (unsigned long)s->det_windowsProcessed,
+                (unsigned long)s->det_hits,
+                s->det_lastSpecies,
+                (int)s->det_lastConf,
+                s->det_lastTime,
+                (int)c->missionMode,
+                (int)c->detConfThresh,
+                (int)c->detWindowStep,
+                (int)c->sunriseEnabled,
+                (unsigned)c->sunriseBefore,
+                (unsigned)c->sunriseAfter,
+                (int)c->sunsetEnabled,
+                (unsigned)c->sunsetBefore,
+                (unsigned)c->sunsetAfter,
+                (int)c->numWindows,
+                winBuf,
+                (int)c->gain,
+                (int)c->recFormat,
+                (unsigned)c->bpfLow,
+                (unsigned)c->bpfHigh,
+                (int)c->chunkMinutes,
+                (int)c->trigEnabled,
+                (int)c->trigDb,
+                (int)c->trigPre,
+                (int)c->trigPost,
+                (int)c->lowBatPct,
+                (int)c->autoStop,
+                (int)s->pwr_state,
+                (int)s->pwr_devMode,
+                (int)s->pwr_schedActive,
+                (int)s->pwr_rtcSynced,
+                (int)stm32_synced);
+#pragma GCC diagnostic pop
+
+            ws_broadcast(json_buf);
         }
 
         /* Update BLE advertising data periodically */
-        ble_beacon_update_data(last_battery_mv, last_recording, last_pwr_state);
+        ble_beacon_update_data(local_state.env_battMv,
+                               local_state.rec_active,
+                               local_state.pwr_state);
     }
 }
 
@@ -1115,6 +1450,13 @@ void app_main(void)
     }
 
     load_duty_cycle();
+
+    /* Initialize binary SPI protocol state */
+    memset(&local_cfg, 0, sizeof(local_cfg));
+    memset(&local_state, 0, sizeof(local_state));
+    local_cfg_seq = 0;
+    stm32_synced = false;
+    first_boot = true;
 
     /* Initialize network interface (needed before WiFi or BLE) */
     wifi_init_netif();

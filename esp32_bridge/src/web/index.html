@@ -457,11 +457,11 @@
                     <div style="flex:1">
                         <div class="val-sm" style="color:#888">Gain</div>
                         <select id="cfgGainSel" class="sel">
-                            <option value="0">0 dB</option><option value="3">3 dB</option>
-                            <option value="6">6 dB</option><option value="9">9 dB</option>
-                            <option value="12">12 dB</option><option value="15">15 dB</option>
-                            <option value="18">18 dB</option><option value="21">21 dB</option>
-                            <option value="24">24 dB</option>
+                            <option value="0">0 dB</option><option value="1">3 dB</option>
+                            <option value="2">6 dB</option><option value="3">9 dB</option>
+                            <option value="4">12 dB</option><option value="5">15 dB</option>
+                            <option value="6">18 dB</option><option value="7">21 dB</option>
+                            <option value="8">24 dB</option>
                         </select>
                     </div>
                     <div style="flex:1">
@@ -746,7 +746,7 @@
             window._cfgLoaded = false;
             window._detCfgLoaded = false;
             window._schLoaded = false;
-            document.getElementById('cfgStatus').textContent = 'Loading...';
+            document.getElementById('cfgStatus').textContent = 'Loading from device...';
         }
 
         function doOta() {
@@ -862,6 +862,21 @@
 
         var _connectTimer = null;
         var _retries = 0;
+        var _lastMsg = 0;
+
+        /* Keepalive: detect stale WebSocket connections.
+         * If no message received in 5s (server pushes every 500ms),
+         * the connection is dead — force reconnect. */
+        setInterval(function() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                if (_lastMsg && (Date.now() - _lastMsg) > 5000) {
+                    console.log('WS stale — forcing reconnect');
+                    try { ws.onclose = null; ws.close(); } catch(e) {}
+                    ws = null;
+                    connect();
+                }
+            }
+        }, 3000);
 
         function connect() {
             /* Debounce — cancel any pending retry */
@@ -881,6 +896,7 @@
 
             ws.onopen = function() {
                 _retries = 0;
+                _lastMsg = Date.now();
                 document.getElementById('dot').className = 'dot on';
                 document.getElementById('connSt').textContent = 'Live';
                 loadEspConfig();
@@ -897,6 +913,7 @@
             };
 
             ws.onmessage = function(ev) {
+                _lastMsg = Date.now();
               try {
                 var d = JSON.parse(ev.data);
 
@@ -931,6 +948,11 @@
                     now.getHours().toString().padStart(2,'0') + ':' +
                     now.getMinutes().toString().padStart(2,'0') + ':' +
                     now.getSeconds().toString().padStart(2,'0');
+
+                /* Sync indicator */
+                if (d.synced !== undefined) {
+                    document.getElementById('connSt').textContent = d.synced ? 'Synced' : 'Connecting...';
+                }
 
                 /* Battery */
                 if (d.bat !== undefined) {

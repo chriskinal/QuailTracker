@@ -84,6 +84,10 @@ I2C_HandleTypeDef hi2c1;
 int32_t audioBuffer[AUDIO_BUF_SIZE];      /* Left channel DMA buffer */
 int32_t audioBufferR[AUDIO_BUF_SIZE];     /* Right channel DMA buffer */
 
+/* Max hardware SCALE — above this, PDM DC offset causes CIC saturation on some mics.
+ * The MDF signal chain is CIC→SCALE→HPF, so SCALE amplifies DC before HPF removes it. */
+#define MDF_HW_GAIN_MAX  8   /* 24dB — safe from DC saturation */
+
 /* Conversion buffers: 512 samples each (left and right channels) */
 int32_t pcmBuffer[AUDIO_BUF_SIZE / 2];
 int32_t pcmBufferR[AUDIO_BUF_SIZE / 2];  /* Right channel processing buffer */

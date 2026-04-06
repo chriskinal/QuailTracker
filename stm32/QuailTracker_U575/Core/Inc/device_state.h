@@ -77,7 +77,8 @@ typedef struct __attribute__((packed, aligned(16))) {
     uint8_t  detConfThresh;   /* 0-100 confidence % threshold */
     uint8_t  detWindowStep;   /* 1-3 seconds inference window step */
     uint8_t  chunkMinutes;    /* 0=no chunking, 1-240 = chunk duration in minutes */
-    uint8_t  _pad[128 - 100 - 4]; /* pad to 128 bytes: 100 pre-pad + 24 pad + 4 crc */
+    uint32_t cfg_seq;         /* config sequence number for SPI sync (higher wins) */
+    uint8_t  _pad[128 - 104 - 4]; /* pad to 128 bytes: 104 pre-pad + 20 pad + 4 crc */
     uint32_t crc32;           /* CRC-32 over bytes 0..123 */
 } device_config_t;
 
