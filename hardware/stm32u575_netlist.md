@@ -24,7 +24,7 @@ Cross-reference: `stm32u575_pinout.md` (pin assignments), `stm32u575_bom_lcsc.cs
 | **VBAT+** | Battery positive rail | CN1.1, Q1.VIN(1), Q1.CE(3), C16.+, R7.1, U7.BAT(7), C21.+, RCS.2 |
 | **SOLAR+** | Solar panel positive | CN3.1, D2.anode |
 | **SOLAR_IN** | Solar input (after blocking diode) | D2.cathode, U7.VCC(9), C20.+, C23.2, R14.1, M1.Source |
-| **3V3** | 3.3V regulated rail (always-on) | Q1.VOUT(5), C15.+, C11.+, U1 VDD pins (11, 28, 50, 75, 100), U1.VDDA(22), U1.VREF+(21), U1.VDDUSB(73), U1.VBAT(6), C1.+, C2.+, C3.+, C4.+, C5.+, C6.+, C7.+, C8.+, C9.+, C13.+, C14.+, R3.1, R4.1, U4.VIN, U5.VIN, U6.VIN, CN2.3, H2.1, SW2.1 |
+| **3V3** | 3.3V regulated rail (always-on) | Q1.VOUT(5), C15.+, C11.+, U1 VDD pins (11, 28, 50, 75, 100), U1.VDDA(22), U1.VREF+(21), U1.VDDUSB(73), U1.VBAT(6), C1.+, C2.+, C3.+, C4.+, C5.+, C6.+, C7.+, C8.+, C9.+, C13.+, C14.+, R3.1, R4.1, U4.VIN, U5.VIN, U6.VIN, CN2.3, H2.1, SW2.1, H3.1 |
 | **GND** | Ground | *(see dedicated GND table below)* |
 | **GPS_VCC** | Switched 3.3V to GPS | U4.VOUT, U2.pin8 (VCC), C17.+ |
 | **BLE_VCC** | Switched 3.3V to BLE | U5.VOUT, COMM1.VCC, C19.+ |
@@ -52,7 +52,7 @@ Place the **GND** net port label on every pin listed below.
 | MCU VSS | U1.pin10, U1.pin19 (VSSA), U1.pin20 (VREF-), U1.pin27, U1.pin49, U1.pin74, U1.pin99 |
 | LDO | Q1.VSS(2) |
 | Decoupling caps (−) | C1.−, C2.−, C3.−, C4.−, C5.−, C6.−, C7.−, C8.−, C9.−, C10.−, C11.−, C12.−, C13.−, C14.−, C15.−, C16.− |
-| Connectors | CN1.2, CN2.4, CN3.2, CARD1.VSS, COMM1.GND, H1.2, H2.2, SW1.2 |
+| Connectors | CN1.2, CN2.4, CN3.2, CARD1.VSS, COMM1.GND, H1.2, H2.2, H3.2, SW1.2 |
 | GPS module | U2.pin1 (GND), U2.pin10 (GND), U2.pin12 (GND) |
 | GPS RF | J1.GND, C17.− |
 | Load switches | U4.GND, U5.GND, U6.GND |
@@ -60,6 +60,7 @@ Place the **GND** net port label on every pin listed below.
 | Solar charger | U7.GND(2), C20.−, C21.−, C22.2, D1.anode, R15.2, R18.2 |
 | Divider low side | R8.2 |
 | BOOT0 pull-down | R6.2 |
+| Laser wake pull-down | R_LW.2 |
 | LED cathode | LED1.Cathode |
 
 > **Note:** VREF- (pin 20) ties to VSSA/GND — include it in the GND net.
@@ -254,6 +255,32 @@ Charge current: 0.1V / 0.2Ω = 500mA max (safe for 1S2P 6800mAh = 0.07C).
 | **LED_OUT** | LED drive (active high) | R9.1, U1.pin60 (PD13, GPIO) |
 | **OSC32_IN** | LSE crystal input | X1.1, U1.pin8 (PC14) |
 | **OSC32_OUT** | LSE crystal output | X1.2, U1.pin9 (PC15) |
+
+---
+
+## Signal Nets — Laser Wake Block (ESP32 GPIO0)
+
+| Net Port | Description | Connected Pins |
+|----------|-------------|----------------|
+| **LASER_WAKE** | Phototransistor signal | H3.3, R_LW.1, R_LED.1, ESPMOD1.GPIO0 |
+
+H3 (1x4 header): pin 1 = 3V3, pin 2 = GND, pin 3 = LASER_WAKE, pin 4 = LED anode.
+
+**On-board components:**
+- R_LW (10k) from LASER_WAKE to GND — pull-down, keeps GPIO0 low when no light
+- R_LED (330R) from LASER_WAKE to H3.4 — current limit for feedback LED
+
+**Off-board components (on header cable):**
+- Phototransistor (e.g., PT334-6C): collector → H3.1 (3V3), emitter → H3.3 (LASER_WAKE)
+- Feedback LED: anode → H3.4 (through R_LED), cathode → H3.2 (GND)
+
+```
+3V3 (H3.1) ── PT collector
+               PT emitter ── H3.3 (LASER_WAKE) ──┬── R_LW (10k) ── GND
+                                                  └── ESPMOD1.GPIO0
+                             R_LED (330R) ── H3.4 (LED anode)
+                                             LED cathode ── H3.2 (GND)
+```
 
 ---
 
