@@ -560,11 +560,17 @@
 
             <!-- ESP32 Settings -->
             <div class="card" style="margin-top:12px">
-                <div class="lbl" style="margin-bottom:6px">ESP32 WiFi Settings</div>
+                <div class="lbl" style="margin-bottom:6px">ESP32 Power Mode</div>
                 <div class="row" style="align-items:center">
                     <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
                         <input type="checkbox" id="cfgDutyCycle" onchange="saveEspConfig()">
-                        <span class="val-sm">WiFi Power Save (15s on / 45s off when idle)</span>
+                        <span class="val-sm">WiFi Duty Cycle (30s on / 60s sleep)</span>
+                    </label>
+                </div>
+                <div class="row" style="align-items:center;margin-top:4px">
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+                        <input type="checkbox" id="cfgLaserWake" onchange="saveEspConfig()">
+                        <span class="val-sm">Laser Wake (deep sleep until laser trigger)</span>
                     </label>
                 </div>
                 <div class="val-sm" style="text-align:center;margin-top:6px;color:#888" id="espCfgStatus"></div>
@@ -816,10 +822,18 @@
         function loadEspConfig() {
             fetch('/config_esp').then(function(r) { return r.json(); }).then(function(d) {
                 document.getElementById('cfgDutyCycle').checked = d.dutyCycle ? true : false;
+                document.getElementById('cfgLaserWake').checked = d.laserWake ? true : false;
             }).catch(function() {});
         }
         function saveEspConfig() {
-            var obj = { dutyCycle: document.getElementById('cfgDutyCycle').checked ? 1 : 0 };
+            var duty = document.getElementById('cfgDutyCycle').checked ? 1 : 0;
+            var laser = document.getElementById('cfgLaserWake').checked ? 1 : 0;
+            /* Mutually exclusive */
+            if (duty && laser) {
+                laser = 0;
+                document.getElementById('cfgLaserWake').checked = false;
+            }
+            var obj = { dutyCycle: duty, laserWake: laser };
             fetch('/config_esp', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},

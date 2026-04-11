@@ -60,8 +60,12 @@ static bool wifi_started = false;
  * 30s on-time allows for ESP32 boot (~3s) + phone WiFi scan + connect.
  * Disabled by default — WiFi stays on continuously. */
 static bool wifi_duty_cycle = false;
-#define WIFI_DUTY_ON_MS   30000
-#define WIFI_DUTY_SLEEP_S 60
+static bool laser_wake_enabled = false;
+#define WIFI_DUTY_ON_MS    30000
+#define WIFI_DUTY_SLEEP_S  60
+#define LASER_IDLE_SLEEP_S 30   /* seconds idle before deep sleep in laser wake mode */
+#define BOOT_GRACE_MS      180000  /* 3 min always-on after boot for WiFi setup */
+#define PIN_LASER_WAKE     0   /* GPIO0: phototransistor for laser wake */
 bool spi_initialized = false;
 static TaskHandle_t spi_task_handle = NULL;
 static volatile bool spi_task_stop = false;
@@ -252,6 +256,7 @@ static esp_err_t root_handler(httpd_req_t *req)
 
 static int json_get_int(const char *json, const char *key, int def);
 void save_duty_cycle(void);
+void save_laser_wake(void);
 
 /* State API: returns current config + state as JSON for initial page load */
 static esp_err_t api_state_handler(httpd_req_t *req)
@@ -275,7 +280,8 @@ static esp_err_t api_state_handler(httpd_req_t *req)
 static esp_err_t esp_config_get_handler(httpd_req_t *req)
 {
     char buf[64];
-    snprintf(buf, sizeof(buf), "{\"dutyCycle\":%d}", wifi_duty_cycle ? 1 : 0);
+    snprintf(buf, sizeof(buf), "{\"dutyCycle\":%d,\"laserWake\":%d}",
+             wifi_duty_cycle ? 1 : 0, laser_wake_enabled ? 1 : 0);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, buf);
     return ESP_OK;
@@ -294,6 +300,14 @@ static esp_err_t esp_config_post_handler(httpd_req_t *req)
     int val = json_get_int(buf, "dutyCycle", -1);
     if (val >= 0) {
         wifi_duty_cycle = (val != 0);
+        if (wifi_duty_cycle) laser_wake_enabled = false;  /* mutually exclusive */
+        save_duty_cycle();
+    }
+    val = json_get_int(buf, "laserWake", -1);
+    if (val >= 0) {
+        laser_wake_enabled = (val != 0);
+        if (laser_wake_enabled) wifi_duty_cycle = false;  /* mutually exclusive */
+        save_laser_wake();
         save_duty_cycle();
     }
 
@@ -1004,6 +1018,30 @@ void save_duty_cycle(void)
     ESP_LOGI(TAG, "Saved duty cycle to NVS: %s", wifi_duty_cycle ? "ON" : "OFF");
 }
 
+/* Load laser wake setting from NVS */
+static void load_laser_wake(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("bridge", NVS_READONLY, &h) != ESP_OK) return;
+    uint8_t val = 0;
+    if (nvs_get_u8(h, "laser", &val) == ESP_OK) {
+        laser_wake_enabled = (val != 0);
+        ESP_LOGI(TAG, "Loaded laser wake from NVS: %s", laser_wake_enabled ? "ON" : "OFF");
+    }
+    nvs_close(h);
+}
+
+/* Save laser wake setting to NVS */
+void save_laser_wake(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("bridge", NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u8(h, "laser", laser_wake_enabled ? 1 : 0);
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "Saved laser wake to NVS: %s", laser_wake_enabled ? "ON" : "OFF");
+}
+
 /* Update WiFi SSID and BLE name to match station ID */
 static void update_device_name(const char *name)
 {
@@ -1590,6 +1628,10 @@ static void power_mgmt_task(void *arg)
             duty_cycle_tick = xTaskGetTickCount();
         }
 
+        /* Boot grace period: stay awake for 3 min after boot so user can connect */
+        uint32_t uptime_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
+        if (uptime_ms < BOOT_GRACE_MS) continue;
+
         /* WiFi duty cycle: on 20s, then deep sleep 40s.
          * Deep sleep draws ~5µA vs 44mA with WiFi off + CPU idle.
          * On wake, ESP32 reboots — WiFi/NVS/BLE all reinitialize. */
@@ -1601,8 +1643,51 @@ static void power_mgmt_task(void *arg)
                 /* Does not return — ESP32 reboots on wake */
             }
         }
+
+        /* Laser wake: deep sleep indefinitely, wake on GPIO0 high.
+         * Stay awake while WiFi clients are connected + 30s grace period. */
+        if (laser_wake_enabled && wifi_clients == 0) {
+            uint32_t elapsed = (xTaskGetTickCount() - duty_cycle_tick) * portTICK_PERIOD_MS;
+            if (elapsed >= (LASER_IDLE_SLEEP_S * 1000)) {
+                ESP_LOGI(TAG, "Laser wake: entering deep sleep (GPIO%d wake)", PIN_LASER_WAKE);
+                esp_err_t err = esp_deep_sleep_enable_gpio_wakeup(
+                    1ULL << PIN_LASER_WAKE, ESP_GPIO_WAKEUP_GPIO_HIGH);
+                if (err != ESP_OK) {
+                    ESP_LOGE(TAG, "GPIO wake setup FAILED: %s", esp_err_to_name(err));
+                } else {
+                    vTaskDelay(pdMS_TO_TICKS(100));  /* let log flush */
+                    esp_deep_sleep_start();
+                    /* Does not return — ESP32 reboots on wake */
+                }
+            }
+        }
     }
 }
+
+/* ── Laser Wake Sensor (GPIO0 phototransistor) ─────────────────── */
+
+static void laser_sensor_init(void)
+{
+    gpio_config_t io = {
+        .pin_bit_mask = (1ULL << PIN_LASER_WAKE),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,  /* external 10K pull-down */
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io);
+    ESP_LOGI(TAG, "Laser wake sensor on GPIO%d", PIN_LASER_WAKE);
+}
+
+/* Log wake cause on boot */
+static void laser_wake_check(void)
+{
+    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+    if (cause == ESP_SLEEP_WAKEUP_GPIO) {
+        ESP_LOGI(TAG, "Woke from deep sleep via laser (GPIO%d)", PIN_LASER_WAKE);
+    }
+}
+
 
 /* ── Main ──────────────────────────────────────────────────────── */
 
@@ -1629,6 +1714,7 @@ void app_main(void)
     }
 
     load_duty_cycle();
+    load_laser_wake();
 
     /* Initialize binary SPI protocol state */
     memset(&local_cfg, 0, sizeof(local_cfg));
@@ -1651,6 +1737,8 @@ void app_main(void)
     wifi_start();
     start_webserver();
     spi_slave_init();
+    laser_sensor_init();
+    laser_wake_check();
 
     xTaskCreate(spi_task, "spi_task", 4096, NULL, 3, &spi_task_handle);
     xTaskCreate(ws_push_task, "ws_push", 4096, NULL, 4, NULL);
