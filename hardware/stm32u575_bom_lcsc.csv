@@ -68,8 +68,8 @@ CN2,JST PH 4-pin B4B-PH-K-S,TH 2.0mm pitch,C131334,1,Mic breakout connector CLK 
 H1,1x4 Male Header 2.54mm,TH,,1,SHT30 module connector (hand-solder from stock)
 H3,1x4 Male Header 2.54mm,TH,,1,Laser wake header: 3V3 GND GPIO0 LED_A (hand-solder)
 # Laser Wake — on-board resistors for off-board phototransistor + LED
-R_LW,10k 1%,0603,C25804,1,Laser wake GPIO0 pull-down (BASIC)
-R_LED,330R 1%,0603,C23138,1,Laser wake feedback LED current limit (BASIC)
+R19,10k 1%,0603,C25804,1,Laser wake GPIO0 pull-down (BASIC)
+R20,330R 1%,0603,C23138,1,Laser wake feedback LED current limit (BASIC)
 # Tactile Buttons
 SW1,Tactile switch 3x6mm SMD,SMD,C318884,1,RESET button (NRST to GND)
 SW2,Tactile switch 3x6mm SMD,SMD,C318884,1,BOOT0 button (PH3 to 3V3 for DFU entry)
@@ -83,7 +83,7 @@ SW2,Tactile switch 3x6mm SMD,SMD,C318884,1,BOOT0 button (PH3 to 3V3 for DFU entr
 # 1uF 0402 (C52923): 6 total (C13-C16, C18, C19)
 # 47nH 0402 (C97998): 1 total (L1 bias tee)
 # 22uH 5020 (C329665): 1 total (L2 solar charger)
-# 10k 0603 (C25804): 4 total (R6, R16, R17, R_LW)
+# 10k 0603 (C25804): 4 total (R6, R16, R17, R19)
 # 4.7k 0603 (C23162): 2 total (R3-R4)
 # 1M 0603 (C22935): 2 total (R7-R8)
 # 1k 0603 (C21190): 1 total (R9)

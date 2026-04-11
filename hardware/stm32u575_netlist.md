@@ -60,7 +60,7 @@ Place the **GND** net port label on every pin listed below.
 | Solar charger | U7.GND(2), C20.−, C21.−, C22.2, D1.anode, R15.2, R18.2 |
 | Divider low side | R8.2 |
 | BOOT0 pull-down | R6.2 |
-| Laser wake pull-down | R_LW.2 |
+| Laser wake pull-down | R19.2 |
 | LED cathode | LED1.Cathode |
 
 > **Note:** VREF- (pin 20) ties to VSSA/GND — include it in the GND net.
@@ -262,23 +262,23 @@ Charge current: 0.1V / 0.2Ω = 500mA max (safe for 1S2P 6800mAh = 0.07C).
 
 | Net Port | Description | Connected Pins |
 |----------|-------------|----------------|
-| **LASER_WAKE** | Phototransistor signal | H3.3, R_LW.1, R_LED.1, ESPMOD1.GPIO0 |
+| **LASER_WAKE** | Phototransistor signal | H3.3, R19.1, R20.1, ESPMOD1.GPIO0 |
 
 H3 (1x4 header): pin 1 = 3V3, pin 2 = GND, pin 3 = LASER_WAKE, pin 4 = LED anode.
 
 **On-board components:**
-- R_LW (10k) from LASER_WAKE to GND — pull-down, keeps GPIO0 low when no light
-- R_LED (330R) from LASER_WAKE to H3.4 — current limit for feedback LED
+- R19 (10k) from LASER_WAKE to GND — pull-down, keeps GPIO0 low when no light
+- R20 (330R) from LASER_WAKE to H3.4 — current limit for feedback LED
 
 **Off-board components (on header cable):**
 - Phototransistor (e.g., PT334-6C): collector → H3.1 (3V3), emitter → H3.3 (LASER_WAKE)
-- Feedback LED: anode → H3.4 (through R_LED), cathode → H3.2 (GND)
+- Feedback LED: anode → H3.4 (through R20), cathode → H3.2 (GND)
 
 ```
 3V3 (H3.1) ── PT collector
-               PT emitter ── H3.3 (LASER_WAKE) ──┬── R_LW (10k) ── GND
+               PT emitter ── H3.3 (LASER_WAKE) ──┬── R19 (10k) ── GND
                                                   └── ESPMOD1.GPIO0
-                             R_LED (330R) ── H3.4 (LED anode)
+                             R20 (330R) ── H3.4 (LED anode)
                                              LED cathode ── H3.2 (GND)
 ```
 

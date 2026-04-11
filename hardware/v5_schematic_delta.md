@@ -147,8 +147,8 @@ Visible-light phototransistor + feedback LED on a 4-pin header (H3) for flexible
 3V3 (H3.1) ─── Phototransistor collector (external, on header cable)
                 Phototransistor emitter ─── H3.3 (GPIO0)
 
-GPIO0 (H3.3) ──┬── R_LW 10K ── GND (on-board)
-                └── R_LED 330R ── LED anode (H3.4)
+GPIO0 (H3.3) ──┬── R19 10K ── GND (on-board)
+                └── R20 330R ── LED anode (H3.4)
                     LED cathode ── GND (external, on header cable)
 
 H3.2 = GND
@@ -161,12 +161,12 @@ H3.2 = GND
 | 1 | 3V3 | Phototransistor power |
 | 2 | GND | Ground |
 | 3 | GPIO0 | Sensor signal (to ESP32 GPIO0) |
-| 4 | LED_A | Feedback LED anode (through R_LED to GPIO0 net) |
+| 4 | LED_A | Feedback LED anode (through R20 to GPIO0 net) |
 
 ### Notes
 
 - Phototransistor (e.g., PT334-6C) and feedback LED are off-board, connected via header cable
-- R_LW (10K pull-down) and R_LED (330R) are on the main PCB
+- R19 (10K pull-down) and R20 (330R) are on the main PCB
 - LED lights when laser hits sensor — provides visual feedback even during deep sleep
 - ESP32 GPIO0 supports deep sleep wake (`esp_deep_sleep_enable_gpio_wakeup`)
 - Mount sensor facing side/bottom of enclosure to reject ambient sunlight
@@ -195,5 +195,5 @@ H3.2 = GND
 | **Remove** | C19 | 1uF output cap | - | U5 removed |
 | **Add** | ESPMOD1 | ESP32-C3 Super Mini | - | Castellated module, hand-solder or custom JLCPCB assembly |
 | **Add** | H3 | 4-pin header (laser wake) | - | 2.54mm pin header: 3V3, GND, GPIO0, LED anode |
-| **Add** | R_LW | 10K pull-down resistor | - | GPIO0 pull-down (laser wake sensor) |
-| **Add** | R_LED | 330R current-limiting resistor | - | Laser wake feedback LED |
+| **Add** | R19 | 10K pull-down resistor | - | GPIO0 pull-down (laser wake sensor) |
+| **Add** | R20 | 330R current-limiting resistor | - | Laser wake feedback LED |
