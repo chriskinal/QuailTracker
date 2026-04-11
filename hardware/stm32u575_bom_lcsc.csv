@@ -69,7 +69,7 @@ H1,1x4 Male Header 2.54mm,TH,,1,SHT30 module connector (hand-solder from stock)
 H3,1x4 Male Header 2.54mm,TH,,1,Laser wake header: 3V3 GND GPIO0 LED_A (hand-solder)
 # Laser Wake — on-board resistors for off-board phototransistor + LED
 R_LW,10k 1%,0603,C25804,1,Laser wake GPIO0 pull-down (BASIC)
-R_LED,330R 1%,0603,C23225,1,Laser wake feedback LED current limit (BASIC)
+R_LED,330R 1%,0603,C23138,1,Laser wake feedback LED current limit (BASIC)
 # Tactile Buttons
 SW1,Tactile switch 3x6mm SMD,SMD,C318884,1,RESET button (NRST to GND)
 SW2,Tactile switch 3x6mm SMD,SMD,C318884,1,BOOT0 button (PH3 to 3V3 for DFU entry)
