@@ -24,7 +24,7 @@ Cross-reference: `stm32u575_pinout.md` (pin assignments), `stm32u575_bom_lcsc.cs
 | **VBAT+** | Battery positive rail | CN1.1, Q1.VIN(1), Q1.CE(3), C16.+, R7.1, U7.BAT(7), C21.+, RCS.2 |
 | **SOLAR+** | Solar panel positive | CN3.1, D2.anode |
 | **SOLAR_IN** | Solar input (after blocking diode) | D2.cathode, U7.VCC(9), C20.+, C23.2, R14.1, M1.Source |
-| **3V3** | 3.3V regulated rail (always-on) | Q1.VOUT(5), C15.+, C11.+, U1 VDD pins (11, 28, 50, 75, 100), U1.VDDA(22), U1.VREF+(21), U1.VDDUSB(73), U1.VBAT(6), C1.+, C2.+, C3.+, C4.+, C5.+, C6.+, C7.+, C8.+, C9.+, C13.+, C14.+, R3.1, R4.1, U4.VIN, U5.VIN, U6.VIN, CN2.3, H2.1, SW2.1, H3.1 |
+| **3V3** | 3.3V regulated rail (always-on) | Q1.VOUT(5), C15.+, C11.+, U1 VDD pins (11, 28, 50, 75, 100), U1.VDDA(22), U1.VREF+(21), U1.VDDUSB(73), U1.VBAT(6), C1.+, C2.+, C3.+, C4.+, C5.+, C6.+, C7.+, C8.+, C9.+, C13.+, C14.+, R3.1, R4.1, U4.VIN, U5.VIN, U6.VIN, CN2.3, H2.1, SW2.1, P1.1, U3.3V3 |
 | **GND** | Ground | *(see dedicated GND table below)* |
 | **GPS_VCC** | Switched 3.3V to GPS | U4.VOUT, U2.pin8 (VCC), C17.+ |
 | **BLE_VCC** | Switched 3.3V to BLE | U5.VOUT, COMM1.VCC, C19.+ |
@@ -52,7 +52,7 @@ Place the **GND** net port label on every pin listed below.
 | MCU VSS | U1.pin10, U1.pin19 (VSSA), U1.pin20 (VREF-), U1.pin27, U1.pin49, U1.pin74, U1.pin99 |
 | LDO | Q1.VSS(2) |
 | Decoupling caps (−) | C1.−, C2.−, C3.−, C4.−, C5.−, C6.−, C7.−, C8.−, C9.−, C10.−, C11.−, C12.−, C13.−, C14.−, C15.−, C16.− |
-| Connectors | CN1.2, CN2.4, CN3.2, CARD1.VSS, COMM1.GND, H1.2, H2.2, H3.2, SW1.2 |
+| Connectors | CN1.2, CN2.4, CN3.2, CARD1.VSS, COMM1.GND, H1.2, H2.2, P1.3, SW1.2 |
 | GPS module | U2.pin1 (GND), U2.pin10 (GND), U2.pin12 (GND) |
 | GPS RF | J1.GND, C17.− |
 | Load switches | U4.GND, U5.GND, U6.GND |
@@ -171,7 +171,7 @@ H2 (1x7 header): pin 1 = 3V3, pin 2 = GND, pin 3 = SWDIO, pin 4 = SWCLK, pin 5 =
 Three debug paths on one header:
 - **SWD** (pins 1-4): J-Link, ST-Link, or any SWD probe
 - **SWO** (pin 5): ITM trace output — works with ST-Link V2+ and J-Link
-- **UART** (pins 6-7): Serial console via any USB-UART adapter (CP2102, CH340, FTDI)
+- **UART** (pins 6-7): Serial console via any USB-UART adapter (CP2102, CP140, FTDI)
 
 ---
 
@@ -180,7 +180,7 @@ Three debug paths on one header:
 | Component | Function | Pin 1 | Pin 2 | Notes |
 |-----------|----------|-------|-------|-------|
 | **SW1** | RESET | U1.pin14 (NRST) | GND | Internal pull-up on NRST, no external resistor needed |
-| **SW2** | BOOT0 | 3V3 | U1.pin94 (PH3/BOOT0) | R6 (10k) pulls BOOT0 low for normal boot |
+| **SW2** | BOOT0 | 3V3 | U1.pin94 (PP1/BOOT0) | R6 (10k) pulls BOOT0 low for normal boot |
 
 **DFU entry procedure:** Hold SW2 (BOOT0), tap SW1 (RESET), release SW2.
 Board enters STM32 system bootloader — supports USB DFU, UART (USART1/2/3), I2C, SPI.
@@ -262,24 +262,24 @@ Charge current: 0.1V / 0.2Ω = 500mA max (safe for 1S2P 6800mAh = 0.07C).
 
 | Net Port | Description | Connected Pins |
 |----------|-------------|----------------|
-| **LASER_WAKE** | Phototransistor signal | H3.3, R19.1, R20.1, ESPMOD1.GPIO0 |
+| **LASER_WAKE** | Phototransistor signal | P1.2, R19.1, R20.1, U3.GPIO0 |
 
-H3 (1x4 header): pin 1 = 3V3, pin 2 = GND, pin 3 = LASER_WAKE, pin 4 = LED anode.
+P1 (1x4 header): pin 1 = 3V3, pin 2 = LASER_WAKE, pin 3 = GND, pin 4 = LED anode.
 
 **On-board components:**
 - R19 (10k) from LASER_WAKE to GND — pull-down, keeps GPIO0 low when no light
-- R20 (330R) from LASER_WAKE to H3.4 — current limit for feedback LED
+- R20 (330R) from LASER_WAKE to P1.4 — current limit for feedback LED
 
 **Off-board components (on header cable):**
-- Phototransistor (e.g., PT334-6C): collector → H3.1 (3V3), emitter → H3.3 (LASER_WAKE)
-- Feedback LED: anode → H3.4 (through R20), cathode → H3.2 (GND)
+- Phototransistor (e.g., PT334-6C): collector → P1.1 (3V3), emitter → P1.2 (LASER_WAKE)
+- Feedback LED: anode → P1.4 (through R20), cathode → P1.3 (GND)
 
 ```
-3V3 (H3.1) ── PT collector
-               PT emitter ── H3.3 (LASER_WAKE) ──┬── R19 (10k) ── GND
-                                                  └── ESPMOD1.GPIO0
-                             R20 (330R) ── H3.4 (LED anode)
-                                             LED cathode ── H3.2 (GND)
+3V3 (P1.1) ── PT collector
+               PT emitter ── P1.2 (LASER_WAKE) ──┬── R19 (10k) ── GND
+                                                  └── U3.GPIO0
+                             R20 (330R) ── P1.4 (LED anode)
+                                             LED cathode ── P1.3 (GND)
 ```
 
 ---
@@ -299,9 +299,9 @@ These connections are short enough to wire directly — no net port label needed
 | U4.VIN | 3V3 net | GPS load switch input |
 | U5.VIN | 3V3 net | BLE load switch input |
 | U6.VIN | 3V3 net | Peripheral load switch input |
-| R6.1 | U1.pin94 (PH3/BOOT0) | BOOT0 pull-down |
+| R6.1 | U1.pin94 (PP1/BOOT0) | BOOT0 pull-down |
 | R6.2 | GND | Via GND net port |
-| SW2.2 | U1.pin94 (PH3/BOOT0) | BOOT0 button (same node as R6.1) |
+| SW2.2 | U1.pin94 (PP1/BOOT0) | BOOT0 button (same node as R6.1) |
 | SW2.1 | 3V3 | Via 3V3 net port |
 | SW1.1 | U1.pin14 (NRST) | Reset button (same node as C10.1) |
 | SW1.2 | GND | Via GND net port |
@@ -337,7 +337,7 @@ Only pins with net port connections are listed — all others are unused (config
 | 73 | VDDUSB | 3V3 (C8) |
 | 74 | VSS | GND |
 | 75 | VDD | 3V3 (C4) |
-| 94 | PH3 / BOOT0 | local: R6→GND |
+| 94 | PP1 / BOOT0 | local: R6→GND |
 | 99 | VSS | GND |
 | 100 | VDD | 3V3 (C5) |
 
@@ -431,7 +431,7 @@ L1 is the GPS antenna bias tee inductor (not SMPS-related).
 - [ ] GPS_VCC: C17 (10uF) decoupling near U2.pin8
 - [ ] I2C: R3/R4 pull-ups between 3V3 and I2C_SCL/I2C_SDA
 - [ ] Battery divider: R7 (VBAT+→midpoint), R8 (midpoint→GND), midpoint=VBAT_SENSE
-- [ ] BOOT0 (PH3 pin 94): R6 pull-down to GND, SW2 to 3V3
+- [ ] BOOT0 (PP1 pin 94): R6 pull-down to GND, SW2 to 3V3
 - [ ] NRST (pin 14): C10 to GND, SW1 to GND
 - [ ] SWO (PB3 pin 89): routed to H2.5
 - [ ] Debug UART: PD8 (USART3_TX) → H2.6, PD9 (USART3_RX) → H2.7

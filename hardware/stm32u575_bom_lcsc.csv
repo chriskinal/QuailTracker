@@ -40,9 +40,9 @@ C13-C16,1uF X5R 25V,0402,C52923,4,Analog + LDO decoupling
 X1,32.768kHz NX3215SA,SMD3215,C156244,1,LSE RTC crystal NDK 14pF CL
 # Crystal load caps - using STM32U5 internal trimming caps so external caps optional
 # Load Switches — Three independent switched rails
-U4,TPS22916DCKR load switch,SOT-23-5,TBD,1,GPS_VCC load switch (verify LCSC stock)
-U5,TPS22916DCKR load switch,SOT-23-5,TBD,1,BLE_VCC load switch (verify LCSC stock)
-U6,TPS22916DCKR load switch,SOT-23-5,TBD,1,PERIPH_VCC load switch (verify LCSC stock)
+U4,TPS22919DCKR load switch,SOT-23-5,TBD,1,GPS_VCC load switch (verify LCSC stock)
+U5,TPS22919DCKR load switch,SOT-23-5,TBD,1,BLE_VCC load switch (verify LCSC stock)
+U6,TPS22919DCKR load switch,SOT-23-5,TBD,1,PERIPH_VCC load switch (verify LCSC stock)
 C18,1uF X5R 16V,0402,C52923,1,PERIPH_VCC load switch output cap
 C19,1uF X5R 16V,0402,C52923,1,BLE_VCC load switch output cap
 # GPS RF — Active Antenna Bias Tee
@@ -66,7 +66,7 @@ CARD1,MicroSD TF-015,SMD push-push,C113206,1,SD card slot SPI mode
 CN1,JST PH 2-pin B2B-PH-K-S,TH 2.0mm pitch,C131337,1,Battery connector 1S2P 18650 6800mAh (vertical)
 CN2,JST PH 4-pin B4B-PH-K-S,TH 2.0mm pitch,C131334,1,Mic breakout connector CLK DATA VDD GND (vertical)
 H1,1x4 Male Header 2.54mm,TH,,1,SHT30 module connector (hand-solder from stock)
-H3,1x4 Male Header 2.54mm,TH,,1,Laser wake header: 3V3 GND GPIO0 LED_A (hand-solder)
+P1,1x4 Male Header 2.54mm,TH,,1,Laser wake header: 3V3 GPIO0 GND LED_A (hand-solder)
 # Laser Wake — on-board resistors for off-board phototransistor + LED
 R19,10k 1%,0603,C25804,1,Laser wake GPIO0 pull-down (BASIC)
 R20,330R 1%,0603,C23138,1,Laser wake feedback LED current limit (BASIC)
