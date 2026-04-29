@@ -19,12 +19,10 @@
 using System;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Avalonia.Data.Converters;
 using Avalonia.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -524,23 +522,5 @@ public partial class SingleAnalysisViewModel : ObservableObject
         _playbackCts?.Cancel();
         _playbackService.Stop();
         IsPlaying = false;
-    }
-}
-
-public class HalfValueConverter : IValueConverter
-{
-    public static readonly HalfValueConverter Instance = new();
-
-    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
-    {
-        if (value is int intVal) return intVal / 2.0;
-        if (value is double dVal) return dVal / 2.0;
-        return 24000.0;
-    }
-
-    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
-    {
-        if (value is double dVal) return (int)(dVal * 2);
-        return 48000;
     }
 }

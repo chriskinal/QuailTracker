@@ -18,6 +18,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:QuailTracker.Analyzer.Shared.ViewModels"
+             xmlns:conv="using:QuailTracker.Analyzer.Shared.Converters"
              x:Class="QuailTracker.Analyzer.Shared.Views.SingleAnalysisView"
              x:DataType="vm:SingleAnalysisViewModel">
 
@@ -80,7 +81,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
                         <TextBlock Text="Max Freq:" VerticalAlignment="Center" />
                         <Slider Value="{Binding MaxFrequencyHz}"
                                 Minimum="1000"
-                                Maximum="{Binding SampleRate, Converter={x:Static vm:HalfValueConverter.Instance}}"
+                                Maximum="{Binding SampleRate, Converter={x:Static conv:HalfValueConverter.Instance}}"
                                 Width="120"
                                 VerticalAlignment="Center"
                                 TickFrequency="1000"

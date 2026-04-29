@@ -375,7 +375,20 @@ a converter). Plan to take screenshots before/after to verify no regression.
 
 ## Phase 6 — Cleanup
 
-**Closes:** MVVM-L1, MVVM-L2.
+**Closes:** MVVM-L1.
+**Reviewed and rejected:** MVVM-L2 (rationale below).
+
+### Reviewed and rejected during execution
+
+- **MVVM-L2 — Hard-coded `new` of services in `MainWindowViewModel`'s
+  default constructor.** Suggested fix was a DI container
+  (`Microsoft.Extensions.DependencyInjection`). DI is meaningful when (a) you
+  need to swap implementations at runtime / per-environment, or (b) you want
+  unit-testable VMs. Neither applies today: services are singletons by
+  necessity (single ONNX session, single map, single config), and there's
+  no test project. Adding a DI container would be ceremony for ceremony's
+  sake. Defer until a concrete need arises (test project, mock services,
+  multi-tenant config). Closing as no-fix.
 
 ### Scope
 
@@ -438,8 +451,8 @@ Each finding from the audits maps to a phase:
 | MVVM-M2         | 5     | REJECT |
 | MVVM-M3         | 5     | DONE   |
 | MVVM-M4         | 2     | DONE   |
-| MVVM-L1         | 6     | TODO   |
-| MVVM-L2         | 6     | TODO   |
+| MVVM-L1         | 6     | DONE   |
+| MVVM-L2         | 6     | REJECT |
 | Threading-C1    | 1     | DONE   |
 | Threading-H1    | 3     | TODO   |
 | Threading-H2    | 3     | DONE   |
