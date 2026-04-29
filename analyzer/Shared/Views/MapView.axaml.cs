@@ -24,22 +24,22 @@ namespace QuailTracker.Analyzer.Shared.Views;
 
 public partial class MapView : UserControl
 {
+    private bool _mapInitialized;
+
     public MapView()
     {
         InitializeComponent();
-
-        // WebView initialization would happen here
-        // For now, the map service will need to be initialized with a WebView control
-        // when platform-specific WebView support is added
     }
 
-    protected override void OnDataContextChanged(System.EventArgs e)
+    protected override async void OnDataContextChanged(System.EventArgs e)
     {
         base.OnDataContextChanged(e);
 
-        // Initialize map when DataContext is set
-        // In a real implementation, you would initialize the WebView here
-        // and pass it to the MapViewModel
+        if (_mapInitialized) return;
+        if (DataContext is not MapViewModel vm) return;
+
+        _mapInitialized = true;
+        await vm.InitializeMapAsync(MapWebView);
     }
 
     private async void OnExportKmlClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)

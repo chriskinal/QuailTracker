@@ -71,9 +71,9 @@
                                    Margin="0,4,0,0" />
                     </StackPanel>
 
-                    <!-- WebView placeholder - actual WebView added in code-behind -->
-                    <ContentControl x:Name="WebViewContainer"
-                                    IsVisible="{Binding IsMapReady}" />
+                    <!-- Native WebView host. Hidden until MapService raises MapReady. -->
+                    <NativeWebView x:Name="MapWebView"
+                                   IsVisible="{Binding IsMapReady}" />
                 </Grid>
             </Border>
 
