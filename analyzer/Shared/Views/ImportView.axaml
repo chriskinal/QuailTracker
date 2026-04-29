@@ -142,10 +142,10 @@
                         <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding NewStationId}" Margin="0,0,0,4" />
 
                         <TextBlock Grid.Row="1" Grid.Column="0" Text="Lat:" VerticalAlignment="Center" Margin="0,0,8,0" />
-                        <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding NewStationLatitude}" Watermark="e.g., 29.123456" Margin="0,0,0,4" />
+                        <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding NewStationLatitude}" PlaceholderText="e.g., 29.123456" Margin="0,0,0,4" />
 
                         <TextBlock Grid.Row="2" Grid.Column="0" Text="Lon:" VerticalAlignment="Center" Margin="0,0,8,0" />
-                        <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding NewStationLongitude}" Watermark="e.g., -99.123456" Margin="0,0,0,4" />
+                        <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding NewStationLongitude}" PlaceholderText="e.g., -99.123456" Margin="0,0,0,4" />
 
                         <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Spacing="4">
                             <Button Content="Add/Update"

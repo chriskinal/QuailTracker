@@ -58,7 +58,7 @@ public partial class SingleAnalysisView : UserControl
 
     private void OnDragOver(object? sender, DragEventArgs e)
     {
-        e.DragEffects = e.Data.Contains(DataFormats.Files)
+        e.DragEffects = e.DataTransfer.Contains(DataFormat.File)
             ? DragDropEffects.Copy
             : DragDropEffects.None;
     }
@@ -66,9 +66,9 @@ public partial class SingleAnalysisView : UserControl
     private async void OnDrop(object? sender, DragEventArgs e)
     {
         if (DataContext is not SingleAnalysisViewModel vm) return;
-        if (!e.Data.Contains(DataFormats.Files)) return;
+        if (!e.DataTransfer.Contains(DataFormat.File)) return;
 
-        var files = e.Data.GetFiles();
+        var files = e.DataTransfer.TryGetFiles();
         if (files == null) return;
 
         var firstAudio = files

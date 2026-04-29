@@ -172,7 +172,7 @@
                 <TextBlock Text="Detections" Classes="SectionHeader" VerticalAlignment="Center" />
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
                     <TextBox Text="{Binding SpeciesFilter}"
-                             Watermark="Filter by species..."
+                             PlaceholderText="Filter by species..."
                              Width="150" />
                 </StackPanel>
                 <Button Grid.Column="2"

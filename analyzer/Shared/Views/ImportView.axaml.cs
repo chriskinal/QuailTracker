@@ -37,7 +37,7 @@ public partial class ImportView : UserControl
 
     private void OnDragOver(object? sender, DragEventArgs e)
     {
-        e.DragEffects = e.Data.Contains(DataFormats.Files)
+        e.DragEffects = e.DataTransfer.Contains(DataFormat.File)
             ? DragDropEffects.Copy
             : DragDropEffects.None;
     }
@@ -46,9 +46,9 @@ public partial class ImportView : UserControl
     {
         if (DataContext is not ImportViewModel vm) return;
 
-        if (e.Data.Contains(DataFormats.Files))
+        if (e.DataTransfer.Contains(DataFormat.File))
         {
-            var files = e.Data.GetFiles();
+            var files = e.DataTransfer.TryGetFiles();
             if (files == null) return;
 
             var wavFiles = new List<string>();
