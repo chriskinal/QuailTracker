@@ -22,7 +22,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
              x:Class="QuailTracker.Analyzer.Shared.Views.SingleAnalysisView"
              x:DataType="vm:SingleAnalysisViewModel">
 
-    <Grid RowDefinitions="Auto,2*,Auto,*" Margin="8">
+    <Grid RowDefinitions="Auto,2*,Auto,*"
+          Margin="8"
+          DragDrop.AllowDrop="True"
+          Background="Transparent">
 
         <!-- Row 0: Controls -->
         <Border Grid.Row="0"
@@ -175,13 +178,23 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
                 Classes="DarkCardPanel"
                 MinHeight="80">
             <Grid ColumnDefinitions="44,*" RowDefinitions="*,24">
-                <!-- Placeholder when no file loaded -->
-                <TextBlock Grid.ColumnSpan="2" Grid.RowSpan="2"
-                           Text="Open an audio file to view its spectrogram"
-                           IsVisible="{Binding !IsFileLoaded}"
-                           HorizontalAlignment="Center"
-                           VerticalAlignment="Center"
-                           Foreground="#757575" />
+                <!-- Drop hint when no file loaded -->
+                <StackPanel Grid.ColumnSpan="2" Grid.RowSpan="2"
+                            IsVisible="{Binding !IsFileLoaded}"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center">
+                    <PathIcon Data="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M13.5,16V19H10.5V16H8L12,12L16,16H13.5M13,9V3.5L18.5,9H13Z"
+                              Width="48" Height="48"
+                              Foreground="#BDBDBD" />
+                    <TextBlock Text="Drop a WAV or FLAC file here"
+                               HorizontalAlignment="Center"
+                               Foreground="#757575"
+                               Margin="0,12,0,0" />
+                    <TextBlock Text="or use the Open File button above"
+                               HorizontalAlignment="Center"
+                               Foreground="#9E9E9E"
+                               FontSize="12" />
+                </StackPanel>
 
                 <!-- Loading indicator -->
                 <StackPanel Grid.ColumnSpan="2" Grid.RowSpan="2"
