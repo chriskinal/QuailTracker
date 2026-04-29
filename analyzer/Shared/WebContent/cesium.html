@@ -28,12 +28,26 @@
             return false;
         };
 
-        // User should set their own Cesium ion access token
-        // Get one free at https://cesium.com/ion/tokens
-        Cesium.Ion.defaultAccessToken = 'YOUR_CESIUM_ION_TOKEN';
-
+        // No Cesium ion token — use Google's open satellite tile endpoint as
+        // the imagery layer. Zero-config: no API key, no signup. Same risk
+        // profile as the Bing Virtual Earth endpoint AgValoniaGPS3 uses
+        // (technically a TOS gray area but widely tolerated for casual /
+        // research use). If Google ever rate-limits, swap the URL below
+        // for OSM, Bing Virtual Earth, or paste a Cesium ion token.
+        //
+        //   lyrs=y  hybrid (satellite + roads + labels) — default
+        //   lyrs=s  satellite only
+        //   lyrs=m  roadmap
+        //   lyrs=p  terrain
         const viewer = new Cesium.Viewer('cesiumContainer', {
-            terrain: Cesium.Terrain.fromWorldTerrain(),
+            baseLayer: Cesium.ImageryLayer.fromProviderAsync(
+                Promise.resolve(new Cesium.UrlTemplateImageryProvider({
+                    url: 'https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
+                    subdomains: '0123',
+                    credit: new Cesium.Credit('© Google', true),
+                    maximumLevel: 20
+                }))
+            ),
             baseLayerPicker: false,
             geocoder: false,
             homeButton: false,
