@@ -19,6 +19,7 @@
 using System;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -38,6 +39,13 @@ public partial class MapViewModel : ObservableObject
     private string _statusMessage = string.Empty;
 
     private readonly Action<string> _setStatus;
+
+    /// <summary>
+    /// Cancels stale filter / layer-visibility updates when the user toggles
+    /// a checkbox several times in quick succession. Per <c>Plans/threading_model.md</c>:
+    /// last intent wins, in-flight stale work cancels.
+    /// </summary>
+    private CancellationTokenSource? _layerCts;
 
     [ObservableProperty]
     private bool _isMapReady;
@@ -132,14 +140,26 @@ public partial class MapViewModel : ObservableObject
 
     private async Task UpdateLayerVisibilityAsync()
     {
+        var token = CancellationHelpers.Replace(ref _layerCts);
         if (!IsMapReady) return;
-        await _mapService.SetLayerVisibilityAsync(ShowStations, ShowDetections, ShowLocalizations);
+        try
+        {
+            await _mapService.SetLayerVisibilityAsync(ShowStations, ShowDetections, ShowLocalizations);
+            token.ThrowIfCancellationRequested();
+        }
+        catch (OperationCanceledException) { }
     }
 
     private async Task UpdateTimeFilterAsync()
     {
+        var token = CancellationHelpers.Replace(ref _layerCts);
         if (!IsMapReady) return;
-        await _mapService.SetTimeFilterAsync(FilterStartTime?.DateTime, FilterEndTime?.DateTime);
+        try
+        {
+            await _mapService.SetTimeFilterAsync(FilterStartTime?.DateTime, FilterEndTime?.DateTime);
+            token.ThrowIfCancellationRequested();
+        }
+        catch (OperationCanceledException) { }
     }
 
     [RelayCommand]

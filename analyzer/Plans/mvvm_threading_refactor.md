@@ -428,6 +428,6 @@ Each finding from the audits maps to a phase:
 | Threading-C1    | 1     | DONE   |
 | Threading-H1    | 3     | TODO   |
 | Threading-H2    | 3     | DONE   |
-| Threading-H3    | 4     | TODO   |
-| Threading-M1    | 4     | TODO   |
+| Threading-H3    | 4     | DONE   |
+| Threading-M1    | 4     | DONE   |
 | Threading-M2    | 3     | DONE   |

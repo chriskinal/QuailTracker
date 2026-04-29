@@ -378,6 +378,7 @@ public partial class SingleAnalysisViewModel : ObservableObject
 
     private async Task EstimateNoiseProfileThenRegenerateAsync()
     {
+        var token = CancellationHelpers.Replace(ref _regenCts);
         try
         {
             IsGenerating = true;
@@ -385,8 +386,9 @@ public partial class SingleAnalysisViewModel : ObservableObject
             await Task.Run(() =>
             {
                 var (samples, sr) = SpectrogramService.ReadAudioMono(FilePath);
+                token.ThrowIfCancellationRequested();
                 _noiseReduction.EstimateNoiseProfile(samples, sr);
-            });
+            }, token);
 
             if (GenerateSpectrogram)
             {
@@ -394,11 +396,12 @@ public partial class SingleAnalysisViewModel : ObservableObject
                 const int imageHeight = 500;
                 _spectrogramService.InvalidateCache();
                 SpectrogramImage = await _spectrogramService.GenerateAsync(
-                    FilePath, imageWidth, imageHeight, MaxFrequencyHz, NoiseReductionEnabled);
+                    FilePath, imageWidth, imageHeight, MaxFrequencyHz, NoiseReductionEnabled, token);
             }
 
             _setStatus($"Loaded {FileName}");
         }
+        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
             _setStatus($"Error: {ex.Message}");
@@ -418,22 +421,18 @@ public partial class SingleAnalysisViewModel : ObservableObject
     /// <summary>Re-render from cached FFT data (instant). Falls back to full regen if no cache.</summary>
     private async Task RenderSpectrogramFromCacheAsync()
     {
-        _regenCts?.Cancel();
-        _regenCts?.Dispose();
-        var cts = new CancellationTokenSource();
-        _regenCts = cts;
-
+        var token = CancellationHelpers.Replace(ref _regenCts);
         try
         {
             const int imageHeight = 500;
-            var bitmap = await _spectrogramService.RenderCachedAsync(imageHeight, MaxFrequencyHz, cts.Token);
+            var bitmap = await _spectrogramService.RenderCachedAsync(imageHeight, MaxFrequencyHz, token);
             if (bitmap != null)
             {
                 SpectrogramImage = bitmap;
                 return;
             }
 
-            // No cache — full regeneration
+            // No cache — full regeneration. Reuses _regenCts via the call below.
             await FullRegenerateSpectrogramAsync();
         }
         catch (OperationCanceledException) { }
@@ -446,11 +445,7 @@ public partial class SingleAnalysisViewModel : ObservableObject
     /// <summary>Full FFT recomputation (expensive). Used for file load, noise reduction toggle.</summary>
     private async Task FullRegenerateSpectrogramAsync()
     {
-        _regenCts?.Cancel();
-        _regenCts?.Dispose();
-        var cts = new CancellationTokenSource();
-        _regenCts = cts;
-
+        var token = CancellationHelpers.Replace(ref _regenCts);
         try
         {
             IsGenerating = true;
@@ -458,7 +453,7 @@ public partial class SingleAnalysisViewModel : ObservableObject
             int imageWidth = Math.Clamp((int)(FileDuration.TotalSeconds * 20), 800, 3000);
             const int imageHeight = 500;
             SpectrogramImage = await _spectrogramService.GenerateAsync(
-                FilePath, imageWidth, imageHeight, MaxFrequencyHz, NoiseReductionEnabled, cts.Token);
+                FilePath, imageWidth, imageHeight, MaxFrequencyHz, NoiseReductionEnabled, token);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -467,7 +462,7 @@ public partial class SingleAnalysisViewModel : ObservableObject
         }
         finally
         {
-            if (_regenCts == cts)
+            if (!token.IsCancellationRequested)
                 IsGenerating = false;
         }
     }
