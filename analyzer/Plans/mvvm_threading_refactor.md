@@ -295,23 +295,38 @@ unhandled — we're explicit about it now.
 
 ## Phase 5 — View↔Model decoupling (remaining)
 
-**Closes:** MVVM-M1, MVVM-M2, MVVM-M3.
+**Closes:** MVVM-M3.
+**Reviewed and rejected:** MVVM-M1, MVVM-M2 (rationale below).
 
-### Problem
+### Reviewed and rejected during execution
 
-Three places have view/VM boundary issues that don't depend on Phase 2:
+- **MVVM-M1 — `LocalizationViewModel` mutates `Detection.LocalizationId`
+  in a loop.** This is the canonical "ViewModel updates Model" arrow on the
+  MS MVVM diagram, made fully reactive after Phase 2 (Detection now sends
+  `INotifyPropertyChanged`). The audit suggested extracting to a
+  `LocalizationLinkingService` "for traceability," but the loop is right
+  there in the VM, easy to read, and the data flow is already observable.
+  Extraction would move the same code to another file without changing
+  behavior — pure ceremony, not a violation. Closing as no-fix.
 
-- `LocalizationViewModel.cs:154–161, 209–215` — VM mutates `Detection.LocalizationId`
-  in a manual loop. With Phase 2 done, this is a single observable property
-  set; the VM can still drive it but the loop pattern is suspect — extract
-  to a `LocalizationLinkingService` for traceability.
-- `SingleAnalysisView.axaml.cs:95–117` — code-behind redraws Canvas
-  detection markers / freq labels / time labels by hand on collection-change
-  events. UI logic that should be `ItemsControl` + a small attached behavior,
-  driven by VM-bound data.
+- **MVVM-M2 — `SingleAnalysisView.axaml.cs` redraws Canvas labels/markers
+  imperatively.** The code-behind only *reads* VM state via subscriptions
+  and updates `Canvas.Children` based on the rendered spectrogram bounds;
+  it never writes back to models or services. The math fundamentally depends
+  on view-side rendered geometry, so refactoring to `ItemsControl` + a
+  positioning behavior would still need code-behind glue to feed bounds
+  into the VM. Stylistic preference, not a view→model violation. The
+  user's stated concern was "views reaching directly into models to change
+  states" — this code does not do that. Significant visual-regression risk
+  for no concrete fix. Deferred until a concrete need arises (e.g., adding
+  hover tooltips or click handling on markers).
+
+### Problem (M3 only)
+
 - `MainWindow.axaml.cs:39–76` — code-behind reads/writes `ConfigService`
-  for window geometry directly. Should be a `WindowState` service or a VM
-  command.
+  through `vm.ConfigService.WindowWidth = ...` etc., directly mutating
+  service state. This **is** "view reaching past the VM into a service" —
+  a real instance of the pattern the user is escaping.
 
 ### Scope
 
@@ -419,9 +434,9 @@ Each finding from the audits maps to a phase:
 | MVVM-H4         | 3     | DONE   |
 | MVVM-H5         | 3     | DONE   |
 | MVVM-H6         | 3     | DONE   |
-| MVVM-M1         | 5     | TODO   |
-| MVVM-M2         | 5     | TODO   |
-| MVVM-M3         | 5     | TODO   |
+| MVVM-M1         | 5     | REJECT |
+| MVVM-M2         | 5     | REJECT |
+| MVVM-M3         | 5     | DONE   |
 | MVVM-M4         | 2     | DONE   |
 | MVVM-L1         | 6     | TODO   |
 | MVVM-L2         | 6     | TODO   |

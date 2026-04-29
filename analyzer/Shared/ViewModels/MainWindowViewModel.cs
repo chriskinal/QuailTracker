@@ -30,6 +30,39 @@ public partial class MainWindowViewModel : ObservableObject
 
     public ConfigService ConfigService { get; }
 
+    /// <summary>
+    /// Persisted window geometry, in window units. Null means "use XAML defaults"
+    /// (first launch, or saved state was incomplete).
+    /// </summary>
+    public readonly record struct WindowState(
+        double X, double Y, double Width, double Height, bool IsMaximized);
+
+    public WindowState? GetSavedWindowState()
+    {
+        var c = ConfigService;
+        if (!c.WindowWidth.HasValue || !c.WindowHeight.HasValue) return null;
+        return new WindowState(
+            c.WindowX ?? 0,
+            c.WindowY ?? 0,
+            c.WindowWidth.Value,
+            c.WindowHeight.Value,
+            c.IsMaximized);
+    }
+
+    public void SaveWindowState(WindowState state)
+    {
+        var c = ConfigService;
+        c.IsMaximized = state.IsMaximized;
+        if (!state.IsMaximized)
+        {
+            c.WindowWidth = state.Width;
+            c.WindowHeight = state.Height;
+            c.WindowX = state.X;
+            c.WindowY = state.Y;
+        }
+        c.Save();
+    }
+
     // Shared data collections
     public ObservableCollection<AudioFile> AudioFiles { get; } = [];
     public ObservableCollection<Station> Stations { get; } = [];

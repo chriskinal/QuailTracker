@@ -18,7 +18,6 @@
 
 using System;
 using Avalonia.Controls;
-using QuailTracker.Analyzer.Shared.Services;
 using QuailTracker.Analyzer.Shared.ViewModels;
 
 namespace QuailTracker.Analyzer.Shared.Views;
@@ -36,43 +35,27 @@ public partial class MainWindow : Window
     private void OnOpened(object? sender, EventArgs e)
     {
         if (DataContext is not MainWindowViewModel vm) return;
-        var config = vm.ConfigService;
 
-        if (config.WindowWidth.HasValue && config.WindowHeight.HasValue)
-        {
-            Width = config.WindowWidth.Value;
-            Height = config.WindowHeight.Value;
-        }
+        var saved = vm.GetSavedWindowState();
+        if (saved is null) return;
 
-        if (config.WindowX.HasValue && config.WindowY.HasValue)
-        {
-            Position = new Avalonia.PixelPoint(
-                (int)config.WindowX.Value,
-                (int)config.WindowY.Value);
-        }
+        Width = saved.Value.Width;
+        Height = saved.Value.Height;
+        Position = new Avalonia.PixelPoint((int)saved.Value.X, (int)saved.Value.Y);
 
-        if (config.IsMaximized)
-        {
+        if (saved.Value.IsMaximized)
             WindowState = WindowState.Maximized;
-        }
     }
 
     private void OnClosing(object? sender, WindowClosingEventArgs e)
     {
         if (DataContext is not MainWindowViewModel vm) return;
-        var config = vm.ConfigService;
 
-        config.IsMaximized = WindowState == WindowState.Maximized;
-
-        // Save normal (non-maximized) bounds so restore works properly
-        if (WindowState != WindowState.Maximized)
-        {
-            config.WindowWidth = Width;
-            config.WindowHeight = Height;
-            config.WindowX = Position.X;
-            config.WindowY = Position.Y;
-        }
-
-        config.Save();
+        vm.SaveWindowState(new MainWindowViewModel.WindowState(
+            X: Position.X,
+            Y: Position.Y,
+            Width: Width,
+            Height: Height,
+            IsMaximized: WindowState == WindowState.Maximized));
     }
 }
