@@ -51,7 +51,7 @@ public partial class PopulationView : UserControl
 
         if (file != null)
         {
-            vm.ExportResults(file.Path.LocalPath);
+            await vm.ExportResultsCommand.ExecuteAsync(file.Path.LocalPath);
         }
     }
 
@@ -75,7 +75,7 @@ public partial class PopulationView : UserControl
         var file = files.FirstOrDefault();
         if (file != null)
         {
-            vm.ImportPrevious(file.Path.LocalPath);
+            await vm.ImportPreviousCommand.ExecuteAsync(file.Path.LocalPath);
         }
     }
 }

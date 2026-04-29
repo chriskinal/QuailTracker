@@ -343,12 +343,6 @@ public partial class SingleAnalysisView : UserControl
 
         if (file == null) return;
 
-        var path = file.Path.LocalPath;
-        var detections = _currentVm.Detections.ToList();
-
-        if (path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase))
-            DetectionExporter.WriteRavenTable(detections, path);
-        else
-            DetectionExporter.WriteBirdNetCsv(detections, path);
+        await _currentVm.ExportDetectionsCommand.ExecuteAsync(file.Path.LocalPath);
     }
 }

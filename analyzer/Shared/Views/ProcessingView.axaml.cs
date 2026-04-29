@@ -76,12 +76,6 @@ public partial class ProcessingView : UserControl
 
         if (file == null) return;
 
-        var path = file.Path.LocalPath;
-        var detections = vm.FilteredDetections.ToList();
-
-        if (path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase))
-            DetectionExporter.WriteRavenTable(detections, path);
-        else
-            DetectionExporter.WriteBirdNetCsv(detections, path);
+        await vm.ExportDetectionsCommand.ExecuteAsync(file.Path.LocalPath);
     }
 }

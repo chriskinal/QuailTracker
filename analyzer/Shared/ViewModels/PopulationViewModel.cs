@@ -406,11 +406,13 @@ public partial class PopulationViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Exports results to a JSON file. Called from code-behind with file dialog path.
+    /// Exports results to a JSON file. File I/O runs on a worker so the UI
+    /// thread stays responsive.
     /// </summary>
-    public void ExportResults(string filePath)
+    [RelayCommand]
+    private async Task ExportResultsAsync(string? filePath)
     {
-        if (!HasResults) return;
+        if (string.IsNullOrEmpty(filePath) || !HasResults) return;
 
         var config = BuildConfig();
         var estimate = new PopulationEstimate
@@ -435,26 +437,43 @@ public partial class PopulationViewModel : ObservableObject
         }
 
         var json = _populationService.ExportToJson(estimate);
-        File.WriteAllText(filePath, json);
-        _setStatus($"Results exported to {Path.GetFileName(filePath)}");
+        try
+        {
+            await File.WriteAllTextAsync(filePath, json);
+            _setStatus($"Results exported to {Path.GetFileName(filePath)}");
+        }
+        catch (Exception ex)
+        {
+            _setStatus($"Export failed: {ex.Message}");
+        }
     }
 
     /// <summary>
-    /// Imports a previous year's estimate from JSON. Called from code-behind with file dialog path.
+    /// Imports a previous year's estimate from JSON. File I/O runs on a worker.
     /// </summary>
-    public void ImportPrevious(string filePath)
+    [RelayCommand]
+    private async Task ImportPreviousAsync(string? filePath)
     {
-        var json = File.ReadAllText(filePath);
-        var estimate = _populationService.ImportFromJson(json);
+        if (string.IsNullOrEmpty(filePath)) return;
 
-        if (estimate != null)
+        try
         {
-            PreviousEstimates.Add(estimate);
-            _setStatus($"Imported {estimate.SurveyYear} {estimate.SurveyType} estimate");
+            var json = await File.ReadAllTextAsync(filePath);
+            var estimate = _populationService.ImportFromJson(json);
+
+            if (estimate != null)
+            {
+                PreviousEstimates.Add(estimate);
+                _setStatus($"Imported {estimate.SurveyYear} {estimate.SurveyType} estimate");
+            }
+            else
+            {
+                _setStatus("Failed to parse estimate file");
+            }
         }
-        else
+        catch (Exception ex)
         {
-            _setStatus("Failed to parse estimate file");
+            _setStatus($"Import failed: {ex.Message}");
         }
     }
 }

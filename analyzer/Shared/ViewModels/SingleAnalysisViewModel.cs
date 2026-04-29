@@ -21,6 +21,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Data.Converters;
@@ -255,7 +256,7 @@ public partial class SingleAnalysisViewModel : ObservableObject
             // Single writer: AppStateService. Both ViewModels project from it.
             _appState.ApplyModelLoaded(path);
             _configService.BirdNetModelPath = path;
-            _configService.Save();
+            await _configService.SaveAsync();
 
             _setStatus("BirdNet model loaded");
         }
@@ -335,6 +336,33 @@ public partial class SingleAnalysisViewModel : ObservableObject
             IsAnalyzing = false;
             _analysisCts?.Dispose();
             _analysisCts = null;
+        }
+    }
+
+    /// <summary>
+    /// Export current detections to CSV (BirdNet format) or Raven Selection
+    /// Table based on file extension. File I/O runs on a worker.
+    /// </summary>
+    [RelayCommand]
+    private async Task ExportDetectionsAsync(string? path)
+    {
+        if (string.IsNullOrEmpty(path) || Detections.Count == 0) return;
+
+        var detections = Detections.ToList();
+        try
+        {
+            await Task.Run(() =>
+            {
+                if (path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase))
+                    DetectionExporter.WriteRavenTable(detections, path);
+                else
+                    DetectionExporter.WriteBirdNetCsv(detections, path);
+            });
+            _setStatus($"Exported {detections.Count} detections to {Path.GetFileName(path)}");
+        }
+        catch (Exception ex)
+        {
+            _setStatus($"Export failed: {ex.Message}");
         }
     }
 

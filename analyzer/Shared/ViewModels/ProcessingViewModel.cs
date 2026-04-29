@@ -173,7 +173,7 @@ public partial class ProcessingViewModel : ObservableObject
             // Single writer: AppStateService. Both ViewModels project from it.
             _appState.ApplyModelLoaded(path);
             _configService.BirdNetModelPath = path;
-            _configService.Save();
+            await _configService.SaveAsync();
 
             _setStatus("BirdNet model loaded");
         }
@@ -265,6 +265,33 @@ public partial class ProcessingViewModel : ObservableObject
     }
 
     private bool CanStartProcessing() => IsModelLoaded && _audioFiles.Count > 0 && !IsProcessing;
+
+    /// <summary>
+    /// Export currently filtered detections to CSV (BirdNet format) or Raven
+    /// Selection Table based on file extension. File I/O runs on a worker.
+    /// </summary>
+    [RelayCommand]
+    private async Task ExportDetectionsAsync(string? path)
+    {
+        if (string.IsNullOrEmpty(path) || FilteredDetections.Count == 0) return;
+
+        var detections = FilteredDetections.ToList();
+        try
+        {
+            await Task.Run(() =>
+            {
+                if (path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase))
+                    DetectionExporter.WriteRavenTable(detections, path);
+                else
+                    DetectionExporter.WriteBirdNetCsv(detections, path);
+            });
+            _setStatus($"Exported {detections.Count} detections to {System.IO.Path.GetFileName(path)}");
+        }
+        catch (Exception ex)
+        {
+            _setStatus($"Export failed: {ex.Message}");
+        }
+    }
 
     [RelayCommand]
     private void CancelProcessing()

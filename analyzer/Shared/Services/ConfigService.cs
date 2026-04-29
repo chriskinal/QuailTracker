@@ -19,6 +19,7 @@
 using System;
 using System.IO;
 using System.Text.Json;
+using System.Threading.Tasks;
 
 namespace QuailTracker.Analyzer.Shared.Services;
 
@@ -47,6 +48,11 @@ public class ConfigService
     public double? WindowHeight { get; set; }
     public bool IsMaximized { get; set; }
 
+    /// <summary>
+    /// Synchronous load. Used at cold startup from the
+    /// <see cref="ViewModels.MainWindowViewModel"/> default constructor where
+    /// async would force restructuring app bootstrap. Small JSON, runs once.
+    /// </summary>
     public static ConfigService Load()
     {
         try
@@ -64,6 +70,11 @@ public class ConfigService
         return new ConfigService();
     }
 
+    /// <summary>
+    /// Synchronous save. Used by <c>MainWindow.OnClosing</c> where awaiting
+    /// inside the closing event handler is awkward. Small JSON; the brief
+    /// blocking write at app shutdown is acceptable.
+    /// </summary>
     public void Save()
     {
         try
@@ -71,6 +82,24 @@ public class ConfigService
             Directory.CreateDirectory(ConfigDir);
             var json = JsonSerializer.Serialize(this, JsonOptions);
             File.WriteAllText(ConfigFile, json);
+        }
+        catch
+        {
+            // Non-critical — settings just won't persist this session
+        }
+    }
+
+    /// <summary>
+    /// Async save. Preferred from any <c>async</c> command path — keeps file
+    /// I/O off the UI thread.
+    /// </summary>
+    public async Task SaveAsync()
+    {
+        try
+        {
+            Directory.CreateDirectory(ConfigDir);
+            var json = JsonSerializer.Serialize(this, JsonOptions);
+            await File.WriteAllTextAsync(ConfigFile, json);
         }
         catch
         {
