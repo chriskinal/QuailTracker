@@ -104,6 +104,8 @@ public partial class MainWindowViewModel : ObservableObject
         _processingViewModel = new ProcessingViewModel(
             audioFileService,
             birdNetService,
+            configService,
+            appState,
             AudioFiles,
             Detections);
 

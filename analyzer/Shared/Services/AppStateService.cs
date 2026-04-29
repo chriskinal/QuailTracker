@@ -23,6 +23,10 @@ namespace QuailTracker.Analyzer.Shared.Services;
 /// <summary>
 /// Shared ephemeral application state. Observable so multiple ViewModels
 /// can react to changes without coupling to each other.
+///
+/// Single-writer rule (per Plans/threading_model.md): the Apply* methods are
+/// the only sanctioned writers of model-load state. Call them on the UI
+/// thread (typically inside the await continuation of a load command).
 /// </summary>
 public partial class AppStateService : ObservableObject
 {
@@ -31,4 +35,16 @@ public partial class AppStateService : ObservableObject
 
     [ObservableProperty]
     private string _modelPath = string.Empty;
+
+    public void ApplyModelLoaded(string path)
+    {
+        ModelPath = path;
+        IsModelLoaded = true;
+    }
+
+    public void ApplyModelUnloaded()
+    {
+        IsModelLoaded = false;
+        ModelPath = string.Empty;
+    }
 }

@@ -51,10 +51,21 @@ public class BirdNetService : IBirdNetService
         {
             ct.ThrowIfCancellationRequested();
 
-            // Dispose existing session
+            // Validate labels BEFORE touching session state. If the labels file
+            // is missing, fail loud and leave any previously-loaded model intact.
+            // (Silently setting _labels = null is what produced the
+            // "Unknown Species 1473" bug when re-loading from a different tab.)
+            var labels = FindLabels(modelPath);
+            if (labels == null)
+            {
+                throw new InvalidOperationException(
+                    $"Labels file not found for model at '{modelPath}'. " +
+                    "Expected BirdNET_GLOBAL_6K_V2.4_Labels.txt (or similar) " +
+                    "in the same directory.");
+            }
+
             _session?.Dispose();
 
-            // Load ONNX model
             var options = new SessionOptions
             {
                 GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL
@@ -63,9 +74,7 @@ public class BirdNetService : IBirdNetService
             _session = new InferenceSession(modelPath, options);
             _inputName = _session.InputMetadata.Keys.First();
             ModelPath = modelPath;
-
-            // Search for labels file in multiple locations
-            _labels = FindLabels(modelPath);
+            _labels = labels;
         }, ct);
     }
 

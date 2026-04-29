@@ -18,6 +18,7 @@
 
 using System;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -32,6 +33,8 @@ public partial class ProcessingViewModel : ObservableObject
 {
     private readonly IAudioFileService _audioFileService;
     private readonly IBirdNetService _birdNetService;
+    private readonly ConfigService _configService;
+    private readonly AppStateService _appState;
     private readonly StereoBearingService _bearingService;
     private readonly ObservableCollection<AudioFile> _audioFiles;
     private readonly ObservableCollection<Detection> _detections;
@@ -45,12 +48,11 @@ public partial class ProcessingViewModel : ObservableObject
     [NotifyCanExecuteChangedFor(nameof(StartProcessingCommand))]
     private bool _isProcessing;
 
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(StartProcessingCommand))]
-    private bool _isModelLoaded;
+    /// <summary>Projection of <see cref="AppStateService.IsModelLoaded"/> — single source of truth.</summary>
+    public bool IsModelLoaded => _appState.IsModelLoaded;
 
-    [ObservableProperty]
-    private string _modelPath = string.Empty;
+    /// <summary>Projection of <see cref="AppStateService.ModelPath"/> — single source of truth.</summary>
+    public string ModelPath => _appState.ModelPath;
 
     [ObservableProperty]
     private int _currentFile;
@@ -104,11 +106,15 @@ public partial class ProcessingViewModel : ObservableObject
     public ProcessingViewModel(
         IAudioFileService audioFileService,
         IBirdNetService birdNetService,
+        ConfigService configService,
+        AppStateService appState,
         ObservableCollection<AudioFile> audioFiles,
         ObservableCollection<Detection> detections)
     {
         _audioFileService = audioFileService;
         _birdNetService = birdNetService;
+        _configService = configService;
+        _appState = appState;
         _bearingService = new StereoBearingService(audioFileService);
         _audioFiles = audioFiles;
         _detections = detections;
@@ -116,6 +122,20 @@ public partial class ProcessingViewModel : ObservableObject
 
         _detections.CollectionChanged += (_, _) => UpdateFilteredDetections();
         _audioFiles.CollectionChanged += (_, _) => StartProcessingCommand.NotifyCanExecuteChanged();
+        _appState.PropertyChanged += OnAppStateChanged;
+    }
+
+    private void OnAppStateChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(AppStateService.IsModelLoaded))
+        {
+            OnPropertyChanged(nameof(IsModelLoaded));
+            StartProcessingCommand.NotifyCanExecuteChanged();
+        }
+        else if (e.PropertyName == nameof(AppStateService.ModelPath))
+        {
+            OnPropertyChanged(nameof(ModelPath));
+        }
     }
 
     partial void OnConfidenceThresholdChanged(double value) => UpdateFilteredDetections();
@@ -149,14 +169,18 @@ public partial class ProcessingViewModel : ObservableObject
         {
             _setStatus("Loading BirdNet model...");
             await _birdNetService.LoadModelAsync(path);
-            ModelPath = path;
-            IsModelLoaded = _birdNetService.IsModelLoaded;
+
+            // Single writer: AppStateService. Both ViewModels project from it.
+            _appState.ApplyModelLoaded(path);
+            _configService.BirdNetModelPath = path;
+            _configService.Save();
+
             _setStatus("BirdNet model loaded");
         }
         catch (Exception ex)
         {
             _setStatus($"Failed to load model: {ex.Message}");
-            IsModelLoaded = false;
+            _appState.ApplyModelUnloaded();
         }
     }
 

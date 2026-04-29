@@ -18,6 +18,7 @@
 
 using System;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.Threading;
@@ -79,12 +80,11 @@ public partial class SingleAnalysisViewModel : ObservableObject
     [NotifyCanExecuteChangedFor(nameof(AnalyzeCommand))]
     private bool _isAnalyzing;
 
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(AnalyzeCommand))]
-    private bool _isModelLoaded;
+    /// <summary>Projection of <see cref="AppStateService.IsModelLoaded"/> — single source of truth.</summary>
+    public bool IsModelLoaded => _appState.IsModelLoaded;
 
-    [ObservableProperty]
-    private string _modelPath = string.Empty;
+    /// <summary>Projection of <see cref="AppStateService.ModelPath"/> — single source of truth.</summary>
+    public string ModelPath => _appState.ModelPath;
 
     [ObservableProperty]
     private double _confidenceThreshold = 0.5;
@@ -138,13 +138,23 @@ public partial class SingleAnalysisViewModel : ObservableObject
         _bearingService = new StereoBearingService(audioFileService);
         _setStatus = msg => StatusMessage = msg;
 
-        // Sync from service in case model was already loaded elsewhere
-        IsModelLoaded = _birdNetService.IsModelLoaded;
-        if (_birdNetService.ModelPath != null)
-            ModelPath = _birdNetService.ModelPath;
+        _appState.PropertyChanged += OnAppStateChanged;
 
         // Try restoring model from saved config
         _ = TryAutoLoadModelAsync();
+    }
+
+    private void OnAppStateChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(AppStateService.IsModelLoaded))
+        {
+            OnPropertyChanged(nameof(IsModelLoaded));
+            AnalyzeCommand.NotifyCanExecuteChanged();
+        }
+        else if (e.PropertyName == nameof(AppStateService.ModelPath))
+        {
+            OnPropertyChanged(nameof(ModelPath));
+        }
     }
 
     private async Task TryAutoLoadModelAsync()
@@ -158,15 +168,12 @@ public partial class SingleAnalysisViewModel : ObservableObject
         {
             _setStatus("Loading saved BirdNet model...");
             await _birdNetService.LoadModelAsync(savedPath);
-            ModelPath = savedPath;
-            IsModelLoaded = _birdNetService.IsModelLoaded;
-            _appState.IsModelLoaded = IsModelLoaded;
-            _appState.ModelPath = savedPath;
+            _appState.ApplyModelLoaded(savedPath);
             _setStatus("BirdNet model loaded from saved path");
         }
-        catch
+        catch (Exception ex)
         {
-            _setStatus("Saved model could not be loaded — use Load Model to pick a new one");
+            _setStatus($"Saved model could not be loaded ({ex.Message}) — use Load Model to pick a new one");
         }
     }
 
@@ -244,21 +251,18 @@ public partial class SingleAnalysisViewModel : ObservableObject
         {
             _setStatus("Loading BirdNet model...");
             await _birdNetService.LoadModelAsync(path);
-            ModelPath = path;
-            IsModelLoaded = _birdNetService.IsModelLoaded;
 
-            // Persist to config and update shared state
+            // Single writer: AppStateService. Both ViewModels project from it.
+            _appState.ApplyModelLoaded(path);
             _configService.BirdNetModelPath = path;
             _configService.Save();
-            _appState.IsModelLoaded = IsModelLoaded;
-            _appState.ModelPath = path;
 
             _setStatus("BirdNet model loaded");
         }
         catch (Exception ex)
         {
             _setStatus($"Failed to load model: {ex.Message}");
-            IsModelLoaded = false;
+            _appState.ApplyModelUnloaded();
         }
     }
 
