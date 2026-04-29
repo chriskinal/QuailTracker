@@ -29,6 +29,11 @@ public partial class App : Application
     public override void Initialize()
     {
         AvaloniaXamlLoader.Load(this);
+        // DevTools is attached via .WithDeveloperTools() in Program.cs — that
+        // call internally invokes AttachDeveloperTools(). Calling it again
+        // here would throw "DeveloperTools was already set". This may need
+        // revisiting if AvaloniaUI.DiagnosticsSupport changes the contract
+        // in a future bump.
     }
 
     public override void OnFrameworkInitializationCompleted()
