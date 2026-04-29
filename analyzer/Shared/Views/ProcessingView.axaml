@@ -199,6 +199,7 @@
                     <DataGridTextColumn Header="Station" Binding="{Binding StationId}" Width="*" IsReadOnly="True" />
                     <DataGridTextColumn Header="Time" Binding="{Binding Timestamp, StringFormat='{}{0:HH:mm:ss}'}" Width="*" IsReadOnly="True" />
                     <DataGridTextColumn Header="Offset" Binding="{Binding OffsetSeconds, StringFormat='{}{0:F1}s'}" Width="*" IsReadOnly="True" />
+                    <DataGridTextColumn Header="Bearing" Binding="{Binding BearingDisplay}" Width="70" IsReadOnly="True" />
                 </DataGrid.Columns>
             </DataGrid>
 

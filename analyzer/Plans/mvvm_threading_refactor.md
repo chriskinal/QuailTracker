@@ -422,7 +422,7 @@ Each finding from the audits maps to a phase:
 | MVVM-M1         | 5     | TODO   |
 | MVVM-M2         | 5     | TODO   |
 | MVVM-M3         | 5     | TODO   |
-| MVVM-M4         | 2     | TODO   |
+| MVVM-M4         | 2     | DONE   |
 | MVVM-L1         | 6     | TODO   |
 | MVVM-L2         | 6     | TODO   |
 | Threading-C1    | 1     | DONE   |
