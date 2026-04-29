@@ -420,8 +420,11 @@ void writeFlacVorbisComment(FIL *fp)
     memcpy(&buf[pos], vendor, vlen);
     pos += vlen;
 
-    /* Build comment strings */
-    char tags[12][80];
+    /* Build comment strings.
+     * Worst case is 13 tags (DATE+LOCATION+STATION_ID+ARTIST+ENCODER+SAMPLERATE
+     * +MIC_HEADING+TEMP+HUMIDITY+PPS_SYNC_UTC+PPS_SYNC_SAMPLE+PPS_EDGES+
+     * PPS_SAMPLE_RATE). Size with headroom; bump if you add more. */
+    char tags[16][80];
     int ntags = 0;
 
     if (recHasGps) {
