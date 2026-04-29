@@ -186,21 +186,51 @@ away, the Plans/ folder gets this doc updated with DONE markers per phase,
 and the analyzer is on a maintained Avalonia line with its map feature
 finally turned on.
 
-## Open questions to resolve before starting
+## Open questions resolved during execution
 
-1. Does `Avalonia.Svg.Skia` have a 12.x release? (Look on NuGet before
-   Phase B.)
-2. Does `cesium.html` reference local assets (`./js/...`, `./assets/...`)
-   that need a custom URI scheme, or is everything CDN/inline? (Read the
-   file before Phase D.)
-3. Deployment platform — macOS only, or Windows + Linux too? Affects how
-   strict we need to be about Linux WPE prerequisites.
+1. **Avalonia.Svg.Skia 12.x release?** No. Latest is 11.3.0 from
+   `wieslawsoltes`. Same author shipped `Svg.Controls.Skia.Avalonia`
+   12.0.0.5 which keeps the `Avalonia.Svg.Skia` namespace internally,
+   so XAML didn't need to change. Swapped in Phase B.
+2. **`cesium.html` asset references?** All CDN — Cesium JS + CSS from
+   `cesium.com/downloads/cesiumjs/...`. SVG icons inlined as data URLs.
+   No local-asset interception needed. Plain `NavigateToString` works.
+3. **Deployment platform?** macOS in current use. Windows/Linux support
+   not explicitly tested but the WebView abstraction covers both.
+
+## Surprises encountered
+
+- **`AvaloniaUI.DiagnosticsSupport` 2.1.1 (pre-Phase-B)**:
+  `.WithDeveloperTools()` already calls `AttachDeveloperTools()` internally;
+  adding the second call as the migration MCP suggested throws
+  "DeveloperTools was already set". Documented at the call site for the
+  next bump.
+- **WKWebView + `NavigateToString` injection timing**: Avalonia injects
+  `invokeCSharpAction` at `NavigationCompleted`, which is *after* the
+  page's synchronous script runs. Page-end calls to `invokeCSharpAction`
+  fail; calls from event handlers (running later) work fine. We use
+  `NavigationCompleted` as a fallback signal in `MapService` and the
+  page's mapReady call is now guarded with `typeof === 'function'`.
+- **Tab virtualization tears down the WebView's native handle**: leaving
+  the Map tab destroys the WKWebView; subsequent `InvokeScript` from
+  `CollectionChanged` handlers throws and crashes the app. `MapService`
+  now catches and resets `_isInitialized`, and on tab return
+  `NavigationCompleted` re-fires `MapReady` → `RefreshMapAsync`
+  re-syncs. Self-healing, but each tab visit reloads Cesium from CDN.
+- **Cesium ion token**: the original Phase D plan assumed users would
+  configure a free ion token. Replaced with Google's open hybrid satellite
+  tile endpoint (matching the Bing Virtual Earth pattern AgValoniaGPS3
+  uses) — zero-config, no signup, no UI.
+- **macOS DevTools**: `EnableDevTools = true` works but Web Inspector
+  opens in Safari's Develop menu, not via right-click. Confused us
+  briefly; fix is just "open Safari, enable Develop menu."
 
 ## Tracking
 
-| Phase | Focus | Status |
-|-------|-------|--------|
-| A | Drop ReactiveUI, validate diagnostics | TODO |
-| B | Avalonia 11.2 → 12.x | TODO |
-| C | NativeWebView host | TODO |
-| D | Real MapService + JS interop | TODO |
+| Phase | Focus | Status | Commit |
+|-------|-------|--------|--------|
+| A | Drop ReactiveUI, validate diagnostics | DONE | `21f5239` |
+| B | Avalonia 11.2 → 12.x | DONE | `93098ce` |
+| C | NativeWebView host | DONE | `9f6b29c` |
+| D | Real MapService + JS interop | DONE | `ba4bbc4` |
+| D follow-up | Google tiles instead of ion | DONE | `75c261c` |
