@@ -2257,7 +2257,11 @@ static void configSetDefaults(device_config_t *c)
     memset(c, 0xFF, sizeof(*c));  /* match erased flash */
     c->magic = CONFIG_MAGIC;
     c->version = CONFIG_VERSION;
-    strncpy(c->stationId, "QT001", sizeof(c->stationId));
+    /* Per-unit default derived from STM32U5 96-bit unique ID so unprovisioned
+     * boards don't collide on the BLE/WiFi name. User can still rename via app. */
+    uint32_t uid = HAL_GetUIDw0() ^ HAL_GetUIDw1() ^ HAL_GetUIDw2();
+    snprintf(c->stationId, sizeof(c->stationId), "QT_%04lX",
+             (unsigned long)(uid & 0xFFFFu));
     c->gain = 6;  /* 6 dB default */
     c->bpfLow = 150;
     c->bpfHigh = 8000;
