@@ -19,6 +19,15 @@
 <body>
     <div id="cesiumContainer"></div>
     <script>
+        // Capture any uncaught JS error so the C# side can surface it via
+        // a probe (window.__lastError) when DevTools is awkward to attach.
+        window.__lastError = '(none)';
+        window.onerror = function (msg, src, line, col, err) {
+            window.__lastError = msg + ' @ ' + src + ':' + line + ':' + col +
+                (err && err.stack ? '\n' + err.stack : '');
+            return false;
+        };
+
         // User should set their own Cesium ion access token
         // Get one free at https://cesium.com/ion/tokens
         Cesium.Ion.defaultAccessToken = 'YOUR_CESIUM_ION_TOKEN';
@@ -248,7 +257,8 @@
             }
         }
 
-        // Event handlers
+        // Event handlers — `invokeCSharpAction` is injected by Avalonia's
+        // NativeWebView so the message reaches MapService.WebMessageReceived.
         viewer.selectedEntityChanged.addEventListener(entity => {
             if (entity) {
                 const type = entity.properties?.type?.getValue();
@@ -265,12 +275,21 @@
                     msg.localizationId = entity.properties.localizationId.getValue();
                 }
 
-                window.postMessage(msg, '*');
+                invokeCSharpAction(JSON.stringify(msg));
             }
         });
 
-        // Notify parent that map is ready
-        window.postMessage({ type: 'mapReady' }, '*');
+        // Notify parent that map is ready.
+        // Note: on WKWebView (macOS) when loaded via NavigateToString,
+        // `invokeCSharpAction` is injected at NavigationCompleted — which
+        // is AFTER this script finishes synchronous execution. So this
+        // call may fail on initial load; the C# side falls back to
+        // NavigationCompleted to fire MapReady. Subsequent calls (e.g.
+        // from event handlers) work fine because by then the helper is
+        // available. The guard below avoids a spurious uncaught error.
+        if (typeof invokeCSharpAction === 'function') {
+            invokeCSharpAction(JSON.stringify({ type: 'mapReady' }));
+        }
     </script>
 </body>
 </html>

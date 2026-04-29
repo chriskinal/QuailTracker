@@ -19,6 +19,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Avalonia.Controls;
 using QuailTracker.Analyzer.Shared.Models;
 
 namespace QuailTracker.Analyzer.Shared.Services;
@@ -51,7 +52,7 @@ public interface IMapService
     /// <summary>
     /// Initializes the Cesium viewer in the WebView.
     /// </summary>
-    Task InitializeAsync(object webView);
+    Task InitializeAsync(NativeWebView webView);
 
     /// <summary>
     /// Adds or updates station markers on the map.

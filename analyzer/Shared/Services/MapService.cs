@@ -18,20 +18,26 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Avalonia.Controls;
 using QuailTracker.Analyzer.Shared.Models;
 
 namespace QuailTracker.Analyzer.Shared.Services;
 
 /// <summary>
-/// Service for Cesium map visualization via WebView interop.
-/// This is a stub implementation - actual WebView integration depends on platform.
+/// Cesium map visualization backed by Avalonia's NativeWebView.
+/// Loads the embedded WebContent/cesium.html at startup and exposes a
+/// thin C#-side wrapper over the JS API defined in that file. Click events
+/// flow back via NativeWebView.WebMessageReceived (JS calls
+/// <c>invokeCSharpAction(JSON.stringify(msg))</c>).
 /// </summary>
 public class MapService : IMapService
 {
-    private object? _webView;
+    private NativeWebView? _webView;
     private bool _isInitialized;
 
     public event EventHandler? MapReady;
@@ -39,19 +45,124 @@ public class MapService : IMapService
     public event EventHandler<Guid>? DetectionClicked;
     public event EventHandler<Guid>? LocalizationClicked;
 
-    public async Task InitializeAsync(object webView)
+    public Task InitializeAsync(NativeWebView webView)
     {
+        if (_webView != null) return Task.CompletedTask;
+
         _webView = webView;
+        _webView.WebMessageReceived += OnWebMessageReceived;
+        _webView.NavigationStarted += (_, _) =>
+            Console.WriteLine("[MapService] NavigationStarted");
+        _webView.NavigationCompleted += OnNavigationCompleted;
 
-        // In actual implementation, this would:
-        // 1. Load Cesium HTML/JS into WebView
-        // 2. Set up message passing for events
-        // 3. Wait for Cesium to initialize
+        var html = LoadCesiumHtml();
+        Console.WriteLine($"[MapService] Loaded cesium.html ({html.Length} bytes); calling NavigateToString");
+        _webView.NavigateToString(html);
 
-        await Task.Delay(100); // Simulate initialization
+        // MapReady is raised when the JS sends `{"type":"mapReady"}` (preferred),
+        // or — as a fallback — when NavigationCompleted fires. The fallback
+        // ensures the WebView surface becomes visible even if Cesium throws
+        // (e.g., bad ion token) so DevTools is reachable for debugging.
+        return Task.CompletedTask;
+    }
 
+    private async void OnNavigationCompleted(object? sender, Avalonia.Controls.WebViewNavigationCompletedEventArgs e)
+    {
+        Console.WriteLine($"[MapService] NavigationCompleted (success={e.IsSuccess})");
+
+        if (_webView != null)
+        {
+            try
+            {
+                var hasHelper = await _webView.InvokeScript("typeof invokeCSharpAction");
+                Console.WriteLine($"[MapService] typeof invokeCSharpAction = {hasHelper}");
+
+                var hasViewer = await _webView.InvokeScript("typeof Cesium !== 'undefined' && typeof viewer !== 'undefined'");
+                Console.WriteLine($"[MapService] Cesium+viewer ready = {hasViewer}");
+
+                var lastError = await _webView.InvokeScript("(window.__lastError||'(none)')");
+                Console.WriteLine($"[MapService] window.__lastError = {lastError}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[MapService] InvokeScript probe failed: {ex.Message}");
+            }
+        }
+
+        if (_isInitialized) return;
+        // Fallback path — JS mapReady didn't arrive. Surface the WebView anyway
+        // so the user (and DevTools) can see what's happening.
         _isInitialized = true;
         MapReady?.Invoke(this, EventArgs.Empty);
+    }
+
+    private static string LoadCesiumHtml()
+    {
+        var assembly = typeof(MapService).Assembly;
+        const string resourceName = "QuailTracker.Analyzer.Shared.WebContent.cesium.html";
+        using var stream = assembly.GetManifestResourceStream(resourceName)
+            ?? throw new InvalidOperationException(
+                $"Embedded resource '{resourceName}' not found. Check csproj <EmbeddedResource>.");
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
+    private void OnWebMessageReceived(object? sender, Avalonia.Controls.WebMessageReceivedEventArgs e)
+    {
+        if (string.IsNullOrEmpty(e.Body)) return;
+
+        Console.WriteLine($"[MapService] WebMessage: {e.Body}");
+
+        try
+        {
+            using var doc = JsonDocument.Parse(e.Body);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("type", out var typeElement)) return;
+            var type = typeElement.GetString();
+
+            switch (type)
+            {
+                case "mapReady":
+                    if (_isInitialized) return;
+                    _isInitialized = true;
+                    MapReady?.Invoke(this, EventArgs.Empty);
+                    break;
+
+                case "entitySelected":
+                    DispatchEntitySelected(root);
+                    break;
+            }
+        }
+        catch (JsonException)
+        {
+            // Ignore malformed messages — JS is the only sender, but defensive.
+        }
+    }
+
+    private void DispatchEntitySelected(JsonElement msg)
+    {
+        if (!msg.TryGetProperty("entityType", out var entityTypeElement)) return;
+        var entityType = entityTypeElement.GetString();
+
+        switch (entityType)
+        {
+            case "station":
+                if (msg.TryGetProperty("stationId", out var sid))
+                    StationClicked?.Invoke(this, sid.GetString() ?? string.Empty);
+                break;
+
+            case "detection":
+                if (msg.TryGetProperty("detectionId", out var did) &&
+                    Guid.TryParse(did.GetString(), out var detectionGuid))
+                    DetectionClicked?.Invoke(this, detectionGuid);
+                break;
+
+            case "localization":
+                if (msg.TryGetProperty("localizationId", out var lid) &&
+                    Guid.TryParse(lid.GetString(), out var localizationGuid))
+                    LocalizationClicked?.Invoke(this, localizationGuid);
+                break;
+        }
     }
 
     public async Task SetStationsAsync(IReadOnlyList<Station> stations)
@@ -160,132 +271,26 @@ public class MapService : IMapService
         await ExecuteJsAsync($"highlightEntity({JsonString(id)})");
     }
 
-    private Task ExecuteJsAsync(string script)
+    private async Task ExecuteJsAsync(string script)
     {
-        // Stub - actual implementation would execute JS in WebView
-        // Example for different platforms:
-        // - Avalonia.HtmlRenderer: webView.EvaluateJavaScript(script)
-        // - WebView2: webView.ExecuteScriptAsync(script)
-        return Task.CompletedTask;
+        if (_webView == null || !_isInitialized) return;
+        try
+        {
+            await _webView.InvokeScript(script);
+        }
+        catch (Exception ex)
+        {
+            // Common cause: TabControl unrealized the MapView while we were
+            // away on another tab, the native WKWebView handle got torn down,
+            // and InvokeScript can't run against a non-existent page. Reset
+            // _isInitialized so subsequent calls early-exit cleanly; the next
+            // NavigationCompleted (when the user returns) re-fires MapReady,
+            // and MapViewModel's handler triggers a full RefreshMapAsync.
+            Console.WriteLine($"[MapService] InvokeScript failed: {ex.Message}");
+            _isInitialized = false;
+        }
     }
 
     private static string JsonBool(bool value) => value ? "true" : "false";
     private static string JsonString(string value) => value == "null" ? "null" : $"\"{value}\"";
-
-    /// <summary>
-    /// Gets the embedded Cesium HTML content for initialization.
-    /// </summary>
-    public static string GetCesiumHtml()
-    {
-        return """
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="utf-8">
-                <script src="https://cesium.com/downloads/cesiumjs/releases/1.119/Build/Cesium/Cesium.js"></script>
-                <link href="https://cesium.com/downloads/cesiumjs/releases/1.119/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
-                <style>
-                    html, body, #cesiumContainer { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; }
-                </style>
-            </head>
-            <body>
-                <div id="cesiumContainer"></div>
-                <script>
-                    // Initialize Cesium with default ion token (user should provide their own)
-                    Cesium.Ion.defaultAccessToken = 'YOUR_CESIUM_ION_TOKEN';
-
-                    const viewer = new Cesium.Viewer('cesiumContainer', {
-                        terrain: Cesium.Terrain.fromWorldTerrain(),
-                        baseLayerPicker: false,
-                        geocoder: false,
-                        homeButton: false,
-                        sceneModePicker: false,
-                        navigationHelpButton: false,
-                        animation: false,
-                        timeline: false,
-                        fullscreenButton: false
-                    });
-
-                    const stationEntities = new Cesium.EntityCollection();
-                    const detectionEntities = new Cesium.EntityCollection();
-                    const localizationEntities = new Cesium.EntityCollection();
-
-                    function setStations(stations) {
-                        stationEntities.removeAll();
-                        stations.forEach(s => {
-                            stationEntities.add({
-                                id: 'station_' + s.id,
-                                position: Cesium.Cartesian3.fromDegrees(s.lon, s.lat, s.elevation),
-                                point: { pixelSize: 12, color: Cesium.Color.BLUE },
-                                label: { text: s.name || s.id, font: '12px sans-serif', verticalOrigin: Cesium.VerticalOrigin.BOTTOM, pixelOffset: new Cesium.Cartesian2(0, -15) }
-                            });
-                        });
-                        viewer.entities.add(stationEntities);
-                    }
-
-                    function setDetections(detections) {
-                        detectionEntities.removeAll();
-                        detections.forEach(d => {
-                            detectionEntities.add({
-                                id: 'detection_' + d.id,
-                                position: Cesium.Cartesian3.fromDegrees(d.lon, d.lat),
-                                point: { pixelSize: 8, color: Cesium.Color.YELLOW.withAlpha(d.confidence) }
-                            });
-                        });
-                        viewer.entities.add(detectionEntities);
-                    }
-
-                    function setLocalizations(localizations) {
-                        localizationEntities.removeAll();
-                        localizations.forEach(l => {
-                            localizationEntities.add({
-                                id: 'localization_' + l.id,
-                                position: Cesium.Cartesian3.fromDegrees(l.lon, l.lat),
-                                point: { pixelSize: 14, color: Cesium.Color.RED },
-                                ellipse: {
-                                    semiMajorAxis: l.ellipseMajor,
-                                    semiMinorAxis: l.ellipseMinor,
-                                    rotation: Cesium.Math.toRadians(l.ellipseRotation),
-                                    material: Cesium.Color.RED.withAlpha(0.3),
-                                    outline: true,
-                                    outlineColor: Cesium.Color.RED
-                                }
-                            });
-                        });
-                        viewer.entities.add(localizationEntities);
-                    }
-
-                    function clearAll() {
-                        stationEntities.removeAll();
-                        detectionEntities.removeAll();
-                        localizationEntities.removeAll();
-                    }
-
-                    function setLayerVisibility(stations, detections, localizations) {
-                        stationEntities.show = stations;
-                        detectionEntities.show = detections;
-                        localizationEntities.show = localizations;
-                    }
-
-                    function flyTo(lat, lon, alt) {
-                        viewer.camera.flyTo({
-                            destination: Cesium.Cartesian3.fromDegrees(lon, lat, alt)
-                        });
-                    }
-
-                    function flyToAll() {
-                        viewer.zoomTo(viewer.entities);
-                    }
-
-                    function highlightEntity(id) {
-                        viewer.selectedEntity = viewer.entities.getById(id);
-                    }
-
-                    // Notify parent that map is ready
-                    window.postMessage({ type: 'mapReady' }, '*');
-                </script>
-            </body>
-            </html>
-            """;
-    }
 }
