@@ -41,7 +41,7 @@
 #include "spi_protocol.h"
 
 #define TAG "BRIDGE"
-#define ESP_FW_VERSION "0.2.0"
+#define ESP_FW_VERSION "0.2.1"
 
 /* ── Power State ───────────────────────────────────────────────── */
 
@@ -168,8 +168,26 @@ static bool cmd_dequeue(qt_spi_cmd_t *out)
 
 /* ── WiFi AP Config ────────────────────────────────────────────── */
 
-#define WIFI_CHANNEL   6
 #define MAX_CONNECTIONS 4
+
+/* Pick a non-overlapping 2.4 GHz channel from {1, 6, 11} based on the
+ * SoftAP MAC. Deterministic per device, spreads units across channels
+ * without an RF survey. */
+static uint8_t wifi_pick_channel(void)
+{
+    static uint8_t cached = 0;
+    if (cached) return cached;
+    uint8_t mac[6];
+    if (esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP) == ESP_OK) {
+        static const uint8_t ch_set[] = {1, 6, 11};
+        /* XOR only the NIC-unique bytes; OUI is constant across Espressif parts. */
+        uint8_t h = mac[3] ^ mac[4] ^ mac[5];
+        cached = ch_set[h % 3];
+    } else {
+        cached = 6;
+    }
+    return cached;
+}
 
 /* Device name — used for both WiFi SSID and BLE name.
  * Default: "QT_XXXX" where XXXX = last 4 hex digits of MAC.
@@ -952,7 +970,7 @@ static void wifi_start(void)
 
     wifi_config_t wifi_config = {
         .ap = {
-            .channel = WIFI_CHANNEL,
+            .channel = wifi_pick_channel(),
             .authmode = WIFI_AUTH_OPEN,
             .max_connection = MAX_CONNECTIONS,
         },
@@ -965,7 +983,8 @@ static void wifi_start(void)
     ESP_ERROR_CHECK(esp_wifi_start());
 
     wifi_started = true;
-    ESP_LOGI(TAG, "WiFi AP started: SSID=%s, http://192.168.9.1", device_name);
+    ESP_LOGI(TAG, "WiFi AP started: SSID=%s, ch=%u, http://192.168.9.1",
+             device_name, wifi_pick_channel());
 }
 
 /* Load device name from NVS. Returns true if found. */
@@ -1060,7 +1079,7 @@ static void update_device_name(const char *name)
     if (wifi_started) {
         wifi_config_t wifi_config = {
             .ap = {
-                .channel = WIFI_CHANNEL,
+                .channel = wifi_pick_channel(),
                 .authmode = WIFI_AUTH_OPEN,
                 .max_connection = MAX_CONNECTIONS,
             },
