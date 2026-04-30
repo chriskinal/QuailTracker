@@ -1,0 +1,195 @@
+<!--
+QuailTracker - GPS-synchronized Autonomous Recording Unit
+Copyright (C) 2026 QuailTracker Project
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+-->
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:QuailTracker.Analyzer.Shared.ViewModels"
+             x:Class="QuailTracker.Analyzer.Shared.Views.XenoCantoDownloadView"
+             x:DataType="vm:XenoCantoDownloadViewModel">
+
+    <Expander Header="Download clips from xeno-canto"
+              IsExpanded="False">
+        <Grid ColumnDefinitions="*,*" Margin="0,8,0,0" Height="460">
+
+            <!-- Form (left) -->
+            <ScrollViewer Grid.Column="0"
+                          HorizontalScrollBarVisibility="Disabled"
+                          VerticalScrollBarVisibility="Auto"
+                          Margin="0,0,8,0">
+            <StackPanel Spacing="8">
+
+                <!-- Container reachability strip -->
+                <Border Classes="StatusBox">
+                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <Ellipse Width="10" Height="10"
+                                 Fill="#4CAF50"
+                                 IsVisible="{Binding IsContainerReachable}"
+                                 VerticalAlignment="Center" />
+                        <Ellipse Width="10" Height="10"
+                                 Fill="#F44336"
+                                 IsVisible="{Binding !IsContainerReachable}"
+                                 VerticalAlignment="Center" />
+                        <TextBlock Text="Connected"
+                                   IsVisible="{Binding IsContainerReachable}"
+                                   VerticalAlignment="Center"
+                                   Foreground="#4CAF50"
+                                   FontWeight="SemiBold" />
+                        <TextBlock Text="Not reachable"
+                                   IsVisible="{Binding !IsContainerReachable}"
+                                   VerticalAlignment="Center"
+                                   Foreground="#F44336"
+                                   FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding ContainerEndpoint}"
+                                   VerticalAlignment="Center"
+                                   Foreground="#AAAAAA"
+                                   FontSize="11" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Species -->
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Species" Classes="DataLabel" />
+                    <TextBox Text="{Binding Species}"
+                             PlaceholderText="e.g. Northern Bobwhite" />
+                </StackPanel>
+
+                <!-- API key -->
+                <StackPanel Spacing="4">
+                    <TextBlock Text="xeno-canto API key" Classes="DataLabel" />
+                    <TextBox Text="{Binding ApiKey}"
+                             PasswordChar="•" />
+                    <TextBlock Text="Saved in analyzer config — entered once."
+                               Classes="DataLabel"
+                               FontSize="11" />
+                </StackPanel>
+
+                <!-- Output dir -->
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Output directory (in container)" Classes="DataLabel" />
+                    <TextBox Text="{Binding OutputDir}" />
+                </StackPanel>
+
+                <!-- Max recordings -->
+                <StackPanel Spacing="4">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0"
+                                   Text="Max recordings"
+                                   Classes="DataLabel"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1"
+                                   Text="{Binding MaxRecordings}"
+                                   Classes="DataValue" />
+                    </Grid>
+                    <Slider Value="{Binding MaxRecordings}"
+                            Minimum="10" Maximum="200"
+                            IsSnapToTickEnabled="True"
+                            TickFrequency="10" />
+                </StackPanel>
+
+                <!-- Quality -->
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Quality filter" Classes="DataLabel" />
+                    <ComboBox ItemsSource="{Binding QualityOptions}"
+                              SelectedItem="{Binding QualityMin}"
+                              HorizontalAlignment="Stretch" />
+                    <TextBlock Text="A = best only. B = A+B. C = A+B+C."
+                               Classes="DataLabel"
+                               FontSize="11" />
+                </StackPanel>
+
+                <!-- Min confidence -->
+                <StackPanel Spacing="4">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0"
+                                   Text="BirdNET min confidence"
+                                   Classes="DataLabel"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1"
+                                   Text="{Binding MinConfidence, StringFormat='{}{0:F2}'}"
+                                   Classes="DataValue" />
+                    </Grid>
+                    <Slider Value="{Binding MinConfidence}"
+                            Minimum="0.1" Maximum="0.9"
+                            TickFrequency="0.05"
+                            IsSnapToTickEnabled="True" />
+                    <TextBlock Text="Threshold for accepting a clip as a verified call."
+                               Classes="DataLabel"
+                               FontSize="11" />
+                </StackPanel>
+
+                <!-- Last error -->
+                <Border Background="#33F44336"
+                        BorderBrush="#F44336"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="8,4"
+                        IsVisible="{Binding LastError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                    <TextBlock Text="{Binding LastError}"
+                               Foreground="#FFCDD2"
+                               TextWrapping="Wrap"
+                               FontSize="12" />
+                </Border>
+
+                <!-- Actions -->
+                <Grid ColumnDefinitions="*,*" Margin="0,8,0,0">
+                    <Button Grid.Column="0"
+                            Content="Download"
+                            Classes="PrimaryButton"
+                            HorizontalAlignment="Stretch"
+                            Margin="0,0,4,0"
+                            Command="{Binding StartDownloadCommand}" />
+                    <Button Grid.Column="1"
+                            Content="Cancel"
+                            Classes="DangerButton"
+                            HorizontalAlignment="Stretch"
+                            Margin="4,0,0,0"
+                            Command="{Binding CancelCommand}" />
+                </Grid>
+            </StackPanel>
+            </ScrollViewer>
+
+            <!-- Status / log (right) -->
+            <Border Grid.Column="1"
+                    Background="#0D000000"
+                    CornerRadius="4"
+                    Margin="8,0,0,0">
+                <Grid RowDefinitions="Auto,*">
+                    <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="12" Margin="8,8,8,4">
+                        <TextBlock Text="Idle" FontWeight="SemiBold"
+                                   IsVisible="{Binding !IsRunning}" />
+                        <TextBlock Text="Running" FontWeight="SemiBold"
+                                   Foreground="#4CAF50"
+                                   IsVisible="{Binding IsRunning}" />
+                    </StackPanel>
+                    <ScrollViewer Grid.Row="1"
+                                  HorizontalScrollBarVisibility="Auto"
+                                  VerticalScrollBarVisibility="Auto">
+                        <TextBox Text="{Binding LogTail, Mode=OneWay}"
+                                 IsReadOnly="True"
+                                 AcceptsReturn="True"
+                                 TextWrapping="NoWrap"
+                                 FontFamily="Menlo,Consolas,monospace"
+                                 FontSize="12"
+                                 Background="Transparent"
+                                 BorderThickness="0"
+                                 MinHeight="220" />
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </Grid>
+    </Expander>
+</UserControl>

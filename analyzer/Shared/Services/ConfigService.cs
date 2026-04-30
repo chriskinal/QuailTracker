@@ -41,6 +41,8 @@ public class ConfigService
 
     public string? BirdNetModelPath { get; set; }
 
+    public string? XenoCantoApiKey { get; set; }
+
     // Window bounds — null means use XAML defaults
     public double? WindowX { get; set; }
     public double? WindowY { get; set; }

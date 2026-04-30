@@ -86,6 +86,12 @@ public partial class MainWindowViewModel : ObservableObject
     private TrainingDataViewModel _trainingDataViewModel;
 
     [ObservableProperty]
+    private ModelingTrainingViewModel _modelingTrainingViewModel;
+
+    [ObservableProperty]
+    private XenoCantoDownloadViewModel _xenoCantoDownloadViewModel;
+
+    [ObservableProperty]
     private MapViewModel _mapViewModel;
 
     public MainWindowViewModel()
@@ -97,6 +103,7 @@ public partial class MainWindowViewModel : ObservableObject
             new KmlExportService(),
             new PopulationService(),
             new WeatherService(),
+            new TrainingService(),
             ConfigService.Load(),
             new AppStateService())
     {
@@ -110,6 +117,7 @@ public partial class MainWindowViewModel : ObservableObject
         IKmlExportService kmlExportService,
         IPopulationService populationService,
         IWeatherService weatherService,
+        ITrainingService trainingService,
         ConfigService configService,
         AppStateService appState)
     {
@@ -143,6 +151,10 @@ public partial class MainWindowViewModel : ObservableObject
             audioFileService,
             AudioFiles,
             Detections);
+
+        _modelingTrainingViewModel = new ModelingTrainingViewModel(trainingService);
+
+        _xenoCantoDownloadViewModel = new XenoCantoDownloadViewModel(trainingService, configService);
 
         _localizationViewModel = new LocalizationViewModel(
             tdoaService,

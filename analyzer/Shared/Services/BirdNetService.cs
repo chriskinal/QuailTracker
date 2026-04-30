@@ -51,6 +51,14 @@ public class BirdNetService : IBirdNetService
         {
             ct.ThrowIfCancellationRequested();
 
+            if (!File.Exists(modelPath))
+            {
+                throw new FileNotFoundException(
+                    $"BirdNet model not found at '{modelPath}'. " +
+                    "Use Load Model... to pick a new location.",
+                    modelPath);
+            }
+
             // Validate labels BEFORE touching session state. If the labels file
             // is missing, fail loud and leave any previously-loaded model intact.
             // (Silently setting _labels = null is what produced the
@@ -59,9 +67,9 @@ public class BirdNetService : IBirdNetService
             if (labels == null)
             {
                 throw new InvalidOperationException(
-                    $"Labels file not found for model at '{modelPath}'. " +
+                    $"Labels file not found alongside '{modelPath}'. " +
                     "Expected BirdNET_GLOBAL_6K_V2.4_Labels.txt (or similar) " +
-                    "in the same directory.");
+                    "in the same directory as the model.");
             }
 
             _session?.Dispose();

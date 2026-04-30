@@ -1,0 +1,214 @@
+<!--
+QuailTracker - GPS-synchronized Autonomous Recording Unit
+Copyright (C) 2026 QuailTracker Project
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+-->
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:QuailTracker.Analyzer.Shared.ViewModels"
+             x:Class="QuailTracker.Analyzer.Shared.Views.ModelingTrainingView"
+             x:DataType="vm:ModelingTrainingViewModel">
+
+    <Grid ColumnDefinitions="420,*" Margin="8">
+
+        <!-- Hyperparameter form -->
+        <Border Grid.Column="0"
+                Classes="CardPanel"
+                Margin="0,0,8,0">
+            <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+                <StackPanel Spacing="12">
+
+                    <!-- Container reachability -->
+                    <Border Classes="StatusBox">
+                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                            <Ellipse Width="10" Height="10"
+                                     Fill="#4CAF50"
+                                     IsVisible="{Binding IsContainerReachable}"
+                                     VerticalAlignment="Center" />
+                            <Ellipse Width="10" Height="10"
+                                     Fill="#F44336"
+                                     IsVisible="{Binding !IsContainerReachable}"
+                                     VerticalAlignment="Center" />
+                            <TextBlock Text="Connected"
+                                       IsVisible="{Binding IsContainerReachable}"
+                                       VerticalAlignment="Center"
+                                       Foreground="#4CAF50"
+                                       FontWeight="SemiBold" />
+                            <TextBlock Text="Not reachable"
+                                       IsVisible="{Binding !IsContainerReachable}"
+                                       VerticalAlignment="Center"
+                                       Foreground="#F44336"
+                                       FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding ContainerEndpoint}"
+                                       VerticalAlignment="Center"
+                                       Foreground="#AAAAAA"
+                                       FontSize="11" />
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock Text="Hyperparameters" Classes="SectionHeader" />
+
+                    <!-- Data dir -->
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Data directory" Classes="DataLabel" />
+                        <TextBox Text="{Binding DataDir}" />
+                        <TextBlock Text="Container path with species subdirectories of WAV clips."
+                                   Classes="DataLabel"
+                                   FontSize="11" />
+                    </StackPanel>
+
+                    <!-- Output dir -->
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Output directory" Classes="DataLabel" />
+                        <TextBox Text="{Binding OutputDir}" />
+                        <TextBlock Text="Where the trained model and exported files are saved."
+                                   Classes="DataLabel"
+                                   FontSize="11" />
+                    </StackPanel>
+
+                    <!-- Epochs -->
+                    <StackPanel Spacing="4">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Grid.Column="0" Text="Epochs" Classes="DataLabel" VerticalAlignment="Center" />
+                            <TextBlock Grid.Column="1" Text="{Binding Epochs}" Classes="DataValue" />
+                        </Grid>
+                        <Slider Value="{Binding Epochs}"
+                                Minimum="5" Maximum="200"
+                                IsSnapToTickEnabled="True"
+                                TickFrequency="1" />
+                        <TextBlock Text="Stops early if no improvement."
+                                   Classes="DataLabel"
+                                   FontSize="11" />
+                    </StackPanel>
+
+                    <!-- Batch size -->
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Batch size" Classes="DataLabel" />
+                        <ComboBox ItemsSource="{Binding BatchSizeOptions}"
+                                  SelectedItem="{Binding BatchSize}"
+                                  HorizontalAlignment="Stretch" />
+                    </StackPanel>
+
+                    <!-- Augment -->
+                    <CheckBox Content="Enable augmentation"
+                              IsChecked="{Binding Augment}" />
+
+                    <!-- Last error -->
+                    <Border Background="#33F44336"
+                            BorderBrush="#F44336"
+                            BorderThickness="1"
+                            CornerRadius="4"
+                            Padding="8,4"
+                            IsVisible="{Binding LastError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                        <TextBlock Text="{Binding LastError}"
+                                   Foreground="#FFCDD2"
+                                   TextWrapping="Wrap"
+                                   FontSize="12" />
+                    </Border>
+
+                    <!-- Action buttons -->
+                    <Grid ColumnDefinitions="*,*" Margin="0,8,0,0">
+                        <Button Grid.Column="0"
+                                Content="Start Training"
+                                Classes="PrimaryButton"
+                                HorizontalAlignment="Stretch"
+                                Margin="0,0,4,0"
+                                Command="{Binding StartTrainingCommand}" />
+                        <Button Grid.Column="1"
+                                Content="Cancel"
+                                Classes="DangerButton"
+                                HorizontalAlignment="Stretch"
+                                Margin="4,0,0,0"
+                                Command="{Binding CancelCommand}" />
+                    </Grid>
+
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <!-- Run status panel -->
+        <Border Grid.Column="1"
+                Classes="CardPanel">
+            <Grid RowDefinitions="Auto,Auto,Auto,*">
+
+                <!-- Stage / running indicator -->
+                <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="12" Margin="0,0,0,8">
+                    <TextBlock Text="Idle"
+                               FontWeight="SemiBold"
+                               IsVisible="{Binding !IsRunning}" />
+                    <TextBlock Text="Running"
+                               FontWeight="SemiBold"
+                               Foreground="#4CAF50"
+                               IsVisible="{Binding IsRunning}" />
+                    <TextBlock Text="—" Foreground="#777"
+                               IsVisible="{Binding Stage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    <TextBlock Text="{Binding Stage}"
+                               IsVisible="{Binding Stage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+
+                <!-- Epoch progress -->
+                <Grid Grid.Row="1"
+                      RowDefinitions="Auto,Auto"
+                      Margin="0,0,0,8"
+                      IsVisible="{Binding IsRunning}">
+                    <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0" Classes="DataLabel">
+                            <Run Text="Epoch " />
+                            <Run Text="{Binding CurrentEpoch}" />
+                            <Run Text=" / " />
+                            <Run Text="{Binding TotalEpochs}" />
+                        </TextBlock>
+                        <TextBlock Grid.Column="1"
+                                   Text="{Binding LatestValAuc, StringFormat='val_auc: {0:F4}'}"
+                                   Classes="DataValue"
+                                   IsVisible="{Binding LatestValAuc, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                    </Grid>
+                    <ProgressBar Grid.Row="1"
+                                 Minimum="0"
+                                 Maximum="{Binding TotalEpochs}"
+                                 Value="{Binding CurrentEpoch}"
+                                 Height="10"
+                                 Margin="0,4,0,0" />
+                </Grid>
+
+                <!-- Log header -->
+                <TextBlock Grid.Row="2"
+                           Text="Log"
+                           Classes="SectionHeader"
+                           Margin="0,4,0,4" />
+
+                <!-- Log -->
+                <Border Grid.Row="3"
+                        Background="#0D000000"
+                        CornerRadius="4"
+                        Padding="0">
+                    <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                                  VerticalScrollBarVisibility="Auto">
+                        <TextBox Text="{Binding LogTail, Mode=OneWay}"
+                                 IsReadOnly="True"
+                                 AcceptsReturn="True"
+                                 TextWrapping="NoWrap"
+                                 FontFamily="Menlo,Consolas,monospace"
+                                 FontSize="12"
+                                 Background="Transparent"
+                                 BorderThickness="0"
+                                 MinHeight="200" />
+                    </ScrollViewer>
+                </Border>
+
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

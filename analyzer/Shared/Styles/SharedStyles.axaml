@@ -248,4 +248,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
         <Setter Property="BorderBrush" Value="#DD475A6E"/>
     </Style>
 
+    <!-- App-wide: never auto-hide scrollbars. Reserves layout space so the
+         track doesn't overlay content. -->
+    <Style Selector="ScrollViewer">
+        <Setter Property="AllowAutoHide" Value="False" />
+    </Style>
+
 </Styles>

@@ -104,53 +104,16 @@
                 </TabItem.Header>
                 <TabControl Margin="0,4,0,0">
                     <TabItem Header="Data">
-                        <views:TrainingDataView DataContext="{Binding TrainingDataViewModel}" />
+                        <Grid RowDefinitions="Auto,*">
+                            <views:XenoCantoDownloadView Grid.Row="0"
+                                                         DataContext="{Binding XenoCantoDownloadViewModel}"
+                                                         Margin="8,8,8,0" />
+                            <views:TrainingDataView Grid.Row="1"
+                                                    DataContext="{Binding TrainingDataViewModel}" />
+                        </Grid>
                     </TabItem>
                     <TabItem Header="Training">
-                        <Border Padding="32" HorizontalAlignment="Center" VerticalAlignment="Center">
-                            <StackPanel Spacing="12" MaxWidth="540" HorizontalAlignment="Center">
-                                <PathIcon Data="M17,17H7V7H17M17,5H7C5.89,5 5,5.89 5,7V17A2,2 0 0,0 7,19H17A2,2 0 0,0 19,17V7C19,5.89 18.1,5 17,5Z"
-                                          Width="48" Height="48"
-                                          Foreground="#BDBDBD"
-                                          HorizontalAlignment="Center" />
-                                <TextBlock Text="Native training run UI — coming soon"
-                                           FontSize="16"
-                                           FontWeight="SemiBold"
-                                           HorizontalAlignment="Center"
-                                           Foreground="#757575" />
-                                <TextBlock Text="Will host: hyperparameter form, Start / Cancel buttons, live progress, log output. Backed by the training container's REST API at /api/train, /api/cancel, /api/progress."
-                                           TextWrapping="Wrap"
-                                           HorizontalAlignment="Center"
-                                           TextAlignment="Center"
-                                           Foreground="#9E9E9E"
-                                           FontSize="13" />
-                                <TextBlock TextWrapping="Wrap"
-                                           HorizontalAlignment="Center"
-                                           TextAlignment="Center"
-                                           Foreground="#9E9E9E"
-                                           FontSize="13"
-                                           Margin="0,8,0,0">
-                                    Until then, the container exposes a Flask web UI. Start it from the training/ directory:
-                                </TextBlock>
-                                <Border Background="#F5F5F5"
-                                        BorderBrush="#E0E0E0"
-                                        BorderThickness="1"
-                                        CornerRadius="4"
-                                        Padding="12,8">
-                                    <TextBlock Text="docker compose up"
-                                               FontFamily="Menlo,Consolas,monospace"
-                                               FontSize="13"
-                                               HorizontalAlignment="Center"
-                                               Foreground="#424242" />
-                                </Border>
-                                <TextBlock Text="Then open http://localhost:5050 in your browser."
-                                           TextWrapping="Wrap"
-                                           HorizontalAlignment="Center"
-                                           TextAlignment="Center"
-                                           Foreground="#9E9E9E"
-                                           FontSize="12" />
-                            </StackPanel>
-                        </Border>
+                        <views:ModelingTrainingView DataContext="{Binding ModelingTrainingViewModel}" />
                     </TabItem>
                     <TabItem Header="Evaluation">
                         <Border Padding="32" HorizontalAlignment="Center" VerticalAlignment="Center">
