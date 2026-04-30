@@ -45,6 +45,11 @@ public interface ITrainingService
     // in memory. destPath is overwritten if it exists.
     Task DownloadOutputAsync(string filename, string destPath, CancellationToken ct = default);
 
+    // Pulls an artifact into memory. Use only for small files that the UI
+    // needs to read directly (chart PNGs, metrics.json). Multi-MB binaries
+    // (.tflite, .onnx) should go through DownloadOutputAsync to disk.
+    Task<byte[]> DownloadOutputBytesAsync(string filename, CancellationToken ct = default);
+
     // Opens GET /api/progress as a Server-Sent Events stream and dispatches
     // parsed events through `sink` until the stream ends or `ct` cancels.
     // The Flask server runs at most one job at a time, so a single subscriber

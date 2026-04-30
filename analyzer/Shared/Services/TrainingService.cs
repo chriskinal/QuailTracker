@@ -170,6 +170,18 @@ public sealed class TrainingService : ITrainingService, IDisposable
         await src.CopyToAsync(dst, ct).ConfigureAwait(false);
     }
 
+    public async Task<byte[]> DownloadOutputBytesAsync(string filename, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(filename))
+            throw new ArgumentException("filename required", nameof(filename));
+
+        using var resp = await _http
+            .GetAsync($"/api/outputs/{Uri.EscapeDataString(filename)}", ct)
+            .ConfigureAwait(false);
+        resp.EnsureSuccessStatusCode();
+        return await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+    }
+
     public async Task StreamProgressAsync(IProgress<TrainingEvent> sink, CancellationToken ct = default)
     {
         // SSE is a long-lived GET. We can't use _http.Timeout for this — the

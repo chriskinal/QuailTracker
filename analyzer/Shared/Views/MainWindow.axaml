@@ -116,32 +116,7 @@
                         <views:ModelingTrainingView DataContext="{Binding ModelingTrainingViewModel}" />
                     </TabItem>
                     <TabItem Header="Evaluation">
-                        <Border Padding="32" HorizontalAlignment="Center" VerticalAlignment="Center">
-                            <StackPanel Spacing="12" MaxWidth="540" HorizontalAlignment="Center">
-                                <PathIcon Data="M22,21H2V3H4V19H6V10H10V19H12V14H16V19H18V12H22V21Z"
-                                          Width="48" Height="48"
-                                          Foreground="#BDBDBD"
-                                          HorizontalAlignment="Center" />
-                                <TextBlock Text="Native evaluation UI — coming soon"
-                                           FontSize="16"
-                                           FontWeight="SemiBold"
-                                           HorizontalAlignment="Center"
-                                           Foreground="#757575" />
-                                <TextBlock Text="Will host: training/validation loss and accuracy curves, AUC and confusion matrix per class, and download buttons for trained model artifacts (.tflite, .onnx). Backed by the container's /api/outputs and /api/outputs/&lt;file&gt; endpoints."
-                                           TextWrapping="Wrap"
-                                           HorizontalAlignment="Center"
-                                           TextAlignment="Center"
-                                           Foreground="#9E9E9E"
-                                           FontSize="13" />
-                                <TextBlock Text="Until then, training artifacts are written to training/output/ on disk. The Flask UI at http://localhost:5050 also lists them."
-                                           TextWrapping="Wrap"
-                                           HorizontalAlignment="Center"
-                                           TextAlignment="Center"
-                                           Foreground="#9E9E9E"
-                                           FontSize="12"
-                                           Margin="0,8,0,0" />
-                            </StackPanel>
-                        </Border>
+                        <views:ModelingEvaluationView DataContext="{Binding ModelingEvaluationViewModel}" />
                     </TabItem>
                 </TabControl>
             </TabItem>

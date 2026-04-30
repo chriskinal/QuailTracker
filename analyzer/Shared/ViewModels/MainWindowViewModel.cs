@@ -92,6 +92,9 @@ public partial class MainWindowViewModel : ObservableObject
     private XenoCantoDownloadViewModel _xenoCantoDownloadViewModel;
 
     [ObservableProperty]
+    private ModelingEvaluationViewModel _modelingEvaluationViewModel;
+
+    [ObservableProperty]
     private MapViewModel _mapViewModel;
 
     public MainWindowViewModel()
@@ -155,6 +158,8 @@ public partial class MainWindowViewModel : ObservableObject
         _modelingTrainingViewModel = new ModelingTrainingViewModel(trainingService);
 
         _xenoCantoDownloadViewModel = new XenoCantoDownloadViewModel(trainingService, configService);
+
+        _modelingEvaluationViewModel = new ModelingEvaluationViewModel(trainingService);
 
         _localizationViewModel = new LocalizationViewModel(
             tdoaService,

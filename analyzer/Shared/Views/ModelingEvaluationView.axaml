@@ -1,0 +1,161 @@
+<!--
+QuailTracker - GPS-synchronized Autonomous Recording Unit
+Copyright (C) 2026 QuailTracker Project
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+-->
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:QuailTracker.Analyzer.Shared.ViewModels"
+             x:Class="QuailTracker.Analyzer.Shared.Views.ModelingEvaluationView"
+             x:DataType="vm:ModelingEvaluationViewModel">
+
+    <Grid RowDefinitions="Auto,Auto,*" Margin="8">
+
+        <!-- Toolbar -->
+        <Border Grid.Row="0" Classes="CardPanel" Margin="0,0,0,8">
+            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*">
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" Margin="0,0,12,0">
+                    <Ellipse Width="10" Height="10" Fill="#4CAF50"
+                             IsVisible="{Binding IsContainerReachable}"
+                             VerticalAlignment="Center" />
+                    <Ellipse Width="10" Height="10" Fill="#F44336"
+                             IsVisible="{Binding !IsContainerReachable}"
+                             VerticalAlignment="Center" />
+                    <TextBlock Text="Connected" Foreground="#4CAF50" FontWeight="SemiBold"
+                               IsVisible="{Binding IsContainerReachable}" VerticalAlignment="Center" />
+                    <TextBlock Text="Not reachable" Foreground="#F44336" FontWeight="SemiBold"
+                               IsVisible="{Binding !IsContainerReachable}" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding ContainerEndpoint}"
+                               Foreground="#AAAAAA" FontSize="11" VerticalAlignment="Center" />
+                </StackPanel>
+
+                <Button Grid.Column="1"
+                        Content="Refresh"
+                        Classes="SecondaryButton"
+                        Margin="0,0,8,0"
+                        Command="{Binding RefreshCommand}" />
+                <Button Grid.Column="2"
+                        Content="Save Selected..."
+                        Classes="ToolbarButton"
+                        Margin="0,0,8,0"
+                        Click="OnSaveSelectedClick" />
+                <Button Grid.Column="3"
+                        Content="Save All..."
+                        Classes="AccentButton"
+                        Margin="0,0,8,0"
+                        Click="OnSaveAllClick" />
+                <ProgressBar Grid.Column="4"
+                             IsIndeterminate="True"
+                             Width="120" Height="4"
+                             VerticalAlignment="Center"
+                             Margin="0,0,12,0"
+                             IsVisible="{Binding IsRefreshing}" />
+                <TextBlock Grid.Column="5"
+                           Text="{Binding StatusMessage}"
+                           VerticalAlignment="Center"
+                           Foreground="#AAAAAA"
+                           TextTrimming="CharacterEllipsis" />
+            </Grid>
+        </Border>
+
+        <!-- Last error -->
+        <Border Grid.Row="1"
+                Background="#33F44336"
+                BorderBrush="#F44336"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="8,4"
+                Margin="0,0,0,8"
+                IsVisible="{Binding LastError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+            <TextBlock Text="{Binding LastError}"
+                       Foreground="#FFCDD2"
+                       TextWrapping="Wrap"
+                       FontSize="12" />
+        </Border>
+
+        <!-- Resizable charts/list split -->
+        <Grid Grid.Row="2" RowDefinitions="2*,Auto,*">
+
+            <!-- Charts -->
+            <Border Grid.Row="0" Classes="CardPanel">
+                <Grid RowDefinitions="Auto,*">
+                    <TextBlock Grid.Row="0" Text="Charts" Classes="SectionHeader" />
+                    <ScrollViewer Name="ChartsScroll"
+                                  Grid.Row="1"
+                                  HorizontalScrollBarVisibility="Auto"
+                                  VerticalScrollBarVisibility="Disabled">
+                        <ItemsControl ItemsSource="{Binding Charts}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal" Spacing="12" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="vm:EvaluationChartImage">
+                                    <Border Background="#DD1E2930"
+                                            CornerRadius="6"
+                                            Padding="8"
+                                            Height="{Binding #ChartsScroll.Bounds.Height}">
+                                        <Grid RowDefinitions="*,Auto">
+                                            <Image Grid.Row="0"
+                                                   Source="{Binding Image}"
+                                                   Stretch="Uniform" />
+                                            <TextBlock Grid.Row="1"
+                                                       Text="{Binding FileName}"
+                                                       Classes="DataLabel"
+                                                       HorizontalAlignment="Center"
+                                                       Margin="0,4,0,0" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+
+            <!-- Drag-handle between charts and grid -->
+            <GridSplitter Grid.Row="1"
+                          Height="6"
+                          HorizontalAlignment="Stretch"
+                          Background="#DD475A6E"
+                          Margin="0,4,0,4" />
+
+            <!-- Artifacts grid -->
+            <DataGrid Grid.Row="2"
+                      ItemsSource="{Binding Outputs}"
+                      AutoGenerateColumns="False"
+                      GridLinesVisibility="Horizontal"
+                      BorderBrush="#E0E0E0"
+                      BorderThickness="1">
+                <DataGrid.Columns>
+                    <DataGridCheckBoxColumn Header=""
+                                            Binding="{Binding IsSelected}"
+                                            Width="36" />
+                    <DataGridTextColumn Header="File"
+                                        Binding="{Binding FileName}"
+                                        Width="3*"
+                                        IsReadOnly="True" />
+                    <DataGridTextColumn Header="Size"
+                                        Binding="{Binding SizeDisplay}"
+                                        Width="*"
+                                        IsReadOnly="True" />
+                </DataGrid.Columns>
+            </DataGrid>
+
+        </Grid>
+
+    </Grid>
+</UserControl>
