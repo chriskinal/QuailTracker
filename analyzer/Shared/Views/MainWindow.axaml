@@ -37,107 +37,150 @@
             </Grid>
         </Border>
 
-        <!-- Main Content with Tabs -->
-        <TabControl Grid.Row="1"
-                    SelectedIndex="{Binding SelectedTabIndex}"
-                    Margin="8">
+        <!-- Top-level tabs -->
+        <TabControl Grid.Row="1" Margin="8">
 
-            <!-- Single Analysis Tab -->
-            <TabItem Header="Single Analysis">
-                <TabItem.HeaderTemplate>
-                    <DataTemplate>
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <PathIcon Data="M3,9H7V5H3V9M3,14H7V10H3V14M8,14H12V10H8V14M13,14H17V10H13V14M8,9H12V5H8V9M13,5V9H17V5H13M18,14H22V10H18V14M3,19H7V15H3V19M8,19H12V15H8V19M13,19H17V15H13V19M18,19H22V15H18V19M18,5V9H22V5H18Z"
-                                      Width="16" Height="16" />
-                            <TextBlock Text="Single Analysis" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </DataTemplate>
-                </TabItem.HeaderTemplate>
+            <!-- Single Analysis -->
+            <TabItem>
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <PathIcon Data="M3,9H7V5H3V9M3,14H7V10H3V14M8,14H12V10H8V14M13,14H17V10H13V14M8,9H12V5H8V9M13,5V9H17V5H13M18,14H22V10H18V14M3,19H7V15H3V19M8,19H12V15H8V19M13,19H17V15H13V19M18,19H22V15H18V19M18,5V9H22V5H18Z"
+                                  Width="16" Height="16" />
+                        <TextBlock Text="Single Analysis" VerticalAlignment="Center" />
+                    </StackPanel>
+                </TabItem.Header>
                 <views:SingleAnalysisView DataContext="{Binding SingleAnalysisViewModel}" />
             </TabItem>
 
-            <!-- Import Tab -->
-            <TabItem Header="Import">
-                <TabItem.HeaderTemplate>
-                    <DataTemplate>
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <PathIcon Data="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z"
-                                      Width="16" Height="16" />
-                            <TextBlock Text="Import" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </DataTemplate>
-                </TabItem.HeaderTemplate>
-                <views:ImportView DataContext="{Binding ImportViewModel}" />
+            <!-- Bulk Analysis -->
+            <TabItem>
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <PathIcon Data="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z"
+                                  Width="16" Height="16" />
+                        <TextBlock Text="Bulk Analysis" VerticalAlignment="Center" />
+                    </StackPanel>
+                </TabItem.Header>
+                <TabControl Margin="0,4,0,0">
+                    <TabItem Header="Import">
+                        <views:ImportView DataContext="{Binding ImportViewModel}" />
+                    </TabItem>
+                    <TabItem Header="Processing">
+                        <views:ProcessingView DataContext="{Binding ProcessingViewModel}" />
+                    </TabItem>
+                </TabControl>
             </TabItem>
 
-            <!-- Processing Tab -->
-            <TabItem Header="Processing">
-                <TabItem.HeaderTemplate>
-                    <DataTemplate>
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <PathIcon Data="M12,3V13L17.5,16.5L16.25,18.25L10,14V3H12M20,20V22H4V20H20Z"
-                                      Width="16" Height="16" />
-                            <TextBlock Text="Processing" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </DataTemplate>
-                </TabItem.HeaderTemplate>
-                <views:ProcessingView DataContext="{Binding ProcessingViewModel}" />
+            <!-- Analytics &amp; Visualization -->
+            <TabItem>
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <PathIcon Data="M22,21H2V3H4V19H6V10H10V19H12V14H16V19H18V12H22V21Z"
+                                  Width="16" Height="16" />
+                        <TextBlock Text="Analytics &amp; Visualization" VerticalAlignment="Center" />
+                    </StackPanel>
+                </TabItem.Header>
+                <TabControl Margin="0,4,0,0">
+                    <TabItem Header="Localization">
+                        <views:LocalizationView DataContext="{Binding LocalizationViewModel}" />
+                    </TabItem>
+                    <TabItem Header="Population">
+                        <views:PopulationView DataContext="{Binding PopulationViewModel}" />
+                    </TabItem>
+                    <TabItem Header="Mapping">
+                        <views:MapView DataContext="{Binding MapViewModel}" />
+                    </TabItem>
+                </TabControl>
             </TabItem>
 
-            <!-- Training Data Tab -->
-            <TabItem Header="Training Data">
-                <TabItem.HeaderTemplate>
-                    <DataTemplate>
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <PathIcon Data="M19,3H14.82C14.4,1.84 13.3,1 12,1C10.7,1 9.6,1.84 9.18,3H5A2,2 0 0,0 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5A2,2 0 0,0 19,3M12,3A1,1 0 0,1 13,4A1,1 0 0,1 12,5A1,1 0 0,1 11,4A1,1 0 0,1 12,3M7,7H17V5H19V19H5V5H7V7M7.5,13.5L9,12L11,14L15.5,9.5L17,11L11,17L7.5,13.5Z"
-                                      Width="16" Height="16" />
-                            <TextBlock Text="Training Data" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </DataTemplate>
-                </TabItem.HeaderTemplate>
-                <views:TrainingDataView DataContext="{Binding TrainingDataViewModel}" />
-            </TabItem>
-
-            <!-- Localization Tab -->
-            <TabItem Header="Localization">
-                <TabItem.HeaderTemplate>
-                    <DataTemplate>
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <PathIcon Data="M12,11.5A2.5,2.5 0 0,1 9.5,9A2.5,2.5 0 0,1 12,6.5A2.5,2.5 0 0,1 14.5,9A2.5,2.5 0 0,1 12,11.5M12,2A7,7 0 0,0 5,9C5,14.25 12,22 12,22C12,22 19,14.25 19,9A7,7 0 0,0 12,2Z"
-                                      Width="16" Height="16" />
-                            <TextBlock Text="Localization" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </DataTemplate>
-                </TabItem.HeaderTemplate>
-                <views:LocalizationView DataContext="{Binding LocalizationViewModel}" />
-            </TabItem>
-
-            <!-- Population Tab -->
-            <TabItem Header="Population">
-                <TabItem.HeaderTemplate>
-                    <DataTemplate>
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <PathIcon Data="M3,14L3.5,14.07L8.07,9.5C7.89,8.85 8.06,8.11 8.59,7.59C9.37,6.8 10.63,6.8 11.41,7.59C11.94,8.11 12.11,8.85 11.93,9.5L14.5,12.07L15,12C15.18,12 15.35,12 15.5,12.07L19.07,8.5C19,8.35 19,8.18 19,8A2,2 0 0,1 21,6A2,2 0 0,1 23,8A2,2 0 0,1 21,10C20.82,10 20.65,10 20.5,9.93L16.93,13.5C17,13.65 17,13.82 17,14A2,2 0 0,1 15,16A2,2 0 0,1 13,14L13.07,13.5L10.5,10.93C10.18,11 9.82,11 9.5,10.93L4.93,15.5L5,16A2,2 0 0,1 3,18A2,2 0 0,1 1,16A2,2 0 0,1 3,14Z"
-                                      Width="16" Height="16" />
-                            <TextBlock Text="Population" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </DataTemplate>
-                </TabItem.HeaderTemplate>
-                <views:PopulationView DataContext="{Binding PopulationViewModel}" />
-            </TabItem>
-
-            <!-- Map Tab -->
-            <TabItem Header="Map">
-                <TabItem.HeaderTemplate>
-                    <DataTemplate>
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <PathIcon Data="M20.5,3L20.34,3.03L15,5.1L9,3L3.36,4.9C3.15,4.97 3,5.15 3,5.38V20.5A0.5,0.5 0 0,0 3.5,21L3.66,20.97L9,18.9L15,21L20.64,19.1C20.85,19.03 21,18.85 21,18.62V3.5A0.5,0.5 0 0,0 20.5,3M15,19L9,16.89V5L15,7.11V19Z"
-                                      Width="16" Height="16" />
-                            <TextBlock Text="Map" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </DataTemplate>
-                </TabItem.HeaderTemplate>
-                <views:MapView DataContext="{Binding MapViewModel}" />
+            <!-- Modeling -->
+            <TabItem>
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <PathIcon Data="M3,17V19H9V17H3M3,5V7H13V5H3M13,21V19H21V17H13V15H11V21H13M7,9V11H3V13H7V15H9V9H7M21,13V11H11V13H21M15,9H17V7H21V5H17V3H15V9Z"
+                                  Width="16" Height="16" />
+                        <TextBlock Text="Modeling" VerticalAlignment="Center" />
+                    </StackPanel>
+                </TabItem.Header>
+                <TabControl Margin="0,4,0,0">
+                    <TabItem Header="Data">
+                        <views:TrainingDataView DataContext="{Binding TrainingDataViewModel}" />
+                    </TabItem>
+                    <TabItem Header="Training">
+                        <Border Padding="32" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <StackPanel Spacing="12" MaxWidth="540" HorizontalAlignment="Center">
+                                <PathIcon Data="M17,17H7V7H17M17,5H7C5.89,5 5,5.89 5,7V17A2,2 0 0,0 7,19H17A2,2 0 0,0 19,17V7C19,5.89 18.1,5 17,5Z"
+                                          Width="48" Height="48"
+                                          Foreground="#BDBDBD"
+                                          HorizontalAlignment="Center" />
+                                <TextBlock Text="Native training run UI — coming soon"
+                                           FontSize="16"
+                                           FontWeight="SemiBold"
+                                           HorizontalAlignment="Center"
+                                           Foreground="#757575" />
+                                <TextBlock Text="Will host: hyperparameter form, Start / Cancel buttons, live progress, log output. Backed by the training container's REST API at /api/train, /api/cancel, /api/progress."
+                                           TextWrapping="Wrap"
+                                           HorizontalAlignment="Center"
+                                           TextAlignment="Center"
+                                           Foreground="#9E9E9E"
+                                           FontSize="13" />
+                                <TextBlock TextWrapping="Wrap"
+                                           HorizontalAlignment="Center"
+                                           TextAlignment="Center"
+                                           Foreground="#9E9E9E"
+                                           FontSize="13"
+                                           Margin="0,8,0,0">
+                                    Until then, the container exposes a Flask web UI. Start it from the training/ directory:
+                                </TextBlock>
+                                <Border Background="#F5F5F5"
+                                        BorderBrush="#E0E0E0"
+                                        BorderThickness="1"
+                                        CornerRadius="4"
+                                        Padding="12,8">
+                                    <TextBlock Text="docker compose up"
+                                               FontFamily="Menlo,Consolas,monospace"
+                                               FontSize="13"
+                                               HorizontalAlignment="Center"
+                                               Foreground="#424242" />
+                                </Border>
+                                <TextBlock Text="Then open http://localhost:5050 in your browser."
+                                           TextWrapping="Wrap"
+                                           HorizontalAlignment="Center"
+                                           TextAlignment="Center"
+                                           Foreground="#9E9E9E"
+                                           FontSize="12" />
+                            </StackPanel>
+                        </Border>
+                    </TabItem>
+                    <TabItem Header="Evaluation">
+                        <Border Padding="32" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <StackPanel Spacing="12" MaxWidth="540" HorizontalAlignment="Center">
+                                <PathIcon Data="M22,21H2V3H4V19H6V10H10V19H12V14H16V19H18V12H22V21Z"
+                                          Width="48" Height="48"
+                                          Foreground="#BDBDBD"
+                                          HorizontalAlignment="Center" />
+                                <TextBlock Text="Native evaluation UI — coming soon"
+                                           FontSize="16"
+                                           FontWeight="SemiBold"
+                                           HorizontalAlignment="Center"
+                                           Foreground="#757575" />
+                                <TextBlock Text="Will host: training/validation loss and accuracy curves, AUC and confusion matrix per class, and download buttons for trained model artifacts (.tflite, .onnx). Backed by the container's /api/outputs and /api/outputs/&lt;file&gt; endpoints."
+                                           TextWrapping="Wrap"
+                                           HorizontalAlignment="Center"
+                                           TextAlignment="Center"
+                                           Foreground="#9E9E9E"
+                                           FontSize="13" />
+                                <TextBlock Text="Until then, training artifacts are written to training/output/ on disk. The Flask UI at http://localhost:5050 also lists them."
+                                           TextWrapping="Wrap"
+                                           HorizontalAlignment="Center"
+                                           TextAlignment="Center"
+                                           Foreground="#9E9E9E"
+                                           FontSize="12"
+                                           Margin="0,8,0,0" />
+                            </StackPanel>
+                        </Border>
+                    </TabItem>
+                </TabControl>
             </TabItem>
         </TabControl>
 

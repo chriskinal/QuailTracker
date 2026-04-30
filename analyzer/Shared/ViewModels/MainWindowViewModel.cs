@@ -25,9 +25,6 @@ namespace QuailTracker.Analyzer.Shared.ViewModels;
 
 public partial class MainWindowViewModel : ObservableObject
 {
-    [ObservableProperty]
-    private int _selectedTabIndex;
-
     public ConfigService ConfigService { get; }
 
     /// <summary>
