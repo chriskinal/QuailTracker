@@ -1,19 +1,25 @@
 /*
- * Mic Test Firmware — LED brightness tracks PDM mic amplitude
+ * Mic Test Firmware — LED brightness tracks PDM mic amplitude (stereo)
  *
  * Standalone bare-metal firmware for testing IM72D128 PDM mic breakout
- * boards on the QuailTracker V2/V3 PCB. No FreeRTOS, no SD, no BLE.
+ * boards on the QuailTracker V5 PCB. No FreeRTOS, no SD, no companion radio.
  *
  * Hardware:
- *   MCU:  STM32U575VGT6 @ 160 MHz
- *   Mic:  IM72D128 PDM on ADF1 (PE9 CLK, PE10 DATA)
- *   LED:  PD13 (TIM4 CH2 PWM)
+ *   MCU:   STM32U575VGT6 @ 160 MHz
+ *   Mics:  IM72D128 PDM stereo on MDF1
+ *          PE9 = MDF1_CCK0 (clock, AF6)
+ *          PD3 = MDF1_SDI0 (data,  AF6) — interleaved L/R bitstream
+ *          Filter0 = Left  (PCB silkscreen "Left",  L/R sel = GND, rising edge)
+ *          Filter1 = Right (PCB silkscreen "Right", L/R sel = VDD, falling edge)
+ *          (Edge-to-channel mapping matches PCB silkscreen, not the IM72D128
+ *           datasheet's nominal L/R convention.)
+ *   LED:   PD13 (TIM4 CH2 PWM)
  *   Debug: SEGGER RTT via J-Link SWD
  *
  * Operation:
  *   - Silence = LED off
- *   - Sound = LED brightness proportional to peak amplitude
- *   - RTT terminal shows peak level for calibration
+ *   - Sound   = LED brightness proportional to MAX(peakL, peakR)
+ *   - RTT terminal shows separate L and R bar graphs for A/B comparison
  */
 
 #include "stm32u5xx_hal.h"
@@ -27,7 +33,7 @@
 /* printf via RTT */
 static void rtt_printf(unsigned idx, const char *fmt, ...)
 {
-    char buf[128];
+    char buf[160];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
@@ -39,25 +45,34 @@ static void rtt_printf(unsigned idx, const char *fmt, ...)
 void SystemClock_Config(void);
 void Error_Handler(void);
 
-/* ---- ADF1 (PDM mic) ---- */
-MDF_HandleTypeDef AdfHandle0;
-MDF_FilterConfigTypeDef AdfFilterConfig0;
+/* ---- MDF1 (stereo PDM mic) ---- */
+MDF_HandleTypeDef MdfHandle0;           /* Left  channel (Filter0, rising edge,  GND-side) */
+MDF_HandleTypeDef MdfHandle1;           /* Right channel (Filter1, falling edge, VDD-side) */
+MDF_FilterConfigTypeDef MdfFilterConfig0;
+MDF_FilterConfigTypeDef MdfFilterConfig1;
 
-/* ---- GPDMA1 for ADF1 ---- */
+/* ---- GPDMA1: Channel0 → MDF1_FLT0 (L), Channel1 → MDF1_FLT1 (R) ---- */
 DMA_NodeTypeDef Node_GPDMA1_Channel0;
 DMA_QListTypeDef List_GPDMA1_Channel0;
 DMA_HandleTypeDef handle_GPDMA1_Channel0;
 
+DMA_NodeTypeDef Node_GPDMA1_Channel1;
+DMA_QListTypeDef List_GPDMA1_Channel1;
+DMA_HandleTypeDef handle_GPDMA1_Channel1;
+
 /* ---- TIM4 for LED PWM ---- */
 TIM_HandleTypeDef htim4;
 
-/* ---- Audio DMA buffer ---- */
+/* ---- Audio DMA buffers (per channel) ---- */
 #define AUDIO_BUF_SIZE 1024
-int32_t audioBuffer[AUDIO_BUF_SIZE];
+int32_t audioBufferL[AUDIO_BUF_SIZE];
+int32_t audioBufferR[AUDIO_BUF_SIZE];
 
 /* ---- Peak tracking ---- */
-volatile uint32_t peakAmplitude = 0;
-uint32_t smoothedPeak = 0;
+volatile uint32_t peakL = 0;
+volatile uint32_t peakR = 0;
+uint32_t smoothedL = 0;
+uint32_t smoothedR = 0;
 
 /* ================================================================== */
 /*                         Init Functions                              */
@@ -68,36 +83,64 @@ static void MX_GPDMA1_Init(void)
     __HAL_RCC_GPDMA1_CLK_ENABLE();
     HAL_NVIC_SetPriority(GPDMA1_Channel0_IRQn, 0, 0);
     HAL_NVIC_EnableIRQ(GPDMA1_Channel0_IRQn);
+    HAL_NVIC_SetPriority(GPDMA1_Channel1_IRQn, 0, 0);
+    HAL_NVIC_EnableIRQ(GPDMA1_Channel1_IRQn);
 }
 
-static void MX_ADF1_Init(void)
+static void MX_MDF1_Init(void)
 {
-    AdfHandle0.Instance = ADF1_Filter0;
-    AdfHandle0.Init.CommonParam.ProcClockDivider = 52;
-    AdfHandle0.Init.CommonParam.OutputClock.Activation = ENABLE;
-    AdfHandle0.Init.CommonParam.OutputClock.Pins = MDF_OUTPUT_CLOCK_0;
-    AdfHandle0.Init.CommonParam.OutputClock.Divider = 1;
-    AdfHandle0.Init.CommonParam.OutputClock.Trigger.Activation = DISABLE;
-    AdfHandle0.Init.SerialInterface.Activation = ENABLE;
-    AdfHandle0.Init.SerialInterface.Mode = MDF_SITF_LF_MASTER_SPI_MODE;
-    AdfHandle0.Init.SerialInterface.ClockSource = MDF_SITF_CCK0_SOURCE;
-    AdfHandle0.Init.SerialInterface.Threshold = 4;
-    AdfHandle0.Init.FilterBistream = MDF_BITSTREAM0_FALLING;
-    if (HAL_MDF_Init(&AdfHandle0) != HAL_OK)
+    /* Filter0 — Left channel (rising edge, GND-side mic).
+     * Owns the serial interface and output clock; runs continuously and
+     * generates TRGO so Filter1 can start sample-aligned. */
+    MdfHandle0.Instance = MDF1_Filter0;
+    MdfHandle0.Init.CommonParam.ProcClockDivider = 52;  /* 160MHz/52 = 3.077MHz PDM clock */
+    MdfHandle0.Init.CommonParam.OutputClock.Activation = ENABLE;
+    MdfHandle0.Init.CommonParam.OutputClock.Pins = MDF_OUTPUT_CLOCK_0;
+    MdfHandle0.Init.CommonParam.OutputClock.Divider = 1;
+    MdfHandle0.Init.CommonParam.OutputClock.Trigger.Activation = ENABLE;
+    MdfHandle0.Init.CommonParam.OutputClock.Trigger.Source = MDF_CLOCK_TRIG_TRGO;
+    MdfHandle0.Init.CommonParam.OutputClock.Trigger.Edge = MDF_CLOCK_TRIG_RISING_EDGE;
+    MdfHandle0.Init.SerialInterface.Activation = ENABLE;
+    MdfHandle0.Init.SerialInterface.Mode = MDF_SITF_LF_MASTER_SPI_MODE;
+    MdfHandle0.Init.SerialInterface.ClockSource = MDF_SITF_CCK0_SOURCE;
+    MdfHandle0.Init.SerialInterface.Threshold = 4;
+    MdfHandle0.Init.FilterBistream = MDF_BITSTREAM0_RISING;
+    if (HAL_MDF_Init(&MdfHandle0) != HAL_OK)
         Error_Handler();
 
-    AdfFilterConfig0.DataSource = MDF_DATA_SOURCE_BSMX;
-    AdfFilterConfig0.Delay = 0;
-    AdfFilterConfig0.CicMode = MDF_ONE_FILTER_SINC4;
-    AdfFilterConfig0.DecimationRatio = 64;
-    AdfFilterConfig0.Gain = 6;  /* +18 dB (6 * 3dB) */
-    AdfFilterConfig0.ReshapeFilter.Activation = DISABLE;
-    AdfFilterConfig0.HighPassFilter.Activation = ENABLE;
-    AdfFilterConfig0.HighPassFilter.CutOffFrequency = MDF_HPF_CUTOFF_0_000625FPCM;
-    AdfFilterConfig0.SoundActivity.Activation = DISABLE;
-    AdfFilterConfig0.AcquisitionMode = MDF_MODE_ASYNC_CONT;
-    AdfFilterConfig0.FifoThreshold = MDF_FIFO_THRESHOLD_NOT_EMPTY;
-    AdfFilterConfig0.DiscardSamples = 0;
+    /* Filter1 — Right channel (falling edge, VDD-side mic).
+     * Reads from SITF0 via the bitstream mixer; serial interface itself disabled. */
+    MdfHandle1.Instance = MDF1_Filter1;
+    MdfHandle1.Init.CommonParam.ProcClockDivider = 52;
+    MdfHandle1.Init.CommonParam.OutputClock.Activation = DISABLE;
+    MdfHandle1.Init.CommonParam.OutputClock.Pins = MDF_OUTPUT_CLOCK_0;
+    MdfHandle1.Init.CommonParam.OutputClock.Divider = 1;
+    MdfHandle1.Init.CommonParam.OutputClock.Trigger.Activation = DISABLE;
+    MdfHandle1.Init.SerialInterface.Activation = DISABLE;
+    MdfHandle1.Init.SerialInterface.Mode = MDF_SITF_LF_MASTER_SPI_MODE;
+    MdfHandle1.Init.SerialInterface.ClockSource = MDF_SITF_CCK0_SOURCE;
+    MdfHandle1.Init.SerialInterface.Threshold = 4;
+    MdfHandle1.Init.FilterBistream = MDF_BITSTREAM0_FALLING;
+    if (HAL_MDF_Init(&MdfHandle1) != HAL_OK)
+        Error_Handler();
+
+    /* Shared filter config — SYNC_CONT, both wait on TRGO for sample-aligned start */
+    MdfFilterConfig0.DataSource = MDF_DATA_SOURCE_BSMX;
+    MdfFilterConfig0.Delay = 0;
+    MdfFilterConfig0.CicMode = MDF_ONE_FILTER_SINC4;
+    MdfFilterConfig0.DecimationRatio = 64;
+    MdfFilterConfig0.Gain = 6;  /* +18 dB (6 * 3dB) */
+    MdfFilterConfig0.ReshapeFilter.Activation = DISABLE;
+    MdfFilterConfig0.HighPassFilter.Activation = ENABLE;
+    MdfFilterConfig0.HighPassFilter.CutOffFrequency = MDF_HPF_CUTOFF_0_000625FPCM;
+    MdfFilterConfig0.SoundActivity.Activation = DISABLE;
+    MdfFilterConfig0.AcquisitionMode = MDF_MODE_SYNC_CONT;
+    MdfFilterConfig0.Trigger.Source = MDF_FILTER_TRIG_TRGO;
+    MdfFilterConfig0.Trigger.Edge = MDF_FILTER_TRIG_RISING_EDGE;
+    MdfFilterConfig0.FifoThreshold = MDF_FIFO_THRESHOLD_NOT_EMPTY;
+    MdfFilterConfig0.DiscardSamples = 0;
+
+    memcpy(&MdfFilterConfig1, &MdfFilterConfig0, sizeof(MdfFilterConfig1));
 }
 
 static void MX_TIM4_Init(void)
@@ -146,68 +189,113 @@ void HAL_MspInit(void)
 
 void HAL_MDF_MspInit(MDF_HandleTypeDef *hmdf)
 {
-    if (!IS_ADF_INSTANCE(hmdf->Instance)) return;
+    if (!IS_MDF_INSTANCE(hmdf->Instance)) return;
 
-    /* ADF1 kernel clock = HCLK */
+    /* MDF1 kernel clock = HCLK */
     RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
-    PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_ADF1;
-    PeriphClkInit.Adf1ClockSelection = RCC_ADF1CLKSOURCE_HCLK;
+    PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_MDF1;
+    PeriphClkInit.Mdf1ClockSelection = RCC_MDF1CLKSOURCE_HCLK;
     if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
         Error_Handler();
 
-    __HAL_RCC_ADF1_CLK_ENABLE();
+    __HAL_RCC_MDF1_CLK_ENABLE();
     __HAL_RCC_GPIOE_CLK_ENABLE();
+    __HAL_RCC_GPIOD_CLK_ENABLE();
 
-    /* PE9 = ADF1_CCK0, PE10 = ADF1_SDI0 (AF3) */
+    /* PE9 = MDF1_CCK0 (AF6) */
     GPIO_InitTypeDef GPIO_InitStruct = {0};
-    GPIO_InitStruct.Pin = GPIO_PIN_9 | GPIO_PIN_10;
+    GPIO_InitStruct.Pin = GPIO_PIN_9;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-    GPIO_InitStruct.Alternate = GPIO_AF3_ADF1;
+    GPIO_InitStruct.Alternate = GPIO_AF6_MDF1;
     HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
-    /* DMA linked-list node for ADF1 */
-    DMA_NodeConfTypeDef NodeConfig = {0};
-    NodeConfig.NodeType = DMA_GPDMA_LINEAR_NODE;
-    NodeConfig.Init.Request = GPDMA1_REQUEST_ADF1_FLT0;
-    NodeConfig.Init.BlkHWRequest = DMA_BREQ_SINGLE_BURST;
-    NodeConfig.Init.Direction = DMA_PERIPH_TO_MEMORY;
-    NodeConfig.Init.SrcInc = DMA_SINC_FIXED;
-    NodeConfig.Init.DestInc = DMA_DINC_INCREMENTED;
-    NodeConfig.Init.SrcDataWidth = DMA_SRC_DATAWIDTH_WORD;
-    NodeConfig.Init.DestDataWidth = DMA_DEST_DATAWIDTH_WORD;
-    NodeConfig.Init.SrcBurstLength = 1;
-    NodeConfig.Init.DestBurstLength = 1;
-    NodeConfig.Init.TransferAllocatedPort = DMA_SRC_ALLOCATED_PORT0 | DMA_DEST_ALLOCATED_PORT0;
-    NodeConfig.Init.TransferEventMode = DMA_TCEM_BLOCK_TRANSFER;
-    NodeConfig.Init.Mode = DMA_NORMAL;
-    NodeConfig.TriggerConfig.TriggerPolarity = DMA_TRIG_POLARITY_MASKED;
-    NodeConfig.DataHandlingConfig.DataExchange = DMA_EXCHANGE_NONE;
-    NodeConfig.DataHandlingConfig.DataAlignment = DMA_DATA_RIGHTALIGN_ZEROPADDED;
+    /* PD3 = MDF1_SDI0 (AF6) */
+    GPIO_InitStruct.Pin = GPIO_PIN_3;
+    GPIO_InitStruct.Alternate = GPIO_AF6_MDF1;
+    HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
-    HAL_DMAEx_List_BuildNode(&NodeConfig, &Node_GPDMA1_Channel0);
-    HAL_DMAEx_List_InsertNode(&List_GPDMA1_Channel0, NULL, &Node_GPDMA1_Channel0);
-    HAL_DMAEx_List_SetCircularMode(&List_GPDMA1_Channel0);
+    /* DMA Channel 0 → MDF1_FLT0 (Left) — linked-list circular */
+    if (hmdf->Instance == MDF1_Filter0) {
+        DMA_NodeConfTypeDef NodeConfig = {0};
+        NodeConfig.NodeType = DMA_GPDMA_LINEAR_NODE;
+        NodeConfig.Init.Request = GPDMA1_REQUEST_MDF1_FLT0;
+        NodeConfig.Init.BlkHWRequest = DMA_BREQ_SINGLE_BURST;
+        NodeConfig.Init.Direction = DMA_PERIPH_TO_MEMORY;
+        NodeConfig.Init.SrcInc = DMA_SINC_FIXED;
+        NodeConfig.Init.DestInc = DMA_DINC_INCREMENTED;
+        NodeConfig.Init.SrcDataWidth = DMA_SRC_DATAWIDTH_WORD;
+        NodeConfig.Init.DestDataWidth = DMA_DEST_DATAWIDTH_WORD;
+        NodeConfig.Init.SrcBurstLength = 1;
+        NodeConfig.Init.DestBurstLength = 1;
+        NodeConfig.Init.TransferAllocatedPort = DMA_SRC_ALLOCATED_PORT0 | DMA_DEST_ALLOCATED_PORT0;
+        NodeConfig.Init.TransferEventMode = DMA_TCEM_BLOCK_TRANSFER;
+        NodeConfig.Init.Mode = DMA_NORMAL;
+        NodeConfig.TriggerConfig.TriggerPolarity = DMA_TRIG_POLARITY_MASKED;
+        NodeConfig.DataHandlingConfig.DataExchange = DMA_EXCHANGE_NONE;
+        NodeConfig.DataHandlingConfig.DataAlignment = DMA_DATA_RIGHTALIGN_ZEROPADDED;
 
-    handle_GPDMA1_Channel0.Instance = GPDMA1_Channel0;
-    handle_GPDMA1_Channel0.InitLinkedList.Priority = DMA_LOW_PRIORITY_HIGH_WEIGHT;
-    handle_GPDMA1_Channel0.InitLinkedList.LinkStepMode = DMA_LSM_FULL_EXECUTION;
-    handle_GPDMA1_Channel0.InitLinkedList.LinkAllocatedPort = DMA_LINK_ALLOCATED_PORT0;
-    handle_GPDMA1_Channel0.InitLinkedList.TransferEventMode = DMA_TCEM_BLOCK_TRANSFER;
-    handle_GPDMA1_Channel0.InitLinkedList.LinkedListMode = DMA_LINKEDLIST_CIRCULAR;
-    HAL_DMAEx_List_Init(&handle_GPDMA1_Channel0);
-    HAL_DMAEx_List_LinkQ(&handle_GPDMA1_Channel0, &List_GPDMA1_Channel0);
+        HAL_DMAEx_List_BuildNode(&NodeConfig, &Node_GPDMA1_Channel0);
+        HAL_DMAEx_List_InsertNode(&List_GPDMA1_Channel0, NULL, &Node_GPDMA1_Channel0);
+        HAL_DMAEx_List_SetCircularMode(&List_GPDMA1_Channel0);
 
-    __HAL_LINKDMA(hmdf, hdma, handle_GPDMA1_Channel0);
-    HAL_DMA_ConfigChannelAttributes(&handle_GPDMA1_Channel0, DMA_CHANNEL_NPRIV);
+        handle_GPDMA1_Channel0.Instance = GPDMA1_Channel0;
+        handle_GPDMA1_Channel0.InitLinkedList.Priority = DMA_LOW_PRIORITY_HIGH_WEIGHT;
+        handle_GPDMA1_Channel0.InitLinkedList.LinkStepMode = DMA_LSM_FULL_EXECUTION;
+        handle_GPDMA1_Channel0.InitLinkedList.LinkAllocatedPort = DMA_LINK_ALLOCATED_PORT0;
+        handle_GPDMA1_Channel0.InitLinkedList.TransferEventMode = DMA_TCEM_BLOCK_TRANSFER;
+        handle_GPDMA1_Channel0.InitLinkedList.LinkedListMode = DMA_LINKEDLIST_CIRCULAR;
+        HAL_DMAEx_List_Init(&handle_GPDMA1_Channel0);
+        HAL_DMAEx_List_LinkQ(&handle_GPDMA1_Channel0, &List_GPDMA1_Channel0);
+
+        __HAL_LINKDMA(hmdf, hdma, handle_GPDMA1_Channel0);
+        HAL_DMA_ConfigChannelAttributes(&handle_GPDMA1_Channel0, DMA_CHANNEL_NPRIV);
+    }
+
+    /* DMA Channel 1 → MDF1_FLT1 (Right) — linked-list circular */
+    if (hmdf->Instance == MDF1_Filter1) {
+        DMA_NodeConfTypeDef NodeConfig = {0};
+        NodeConfig.NodeType = DMA_GPDMA_LINEAR_NODE;
+        NodeConfig.Init.Request = GPDMA1_REQUEST_MDF1_FLT1;
+        NodeConfig.Init.BlkHWRequest = DMA_BREQ_SINGLE_BURST;
+        NodeConfig.Init.Direction = DMA_PERIPH_TO_MEMORY;
+        NodeConfig.Init.SrcInc = DMA_SINC_FIXED;
+        NodeConfig.Init.DestInc = DMA_DINC_INCREMENTED;
+        NodeConfig.Init.SrcDataWidth = DMA_SRC_DATAWIDTH_WORD;
+        NodeConfig.Init.DestDataWidth = DMA_DEST_DATAWIDTH_WORD;
+        NodeConfig.Init.SrcBurstLength = 1;
+        NodeConfig.Init.DestBurstLength = 1;
+        NodeConfig.Init.TransferAllocatedPort = DMA_SRC_ALLOCATED_PORT0 | DMA_DEST_ALLOCATED_PORT0;
+        NodeConfig.Init.TransferEventMode = DMA_TCEM_BLOCK_TRANSFER;
+        NodeConfig.Init.Mode = DMA_NORMAL;
+        NodeConfig.TriggerConfig.TriggerPolarity = DMA_TRIG_POLARITY_MASKED;
+        NodeConfig.DataHandlingConfig.DataExchange = DMA_EXCHANGE_NONE;
+        NodeConfig.DataHandlingConfig.DataAlignment = DMA_DATA_RIGHTALIGN_ZEROPADDED;
+
+        HAL_DMAEx_List_BuildNode(&NodeConfig, &Node_GPDMA1_Channel1);
+        HAL_DMAEx_List_InsertNode(&List_GPDMA1_Channel1, NULL, &Node_GPDMA1_Channel1);
+        HAL_DMAEx_List_SetCircularMode(&List_GPDMA1_Channel1);
+
+        handle_GPDMA1_Channel1.Instance = GPDMA1_Channel1;
+        handle_GPDMA1_Channel1.InitLinkedList.Priority = DMA_LOW_PRIORITY_HIGH_WEIGHT;
+        handle_GPDMA1_Channel1.InitLinkedList.LinkStepMode = DMA_LSM_FULL_EXECUTION;
+        handle_GPDMA1_Channel1.InitLinkedList.LinkAllocatedPort = DMA_LINK_ALLOCATED_PORT0;
+        handle_GPDMA1_Channel1.InitLinkedList.TransferEventMode = DMA_TCEM_BLOCK_TRANSFER;
+        handle_GPDMA1_Channel1.InitLinkedList.LinkedListMode = DMA_LINKEDLIST_CIRCULAR;
+        HAL_DMAEx_List_Init(&handle_GPDMA1_Channel1);
+        HAL_DMAEx_List_LinkQ(&handle_GPDMA1_Channel1, &List_GPDMA1_Channel1);
+
+        __HAL_LINKDMA(hmdf, hdma, handle_GPDMA1_Channel1);
+        HAL_DMA_ConfigChannelAttributes(&handle_GPDMA1_Channel1, DMA_CHANNEL_NPRIV);
+    }
 }
 
 /* ================================================================== */
 /*                       DMA Callbacks                                 */
 /* ================================================================== */
 
-static void ProcessHalf(int32_t *buf, uint32_t len)
+static uint32_t scan_peak(const int32_t *buf, uint32_t len)
 {
     uint32_t peak = 0;
     for (uint32_t i = 0; i < len; i++) {
@@ -215,19 +303,23 @@ static void ProcessHalf(int32_t *buf, uint32_t len)
         uint32_t mag = (uint32_t)abs(sample);
         if (mag > peak) peak = mag;
     }
-    peakAmplitude = peak;
+    return peak;
 }
 
 void HAL_MDF_AcqHalfCpltCallback(MDF_HandleTypeDef *hmdf)
 {
-    (void)hmdf;
-    ProcessHalf(&audioBuffer[0], AUDIO_BUF_SIZE / 2);
+    if (hmdf->Instance == MDF1_Filter0)
+        peakL = scan_peak(&audioBufferL[0], AUDIO_BUF_SIZE / 2);
+    else if (hmdf->Instance == MDF1_Filter1)
+        peakR = scan_peak(&audioBufferR[0], AUDIO_BUF_SIZE / 2);
 }
 
 void HAL_MDF_AcqCpltCallback(MDF_HandleTypeDef *hmdf)
 {
-    (void)hmdf;
-    ProcessHalf(&audioBuffer[AUDIO_BUF_SIZE / 2], AUDIO_BUF_SIZE / 2);
+    if (hmdf->Instance == MDF1_Filter0)
+        peakL = scan_peak(&audioBufferL[AUDIO_BUF_SIZE / 2], AUDIO_BUF_SIZE / 2);
+    else if (hmdf->Instance == MDF1_Filter1)
+        peakR = scan_peak(&audioBufferR[AUDIO_BUF_SIZE / 2], AUDIO_BUF_SIZE / 2);
 }
 
 /* ================================================================== */
@@ -242,6 +334,11 @@ void SysTick_Handler(void)
 void GPDMA1_Channel0_IRQHandler(void)
 {
     HAL_DMA_IRQHandler(&handle_GPDMA1_Channel0);
+}
+
+void GPDMA1_Channel1_IRQHandler(void)
+{
+    HAL_DMA_IRQHandler(&handle_GPDMA1_Channel1);
 }
 
 /* ================================================================== */
@@ -261,52 +358,74 @@ int main(void)
     HAL_PWREx_DisableUCPDDeadBattery();
 
     SEGGER_RTT_Init();
-    rtt_printf(0, "\r\n=== Mic Test ===\r\n");
-    rtt_printf(0, "LED brightness tracks PDM mic amplitude\r\n\r\n");
+    rtt_printf(0, "\r\n=== Mic Test (Stereo) ===\r\n");
+    rtt_printf(0, "LED brightness tracks MAX(L, R); RTT shows L/R bars separately\r\n\r\n");
 
     MX_GPDMA1_Init();
-    MX_ADF1_Init();
+    MX_MDF1_Init();
     MX_TIM4_Init();
 
-    /* Start ADF1 DMA acquisition */
-    MDF_DmaConfigTypeDef dmaConfig = {0};
-    dmaConfig.Address = (uint32_t)audioBuffer;
-    dmaConfig.DataLength = AUDIO_BUF_SIZE * 4;
-    dmaConfig.MsbOnly = DISABLE;
-    if (HAL_MDF_AcqStart_DMA(&AdfHandle0, &AdfFilterConfig0, &dmaConfig) != HAL_OK) {
-        rtt_printf(0, "ADF1 DMA start FAILED\r\n");
+    /* Start both filters in SYNC_CONT (waiting on TRGO) */
+    MDF_DmaConfigTypeDef dmaConfigL = {0};
+    dmaConfigL.Address = (uint32_t)audioBufferL;
+    dmaConfigL.DataLength = AUDIO_BUF_SIZE * 4;
+    dmaConfigL.MsbOnly = DISABLE;
+    if (HAL_MDF_AcqStart_DMA(&MdfHandle0, &MdfFilterConfig0, &dmaConfigL) != HAL_OK) {
+        rtt_printf(0, "MDF1 Filter0 (L) DMA start FAILED\r\n");
         Error_Handler();
     }
-    rtt_printf(0, "ADF1: Running (48kHz, Sinc4, gain=%d)\r\n", AdfFilterConfig0.Gain);
+
+    MDF_DmaConfigTypeDef dmaConfigR = {0};
+    dmaConfigR.Address = (uint32_t)audioBufferR;
+    dmaConfigR.DataLength = AUDIO_BUF_SIZE * 4;
+    dmaConfigR.MsbOnly = DISABLE;
+    if (HAL_MDF_AcqStart_DMA(&MdfHandle1, &MdfFilterConfig1, &dmaConfigR) != HAL_OK) {
+        rtt_printf(0, "MDF1 Filter1 (R) DMA start FAILED\r\n");
+        Error_Handler();
+    }
+
+    /* Fire TRGO so both filters start sample-aligned */
+    HAL_MDF_GenerateTrgo(&MdfHandle0);
+
+    rtt_printf(0, "MDF1: Stereo running (48kHz, Sinc4, gain=%d, L=rising, R=falling)\r\n",
+               MdfFilterConfig0.Gain);
 
     uint32_t lastPrint = 0;
 
     while (1) {
-        uint32_t peak = peakAmplitude;
+        uint32_t pL = peakL;
+        uint32_t pR = peakR;
 
-        /* Exponential smoothing for stable LED */
-        smoothedPeak = (smoothedPeak * 3 + peak) / 4;
+        /* Exponential smoothing for stable LED + bars */
+        smoothedL = (smoothedL * 3 + pL) / 4;
+        smoothedR = (smoothedR * 3 + pR) / 4;
 
-        /* Map to PWM duty: 0-32767 -> 0-999 */
-        uint32_t duty = smoothedPeak * 999 / 32768;
+        /* LED brightness from MAX(L, R) */
+        uint32_t maxPeak = (smoothedL > smoothedR) ? smoothedL : smoothedR;
+        uint32_t duty = maxPeak * 999 / 32768;
         if (duty > 999) duty = 999;
         __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, duty);
 
-        /* Print peak level at 10 Hz */
+        /* Print L/R bars at 10 Hz */
         uint32_t now = HAL_GetTick();
         if (now - lastPrint >= 100) {
             lastPrint = now;
 
-            /* Simple bar graph */
-            char bar[33];
-            uint32_t bars = smoothedPeak * 32 / 32768;
-            if (bars > 32) bars = 32;
-            for (uint32_t i = 0; i < 32; i++)
-                bar[i] = (i < bars) ? '#' : '.';
-            bar[32] = '\0';
+            char barL[17], barR[17];
+            uint32_t bL = smoothedL * 16 / 32768;
+            uint32_t bR = smoothedR * 16 / 32768;
+            if (bL > 16) bL = 16;
+            if (bR > 16) bR = 16;
+            for (uint32_t i = 0; i < 16; i++) {
+                barL[i] = (i < bL) ? '#' : '.';
+                barR[i] = (i < bR) ? '#' : '.';
+            }
+            barL[16] = barR[16] = '\0';
 
-            rtt_printf(0, "Peak: %5d  [%s]  PWM: %3d\r\n",
-                              smoothedPeak, bar, duty);
+            rtt_printf(0, "L:%5lu [%s]   R:%5lu [%s]   PWM:%3lu\r\n",
+                       (unsigned long)smoothedL, barL,
+                       (unsigned long)smoothedR, barR,
+                       (unsigned long)duty);
         }
 
         HAL_Delay(10);  /* ~100 Hz update rate */

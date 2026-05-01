@@ -1274,13 +1274,14 @@ static void SystemPower_Config(void)
   * @retval None
   */
 /* MDF1 Stereo Init — two filters on same SDI0, opposite clock edges.
- * Filter0 = Left mic (L/R=GND, data on falling edge)
- * Filter1 = Right mic (L/R=VDD, data on rising edge)
+ * Filter0 = Left mic  (PCB silkscreen "Left",  L/R sense = GND, rising edge)
+ * Filter1 = Right mic (PCB silkscreen "Right", L/R sense = VDD, falling edge)
  * PE9 = MDF1_CCK0 (clock), PD3 = MDF1_SDI0 (data), both AF6.
- * Pin mapping confirmed by CubeMX for STM32U575VGT6 LQFP-100. */
+ * NOTE: edge-to-channel mapping matches the PCB silkscreen (validated on
+ * the bench), not the IM72D128 datasheet's nominal L/R convention. */
 static void MX_MDF1_Init(void)
 {
-    /* Filter0 — Left channel (falling edge) */
+    /* Filter0 — Left channel (rising edge, GND-side mic) */
     MdfHandle0.Instance = MDF1_Filter0;
     MdfHandle0.Init.CommonParam.ProcClockDivider = 52;  /* 160MHz/52 = 3.077MHz PDM clock */
     MdfHandle0.Init.CommonParam.OutputClock.Activation = ENABLE;
@@ -1293,13 +1294,13 @@ static void MX_MDF1_Init(void)
     MdfHandle0.Init.SerialInterface.Mode = MDF_SITF_LF_MASTER_SPI_MODE;
     MdfHandle0.Init.SerialInterface.ClockSource = MDF_SITF_CCK0_SOURCE;
     MdfHandle0.Init.SerialInterface.Threshold = 4;
-    MdfHandle0.Init.FilterBistream = MDF_BITSTREAM0_FALLING;
+    MdfHandle0.Init.FilterBistream = MDF_BITSTREAM0_RISING;
     if (HAL_MDF_Init(&MdfHandle0) != HAL_OK) {
         printf("MDF1 Filter0 (L): Init FAILED\r\n");
         return;
     }
 
-    /* Filter1 — Right channel (rising edge).
+    /* Filter1 — Right channel (falling edge, VDD-side mic).
      * Serial interface disabled — Filter1 reads from SITF0 via bitstream mixer.
      * Only Filter0 owns the serial interface and output clock. */
     MdfHandle1.Instance = MDF1_Filter1;
@@ -1312,7 +1313,7 @@ static void MX_MDF1_Init(void)
     MdfHandle1.Init.SerialInterface.Mode = MDF_SITF_LF_MASTER_SPI_MODE;
     MdfHandle1.Init.SerialInterface.ClockSource = MDF_SITF_CCK0_SOURCE;
     MdfHandle1.Init.SerialInterface.Threshold = 4;
-    MdfHandle1.Init.FilterBistream = MDF_BITSTREAM0_RISING;
+    MdfHandle1.Init.FilterBistream = MDF_BITSTREAM0_FALLING;
     if (HAL_MDF_Init(&MdfHandle1) != HAL_OK) {
         printf("MDF1 Filter1 (R): Init FAILED\r\n");
         return;
@@ -1338,7 +1339,7 @@ static void MX_MDF1_Init(void)
     /* Copy same config for right channel */
     memcpy(&MdfFilterConfig1, &MdfFilterConfig0, sizeof(MdfFilterConfig1));
 
-    printf("MDF1: Stereo init OK (L=falling, R=rising, PE9/PD3, SYNC)\r\n");
+    printf("MDF1: Stereo init OK (L=rising, R=falling, PE9/PD3, SYNC)\r\n");
 }
 
 /**
