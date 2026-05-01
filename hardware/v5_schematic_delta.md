@@ -3,7 +3,7 @@
 Changes from V4:
 1. Remove PB-03F BLE module and USART2 interface
 2. Add ESP32-C3 Super Mini module on SPI2 (PB12-PB15)
-3. ESP32 handles BLE beacon, WiFi AP, web UI, and STM32 OTA flashing
+3. ESP32 handles WiFi AP, web UI, and STM32 OTA flashing
 4. SPI2 pins chosen to match STM32U575 ROM bootloader for field recovery
 5. Remove U5 load switch — ESP32 on always-on 3V3 (boot deadlock fix)
 6. Switch ADF1 → MDF1 for stereo PDM: PE9 clock (unchanged), PD3 data (was PE10)
@@ -182,7 +182,7 @@ P1.3 = GND
 - **NRST/BOOT0 traces:** Can be longer — only used during OTA flash, not timing-critical.
 - **ESP32 power:** Direct connection to 3V3 rail. Add 100nF decoupling cap close to ESP32 3V3 pin.
 - **Antenna keep-out:** 2mm deep, full module width, no copper either layer. Verified under microscope on actual Super Mini module.
-- **Solar charger (L2, M1, D1):** Keep away from ESP32 antenna area — switching noise can degrade WiFi/BLE performance.
+- **Solar charger (L2, M1, D1):** Keep away from ESP32 antenna area — switching noise can degrade WiFi performance.
 
 ---
 

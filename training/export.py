@@ -256,7 +256,7 @@ def generate_mel_filterbank_header(metadata_path, header_path):
 
 
 def generate_model_config_json(metadata_path, tflite_path, json_path):
-    """Generate model_config.json for BLE deployment to device.
+    """Generate model_config.json for OTA deployment to device.
 
     Contains mel params, normalization constants, and class labels so
     firmware can configure inference without a rebuild.
@@ -363,7 +363,7 @@ def main():
     print(f"  quail_model.h       (C header with model bytes)")
     print(f"  mel_config.h        (C header with mel params + labels)")
     print(f"  mel_filterbank.h    (C header with sparse mel filterbank)")
-    print(f"  model_config.json   (JSON config for BLE deployment)")
+    print(f"  model_config.json   (JSON config for OTA deployment)")
     print(f"\nCopy headers to stm32/QuailTracker_U575/Core/Inc/ for firmware integration.")
     print(f"Copy .tflite + model_config.json to SD card /model/ directory.")
 

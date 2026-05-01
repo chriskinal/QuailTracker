@@ -1,7 +1,7 @@
 Designator,Comment,Footprint,LCSC Part #,Qty,Notes
 # MCU & Modules
 U1,STM32U575VGT6,LQFP-100,C5270988,1,MCU 160MHz Cortex-M33 1MB flash 784KB RAM (non-SMPS / LDO variant)
-# COMM module: ESP32-C3 Super Mini (sourced from AliExpress / LCSC). Hosts Wi-Fi AP + web UI, BLE beacon, STM32 OTA over SPI2. Replaces PB-03F BLE (V5).
+# COMM module: ESP32-C3 Super Mini (sourced from AliExpress / LCSC). Hosts Wi-Fi AP + web UI, STM32 OTA over SPI2. Replaces PB-03F BLE (V5).
 U2,ATGM336H-5N31 GPS Module,LCC-18 (10.1x9.7mm),C90770,1,GPS+BDS GNSS module SMD (JLCPCB assembleable)
 # Power Supply
 Q1,XC6220B331MR-G,SOT-23-5,C86534,1,LDO 3.3V 20mV dropout 8uA Iq 1A (Torex)
@@ -39,7 +39,7 @@ C13-C16,1uF X5R 25V,0402,C52923,4,Analog + LDO decoupling
 # LSE Crystal
 X1,32.768kHz NX3215SA,SMD3215,C156244,1,LSE RTC crystal NDK 14pF CL
 # Crystal load caps - using STM32U5 internal trimming caps so external caps optional
-# Load Switches — Three independent switched rails
+# Load Switches — Two independent switched rails (V5: BLE_VCC removed)
 U4,TPS22919DCKR load switch,SOT-23-5,TBD,1,GPS_VCC load switch (verify LCSC stock)
 # U5 (BLE_VCC) removed in V5 — ESP32-C3 sits on always-on 3V3 (switched rail caused boot deadlock). C19 cap also gone.
 U6,TPS22919DCKR load switch,SOT-23-5,TBD,1,PERIPH_VCC load switch (verify LCSC stock)

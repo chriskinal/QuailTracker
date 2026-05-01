@@ -22,7 +22,7 @@ QuailTracker is a complete bioacoustic monitoring system: low-cost recording har
 
 - **STM32U575** MCU (160 MHz Cortex-M33, 784 KB RAM) with **IM72D128** PDM MEMS mic
 - **ATGM336H-5N31** GPS with PPS for sub-millisecond time synchronization across stations
-- **ESP32-C3 Super Mini** companion radio: hosts a Wi-Fi access point + web UI for in-field configuration, BLE beacon for proximity, and STM32 OTA flashing over SPI2
+- **ESP32-C3 Super Mini** companion radio: hosts a Wi-Fi access point + web UI for in-field configuration and STM32 OTA flashing over SPI2
 - 48 kHz FLAC recording with GPS coordinates, temperature, and humidity in Vorbis metadata
 - On-device **TFLite Micro** inference (DS-CNN, int8, ~80–150 KB) between audio frames
 - **CN3791** solar MPPT charger — 90+ days on battery, indefinite with 6V/2W panel

@@ -19,7 +19,7 @@ An open-source, low-cost ARU (~$50/unit including enclosure, batteries, and ante
 - Infineon IM72D128 PDM MEMS microphone on a separate breakout board
 - ATGM336H-5N31 GPS with PPS output for sub-millisecond time synchronization
 - 32 GB MicroSD card for audio storage
-- ESP32-C3 Super Mini companion radio: hosts a Wi-Fi access point + web UI for in-field configuration, BLE beacon for proximity, and STM32 OTA flashing over SPI2
+- ESP32-C3 Super Mini companion radio: hosts a Wi-Fi access point + web UI for in-field configuration and STM32 OTA flashing over SPI2
 - SHT30 temperature/humidity sensor
 - 1S2P 18650 Li-ion pack (7 Ah) with NCP170 LDO (500 nA quiescent)
 - CN3791 solar MPPT charger with 6V/2W panel for indefinite field runtime

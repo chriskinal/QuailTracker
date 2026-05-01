@@ -5,7 +5,7 @@ Open-source wildlife acoustic monitoring ecosystem — recording hardware (STM32
 ## Hardware
 
 - **MCU:** STM32U575VGT6 (160 MHz Cortex-M33, 784 KB RAM, 1 MB flash, LQFP-100, non-SMPS LDO variant)
-- **Companion radio:** ESP32-C3 Super Mini (Wi-Fi AP + web UI, BLE beacon, STM32 OTA over SPI2)
+- **Companion radio:** ESP32-C3 Super Mini (Wi-Fi AP + web UI, STM32 OTA over SPI2)
 - **Microphone:** Infineon IM72D128 PDM MEMS on separate breakout board
 - **GPS:** ATGM336H-5N31 (GPS+BDS, PPS output for sub-ms time sync)
 - **Storage:** MicroSD via SPI1 (PA4 CS, PA5/PA6/PA7 SCK/MISO/MOSI), PC4 card detect
