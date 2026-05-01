@@ -1,7 +1,7 @@
 Designator,Comment,Footprint,LCSC Part #,Qty,Notes
 # MCU & Modules
 U1,STM32U575VGT6,LQFP-100,C5270988,1,MCU 160MHz Cortex-M33 1MB flash 784KB RAM (non-SMPS / LDO variant)
-COMM1,PB-03F (Ai-Thinker),Module,C2980027,1,BLE 5.2 module UART AT commands
+# COMM module: ESP32-C3 Super Mini (sourced from AliExpress / LCSC). Hosts Wi-Fi AP + web UI, BLE beacon, STM32 OTA over SPI2. Replaces PB-03F BLE (V5).
 U2,ATGM336H-5N31 GPS Module,LCC-18 (10.1x9.7mm),C90770,1,GPS+BDS GNSS module SMD (JLCPCB assembleable)
 # Power Supply
 Q1,XC6220B331MR-G,SOT-23-5,C86534,1,LDO 3.3V 20mV dropout 8uA Iq 1A (Torex)
@@ -41,10 +41,9 @@ X1,32.768kHz NX3215SA,SMD3215,C156244,1,LSE RTC crystal NDK 14pF CL
 # Crystal load caps - using STM32U5 internal trimming caps so external caps optional
 # Load Switches — Three independent switched rails
 U4,TPS22919DCKR load switch,SOT-23-5,TBD,1,GPS_VCC load switch (verify LCSC stock)
-U5,TPS22919DCKR load switch,SOT-23-5,TBD,1,BLE_VCC load switch (verify LCSC stock)
+# U5 (BLE_VCC) removed in V5 — ESP32-C3 sits on always-on 3V3 (switched rail caused boot deadlock). C19 cap also gone.
 U6,TPS22919DCKR load switch,SOT-23-5,TBD,1,PERIPH_VCC load switch (verify LCSC stock)
 C18,1uF X5R 16V,0402,C52923,1,PERIPH_VCC load switch output cap
-C19,1uF X5R 16V,0402,C52923,1,BLE_VCC load switch output cap
 # GPS RF — Active Antenna Bias Tee
 L1,47nH multilayer,0402,C97998,1,Bias tee inductor VCC_RF→RF_IN (Murata LQG15HS47NJ02D)
 J1,U.FL / IPEX MHF receptacle,SMD,C88374,1,GPS active antenna connector (HRS U-FL-R-SMT-1)
@@ -98,7 +97,7 @@ SW2,Tactile switch 3x6mm SMD,SMD,C318884,1,BOOT0 button (PH3 to 3V3 for DFU entr
 # -------------------------------------------------------
 # STM32U575VGT6: $6.36
 # ATGM336H-5N31 GPS: $1.93
-# PB-03F BLE: $1.26
+# ESP32-C3 Super Mini: ~$2.00 (off-LCSC, AliExpress)
 # SHT30 module (pre-made, off-board): $1.50
 # XC6220 LDO: $0.47
 # CN3791 solar charger IC: ~$0.30
@@ -126,7 +125,7 @@ SW2,Tactile switch 3x6mm SMD,SMD,C318884,1,BOOT0 button (PH3 to 3V3 for DFU entr
 # -------------------------------------------------------
 # C5270988 - STM32U575VGT6
 # C90770 - ATGM336H-5N31 GPS module
-# C2980027 - PB-03F BLE module
+# (V5 removed PB-03F BLE module C2980027 — ESP32-C3 Super Mini sourced separately)
 # C86534 - XC6220B331MR-G LDO
 # C154992 - CN3791 solar MPPT charger
 # C408412 - 22uH 5020 power inductor

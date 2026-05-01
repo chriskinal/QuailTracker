@@ -68,7 +68,7 @@ CN_MIC,JST PH 4-pin SMD right-angle,JST Commercial,S4B-PH-SM4-TB(LF)(SN),306-S4B
 # OFF-BOARD MODULES (source separately)
 # =============================================
 # GPS ANTENNA,Active GPS/BDS antenna with U.FL cable,Various,N/A,N/A,1,~$3.50,~$3.50,N/A,"Source from AliExpress. Ceramic patch with LNA + U.FL pigtail."
-# BLE,Ai-Thinker PB-03F BLE 5.2 module,Ai-Thinker,PB-03F,N/A,1,~$0.80,~$0.80,N/A,"NOT ON MOUSER. Source from LCSC (C2980027) or AliExpress"
+# COMM,ESP32-C3 Super Mini,Espressif,ESP32-C3,N/A,1,~$2.00,~$2.00,N/A,"NOT ON MOUSER. Source from AliExpress / LCSC. Replaces PB-03F BLE in V5."
 # SHT30,SHT30 temp/humidity module (pre-made),Various,N/A,N/A,1,~$1.50,~$1.50,N/A,"Pre-made I2C module from AliExpress. Or bare IC: Mouser 403-SHT30-DIS-B10KS $2.17@10"
 # =============================================
 #
@@ -81,7 +81,7 @@ CN_MIC,JST PH 4-pin SMD right-angle,JST Commercial,S4B-PH-SM4-TB(LF)(SN),306-S4B
 # CN3791 charger (LCSC C154992):     ~$0.30
 # 22uH inductor (LCSC C408412):     ~$0.15
 # GPS active antenna (AliExpress):  ~$3.50
-# BLE PB-03F (LCSC/AliExpress):     ~$0.80
+# ESP32-C3 Super Mini (AliExpress):  ~$2.00
 # SHT30 module (AliExpress):        ~$1.50
 # Solar panel 5V/2W (AliExpress):   ~$3-5
 # Headers (Amazon):                 ~$0.10
@@ -92,8 +92,8 @@ CN_MIC,JST PH 4-pin SMD right-angle,JST Commercial,S4B-PH-SM4-TB(LF)(SN),306-S4B
 # =============================================
 #
 # SOURCING NOTES:
-# 1. PB-03F BLE module: No Mouser equivalent. Cheapest Mouser BLE is RN4871 ($7.65)
-#    but requires completely different AT command firmware. Keep sourcing from LCSC.
+# 1. ESP32-C3 Super Mini: Source from AliExpress (~$2). Mouser stocks bare ESP32-C3 chips
+#    but not the dev-board form factor we use. Replaced PB-03F BLE in V5.
 # 2. GPS module: ATGM336H-5N31 is LCSC-only (C90770, ~$1.93, 6K+ stock). Not on Mouser.
 #    SMD LCC-18 package — JLCPCB assembleable, no breakout board needed.
 # 3. GPS antenna: Active ceramic patch with LNA + U.FL pigtail. Source from AliExpress ~$3.50.

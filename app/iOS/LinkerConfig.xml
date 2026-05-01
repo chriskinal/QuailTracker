@@ -1,4 +1,0 @@
-<linker>
-  <assembly fullname="Google.Protobuf" preserve="all" />
-  <assembly fullname="QuailTracker.Shared" preserve="all" />
-</linker>

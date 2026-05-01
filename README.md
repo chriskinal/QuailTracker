@@ -5,12 +5,12 @@
 </p>
 
 <p align="center">
-  Open-source wildlife acoustic monitoring — hardware, apps, and ML training in one ecosystem.
+  Open-source wildlife acoustic monitoring — hardware, analyzer, and ML training in one ecosystem.
 </p>
 
 ---
 
-QuailTracker is a complete bioacoustic monitoring system: low-cost recording hardware, a mobile companion app, a desktop analyzer, and a Dockerized model training pipeline. BirdNET provides 6,000+ species identification out of the box, with support for custom-trained on-device models. Defaults are tuned for Northern Bobwhite quail, but every component is configurable for any vocalizing species.
+QuailTracker is a complete bioacoustic monitoring system: low-cost recording hardware with on-device species detection, an ESP32-served web UI for in-field configuration, a desktop analyzer for post-processing, and a Dockerized model training pipeline. BirdNET provides 6,000+ species identification out of the box, with support for custom-trained on-device models. Defaults are tuned for Northern Bobwhite quail, but every component is configurable for any vocalizing species.
 
 **Use cases:** population surveys, presence/absence monitoring, vocalization mapping, behavioral studies, TDOA source localization.
 
@@ -22,42 +22,44 @@ QuailTracker is a complete bioacoustic monitoring system: low-cost recording har
 
 - **STM32U575** MCU (160 MHz Cortex-M33, 784 KB RAM) with **IM72D128** PDM MEMS mic
 - **ATGM336H-5N31** GPS with PPS for sub-millisecond time synchronization across stations
+- **ESP32-C3 Super Mini** companion radio: hosts a Wi-Fi access point + web UI for in-field configuration, BLE beacon for proximity, and STM32 OTA flashing over SPI2
 - 48 kHz FLAC recording with GPS coordinates, temperature, and humidity in Vorbis metadata
 - On-device **TFLite Micro** inference (DS-CNN, int8, ~80–150 KB) between audio frames
-- **~350 µA** Stop 2 sleep with BLE advertising; BLE wake-on-connect and RTC wake
 - **CN3791** solar MPPT charger — 90+ days on battery, indefinite with 6V/2W panel
-- **PB-03F** BLE 5.2 for wireless configuration, health monitoring, and model deployment
 
-### Companion Mobile App (iOS / Android / Desktop)
+### Configuration Web UI (ESP32-C3)
 
-Avalonia 11.2 / .NET 10 app with Plugin.BLE. Tabs for health, operations, schedule, config, and live detection streaming. Survey-in for GPS position averaging. Designed for one-handed field use.
+The recording station hosts its own web interface from the ESP32-C3 — point a phone or laptop at the station's Wi-Fi AP and configure gain, schedule, filters, station ID, and more from any browser. No companion app required. Health (battery, GPS, temperature, humidity) and live detection results are also served from the same UI.
 
 ### Desktop Analyzer (Windows / macOS / Linux)
 
-Avalonia 11.2 / .NET 10 desktop app for post-processing recordings:
-- BirdNET ONNX inference (single file or multi-threaded batch)
-- Mel spectrogram viewer with noise reduction toggle
-- TDOA source localization from multi-station synchronized recordings
-- N-mixture population models with weather covariates
-- Interactive Leaflet map with KML export
-- Training data curation and export
+Avalonia 12 / .NET 10 desktop app organized into four top-level tabs:
+
+- **Single Analysis** — Mel spectrogram viewer with noise reduction toggle, BirdNET ONNX inference (sigmoid activation), drag-and-drop file loading, detection grid with bearing display for stereo recordings.
+- **Bulk Analysis** — Multi-threaded BirdNET batch over directories of WAV/FLAC files; configurable confidence threshold, segment overlap, sensitivity, target-species filter, merge window.
+- **Analytics & Visualization** — TDOA source localization from multi-station synchronized recordings, N-mixture population models with Open-Meteo weather covariates, interactive Cesium 3D map with Google satellite tiles and KML export.
+- **Modeling** — *Data*: training-data curation from detections plus xeno-canto species download (autocomplete from BirdNET's 6,000-species catalog). *Training*: native UI for the training container — hyperparameter form, live epoch progress, val_auc readout, scrolling log, cancellable. *Evaluation*: chart strip with train/validation curves and confusion matrices, artifact list with checkbox-selected download (`.tflite`, `.onnx`, `model_config.json`, etc.).
+
+The analyzer talks to the training container's REST API at `http://localhost:5050` (configurable). The container can be started directly from the analyzer via the **Start Container** button.
 
 ### Training Container (Docker)
 
-Dockerized Python/TensorFlow pipeline with a Flask web UI:
+Dockerized Python/TensorFlow pipeline with a Flask web UI *and* REST API:
 1. Download from xeno-canto with **BirdNET-verified** clip extraction
 2. Mel spectrogram dataset with augmentation (time shift, noise, SpecAugment, pitch)
 3. DS-CNN training with focal loss and early stopping on AUC
 4. Int8 TFLite export + C header for direct firmware embedding
+
+The REST API (`/api/train`, `/api/progress` SSE, `/api/cancel`, `/api/outputs`, `/api/species`, etc.) backs the analyzer's native Modeling tab so you don't have to switch between app and browser to train.
 
 ## Repository Structure
 
 ```
 QuailTracker/
 ├── stm32/QuailTracker_U575/   # STM32U575 firmware (CubeMX + PlatformIO)
-├── app/                       # Companion mobile app (Avalonia)
-├── analyzer/                  # Desktop analyzer (Avalonia)
-├── training/                  # Model training pipeline (Docker/Flask)
+├── esp32_bridge/              # ESP32-C3 companion radio firmware (PlatformIO)
+├── analyzer/                  # Desktop analyzer (Avalonia 12 / .NET 10)
+├── training/                  # Model training pipeline (Docker / Flask / TF)
 ├── hardware/                  # Schematics, BOM, pinout docs
 ├── docs/                      # Documentation
 │   └── ecosystem.md           # Full ecosystem specification
@@ -66,41 +68,34 @@ QuailTracker/
 
 ## Getting Started
 
-### Firmware
+### Firmware (STM32U575)
 
 ```bash
-# Build STM32U575 firmware
-pio run
-pio run --target upload
+pio run                    # build
+pio run --target upload    # flash via J-Link
 ```
 
 ### Training Container
 
 ```bash
 cd training
-docker build -t quailtracker-training .
-docker run -p 5000:5000 -v $(pwd)/output:/output quailtracker-training
-# Open http://localhost:5000
+docker compose up -d --build
+# Open http://localhost:5050, or start it from the analyzer's Modeling → Training tab
 ```
 
-### Apps
+### Desktop Analyzer
 
 ```bash
-# Desktop analyzer
 dotnet run --project analyzer/Desktop
-
-# Companion app (desktop mode)
-dotnet run --project app/Desktop
 ```
 
 ## Adapting to Other Species
 
 | Component | What to change |
 |-----------|---------------|
-| **Training** | Enter species name, adjust BirdNET confidence threshold, run pipeline |
-| **Hardware** | Set gain/filter for target frequency range, deploy new TFLite model |
+| **Training** | Pick a species from the BirdNET catalog (autocomplete in the analyzer or web UI), adjust BirdNET confidence threshold, run pipeline |
+| **Hardware** | Set gain/filter for target frequency range via the on-device web UI, deploy new TFLite model |
 | **Analyzer** | Set BirdNET species filter, adjust population model parameters |
-| **App** | Update gain, filter, and schedule on each station via BLE |
 
 Everything else — TDOA, population modeling, export formats, power management — works identically regardless of target species.
 
