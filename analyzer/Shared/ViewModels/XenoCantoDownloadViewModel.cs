@@ -105,9 +105,16 @@ public sealed partial class XenoCantoDownloadViewModel : ObservableObject
         _configService = configService;
         _apiKey = configService.XenoCantoApiKey ?? string.Empty;
         _canStartContainer = TrainingDirectoryLocator.Find() is not null;
+        // Initial population from local files so the dropdown isn't empty on
+        // startup. The API is the canonical source and is preferred whenever
+        // the container is reachable — see RefreshSpeciesAsync below.
         foreach (var name in SpeciesCatalog.LoadKnownSpecies()) KnownSpecies.Add(name);
         _status.PropertyChanged += OnStatusPropertyChanged;
-        _status.CameOnline += () => AppendLog("[container online]");
+        _status.CameOnline += () =>
+        {
+            AppendLog("[container online]");
+            _ = RefreshSpeciesAsync();
+        };
         _status.WentOffline += () => AppendLog("[container offline]");
     }
 
@@ -238,10 +245,30 @@ public sealed partial class XenoCantoDownloadViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void RefreshSpecies()
+    private async Task RefreshSpeciesAsync()
     {
+        // Prefer the container API — it's the canonical view of the data dir
+        // (and works on shipped builds where the analyzer can't see the repo).
+        // Fall back to local file scan when the container isn't reachable.
+        if (IsContainerReachable)
+        {
+            try
+            {
+                var fromApi = await _service.GetSpeciesAsync(CancellationToken.None);
+                ReplaceSpecies(fromApi);
+                return;
+            }
+            catch { /* fall through to local */ }
+        }
+        ReplaceSpecies(SpeciesCatalog.LoadKnownSpecies());
+    }
+
+    private void ReplaceSpecies(IReadOnlyList<string> names)
+    {
+        // Preserve current selection text — avoid clobbering what the user
+        // just typed if it was already valid.
         KnownSpecies.Clear();
-        foreach (var name in SpeciesCatalog.LoadKnownSpecies()) KnownSpecies.Add(name);
+        foreach (var name in names) KnownSpecies.Add(name);
     }
 
     [RelayCommand]

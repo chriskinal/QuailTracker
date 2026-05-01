@@ -41,6 +41,12 @@ public interface ITrainingService
 
     Task<IReadOnlyList<OutputArtifact>> ListOutputsAsync(CancellationToken ct = default);
 
+    // Authoritative list of species the container's data directory currently
+    // has clips for. Used to populate the species picker so users pick from
+    // existing names instead of typing variants. Falls back to local file
+    // scan in callers if the API is unreachable.
+    Task<IReadOnlyList<string>> GetSpeciesAsync(CancellationToken ct = default);
+
     // Streams the artifact directly to disk — does not buffer the whole file
     // in memory. destPath is overwritten if it exists.
     Task DownloadOutputAsync(string filename, string destPath, CancellationToken ct = default);

@@ -264,6 +264,97 @@ def api_outputs(filename):
     return send_from_directory(OUTPUT_DIR, filename, as_attachment=True)
 
 
+_birdnet_species_cache = None
+
+
+def _load_birdnet_species():
+    """Read BirdNET's canonical species list (common names) from birdnetlib."""
+    global _birdnet_species_cache
+    if _birdnet_species_cache is not None:
+        return _birdnet_species_cache
+
+    names = set()
+    try:
+        import birdnetlib
+        from pathlib import Path
+        pkg_dir = Path(birdnetlib.__file__).parent
+        candidates = [
+            pkg_dir / "models" / "BirdNET_GLOBAL_6K_V2.4_Labels_en_us.txt",
+            pkg_dir / "models" / "BirdNET_GLOBAL_6K_V2.4_Labels.txt",
+        ]
+        labels_path = next((p for p in candidates if p.exists()), None)
+        if labels_path is None:
+            # Fall back to a recursive search in case birdnetlib reorganizes
+            for p in pkg_dir.rglob("*Labels*.txt"):
+                labels_path = p
+                break
+        if labels_path is not None:
+            with open(labels_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    # Format: "Scientific name_Common name"
+                    if "_" in line:
+                        common = line.split("_", 1)[1].strip()
+                    else:
+                        common = line
+                    if common:
+                        names.add(common)
+    except Exception:
+        pass
+
+    _birdnet_species_cache = sorted(names, key=str.lower)
+    return _birdnet_species_cache
+
+
+@app.route("/api/species")
+def api_species():
+    """List species the picker should offer.
+
+    Union of:
+      - species subdirectories under DATA_DIR/clips/ (existing user data)
+      - labels.txt entries
+      - BirdNET's canonical English common-name list (so the picker covers
+        every valid bird name even on a fresh install with no clips yet —
+        prevents the typo / near-duplicate-dir class of bug for new
+        downloads).
+
+    Excludes 'noise'. Used by the Flask UI and the desktop analyzer.
+    """
+    clips_dir = os.path.join(DATA_DIR, "clips")
+    existing = set()
+
+    labels_file = os.path.join(clips_dir, "labels.txt")
+    if os.path.isfile(labels_file):
+        try:
+            with open(labels_file) as f:
+                for line in f:
+                    name = line.strip()
+                    if name and name.lower() != "noise":
+                        existing.add(name)
+        except Exception:
+            pass
+
+    if os.path.isdir(clips_dir):
+        try:
+            for entry in os.listdir(clips_dir):
+                if entry.lower() == "noise":
+                    continue
+                if os.path.isdir(os.path.join(clips_dir, entry)):
+                    existing.add(entry)
+        except Exception:
+            pass
+
+    catalog = _load_birdnet_species()
+    all_names = sorted(existing | set(catalog), key=str.lower)
+
+    return jsonify({
+        "species": all_names,
+        "existing": sorted(existing, key=str.lower),
+    })
+
+
 @app.route("/api/outputs")
 def api_list_outputs():
     """List available output files."""

@@ -144,6 +144,27 @@ public sealed class TrainingService : ITrainingService, IDisposable
         return true;
     }
 
+    public async Task<IReadOnlyList<string>> GetSpeciesAsync(CancellationToken ct = default)
+    {
+        var resp = await _http.GetAsync("/api/species", ct).ConfigureAwait(false);
+        resp.EnsureSuccessStatusCode();
+        var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        using var doc = JsonDocument.Parse(json);
+        var list = new List<string>();
+        if (doc.RootElement.TryGetProperty("species", out var arr) && arr.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var el in arr.EnumerateArray())
+            {
+                if (el.ValueKind == JsonValueKind.String)
+                {
+                    var s = el.GetString();
+                    if (!string.IsNullOrEmpty(s)) list.Add(s);
+                }
+            }
+        }
+        return list;
+    }
+
     public async Task<IReadOnlyList<OutputArtifact>> ListOutputsAsync(CancellationToken ct = default)
     {
         var resp = await _http.GetAsync("/api/outputs", ct).ConfigureAwait(false);

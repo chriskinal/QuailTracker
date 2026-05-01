@@ -83,9 +83,13 @@
                     <label>Species</label>
                     <div class="species-input">
                         <input type="text" id="f-species-input"
-                               placeholder="e.g. Northern Bobwhite">
+                               list="species-options"
+                               placeholder="Pick from list or type a new name"
+                               autocomplete="off">
                         <button type="button" id="btn-add-species" class="btn-secondary">Add</button>
                     </div>
+                    <datalist id="species-options"></datalist>
+                    <span class="hint">Picking an existing entry avoids duplicate directories from name variants.</span>
                     <div id="species-tags" class="tags"></div>
                 </div>
                 <div class="field checkbox">
@@ -241,6 +245,17 @@
             }
         });
 
+        // --- Known species (for datalist autocomplete) ---
+        function refreshKnownSpecies() {
+            fetch('/api/species').then(r => r.json()).then(data => {
+                const dl = document.getElementById('species-options');
+                dl.innerHTML = (data.species || [])
+                    .map(s => `<option value="${s.replace(/"/g, '&quot;')}"></option>`)
+                    .join('');
+            }).catch(() => { /* ignore — input still accepts free text */ });
+        }
+        refreshKnownSpecies();
+
         // --- API key persistence ---
         const apiKeyInput = document.getElementById('f-api-key');
         apiKeyInput.value = localStorage.getItem('xc_api_key') || '';
@@ -325,6 +340,7 @@
                             s.classList.add('done');
                         });
                         loadResults();
+                        refreshKnownSpecies();
                         return;
                     }
                     if (parsed._status) {
