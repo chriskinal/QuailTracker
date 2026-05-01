@@ -1,10 +1,11 @@
-# STM32U575 Production Board — Netlist / Wiring Guide (V3)
+# STM32U575 Production Board — Netlist / Wiring Guide (V5)
 
 All components placed in EasyEDA. Wire using **net port labels** — no long wires across the sheet.
 Each named net lists every component pin that should carry that net port label.
 
 MCU is non-SMPS variant (C5270988) — use **Figure 15** (LQFP100 pinout), NOT Figure 14 (LQFP100_SMPS).
-Cross-reference: `stm32u575_pinout.md` (pin assignments), `stm32u575_bom_lcsc.csv` (BOM)
+Cross-reference: `stm32u575_pinout.md` (pin assignments), `stm32u575_bom_lcsc.csv` (BOM).
+Migration history (V2 → V3 → V4 → V5) is preserved in `archive/`.
 
 ---
 
@@ -24,13 +25,11 @@ Cross-reference: `stm32u575_pinout.md` (pin assignments), `stm32u575_bom_lcsc.cs
 | **VBAT+** | Battery positive rail | CN1.1, Q1.VIN(1), Q1.CE(3), C16.+, R7.1, U7.BAT(7), C21.+, RCS.2 |
 | **SOLAR+** | Solar panel positive | CN3.1, D2.anode |
 | **SOLAR_IN** | Solar input (after blocking diode) | D2.cathode, U7.VCC(9), C20.+, C23.2, R14.1, M1.Source |
-| **3V3** | 3.3V regulated rail (always-on) | Q1.VOUT(5), C15.+, C11.+, U1 VDD pins (11, 28, 50, 75, 100), U1.VDDA(22), U1.VREF+(21), U1.VDDUSB(73), U1.VBAT(6), C1.+, C2.+, C3.+, C4.+, C5.+, C6.+, C7.+, C8.+, C9.+, C13.+, C14.+, R3.1, R4.1, U4.VIN, U5.VIN, U6.VIN, CN2.3, H2.1, SW2.1, P1.1, U3.3V3 |
+| **3V3** | 3.3V regulated rail (always-on) | Q1.VOUT(5), C15.+, C11.+, U1 VDD pins (11, 28, 50, 75, 100), U1.VDDA(22), U1.VREF+(21), U1.VDDUSB(73), U1.VBAT(6), C1.+, C2.+, C3.+, C4.+, C5.+, C6.+, C7.+, C8.+, C9.+, C13.+, C14.+, R3.1, R4.1, U4.VIN, U6.VIN, CN2.3, H2.1, SW2.1, P1.1, U3.3V3, C24.+ |
 | **GND** | Ground | *(see dedicated GND table below)* |
 | **GPS_VCC** | Switched 3.3V to GPS | U4.VOUT, U2.pin8 (VCC), C17.+ |
-| **BLE_VCC** | Switched 3.3V to BLE | U5.VOUT, COMM1.VCC, C19.+ |
 | **PERIPH_VCC** | Switched 3.3V to SD + SHT30 | U6.VOUT, C18.+, CARD1.VDD, H1.1 |
 | **GPS_EN** | GPS load switch enable | U4.ON, U1.pin59 (PD12) |
-| **BLE_EN** | BLE load switch enable | U5.ON, U1.pin57 (PD10) |
 | **PERIPH_EN** | Peripheral load switch enable | U6.ON, U1.pin58 (PD11) |
 | **VBAT_SENSE** | Battery ADC midpoint | R7.2, R8.1, U1.pin15 (PC0/ADC1_IN1) |
 | **SOLAR_SW** | Buck switching node (M1 drain) | M1.Drain, D1.cathode, L2.1 |
@@ -52,11 +51,11 @@ Place the **GND** net port label on every pin listed below.
 | MCU VSS | U1.pin10, U1.pin19 (VSSA), U1.pin20 (VREF-), U1.pin27, U1.pin49, U1.pin74, U1.pin99 |
 | LDO | Q1.VSS(2) |
 | Decoupling caps (−) | C1.−, C2.−, C3.−, C4.−, C5.−, C6.−, C7.−, C8.−, C9.−, C10.−, C11.−, C12.−, C13.−, C14.−, C15.−, C16.− |
-| Connectors | CN1.2, CN2.4, CN3.2, CARD1.VSS, COMM1.GND, H1.2, H2.2, P1.3, SW1.2 |
+| Connectors | CN1.2, CN2.4, CN3.2, CARD1.VSS, U3.GND, H1.2, H2.2, P1.3, SW1.2 |
 | GPS module | U2.pin1 (GND), U2.pin10 (GND), U2.pin12 (GND) |
 | GPS RF | J1.GND, C17.− |
-| Load switches | U4.GND, U5.GND, U6.GND |
-| Output caps | C18.−, C19.− |
+| Load switches | U4.GND, U6.GND |
+| Output caps | C18.−, C24.− |
 | Solar charger | U7.GND(2), C20.−, C21.−, C22.2, D1.anode, R15.2, R18.2 |
 | Divider low side | R8.2 |
 | BOOT0 pull-down | R6.2 |
@@ -91,31 +90,51 @@ J1 (U.FL connector) connects to the active GPS antenna via coax pigtail.
 
 ### Load Switches — How They Work
 
-Three TPS22916 (or equivalent) single-channel load switches, one per rail.
+Two TPS22916 (or equivalent) single-channel load switches, one per switched rail.
 Each has a GPIO-controlled ON pin (active high, internal pull-down = OFF by default).
 
 | Switch | Rail | GPIO | MCU Pin |
 |--------|------|------|---------|
 | U4 | GPS_VCC | PD12 | 59 |
-| U5 | BLE_VCC | PD10 | 57 |
 | U6 | PERIPH_VCC | PD11 | 58 |
 
 - **GPIO HIGH** → load switch ON → rail = 3.3V
 - **GPIO LOW** → load switch OFF → rail = 0V
 
-During Stop 2 sleep, STM32 GPIOs hold their output state. BLE_VCC stays ON
-(PD10 HIGH) for BLE advertising, GPS_VCC and PERIPH_VCC go OFF.
+The ESP32-C3 (U3) sits on the always-on 3V3 rail — V4's BLE_VCC switched rail
+(U5 + C19) was removed in V5 because cycling power to the ESP32 caused a boot
+deadlock through its NRST clamp diode. During Stop 2 sleep, STM32 GPIOs hold
+their output state; both switched rails (GPS_VCC and PERIPH_VCC) go OFF.
 
 ---
 
-## Signal Nets — BLE Block
+## Signal Nets — ESP32-C3 Companion Radio (U3)
+
+ESP32-C3 Super Mini hosts the Wi-Fi AP + web UI and handles STM32 OTA flashing.
+Mounted as an SMD castellated module — see Layout Notes for antenna keep-out.
 
 | Net Port | Description | Connected Pins |
 |----------|-------------|----------------|
-| **BLE_TX** | BLE data out (BLE→MCU) | COMM1.TX, U1.pin26 (PA3 / USART2_RX, AF7) |
-| **BLE_RX** | BLE data in (MCU→BLE) | COMM1.RX, U1.pin25 (PA2 / USART2_TX, AF7) |
+| **SPI2_NSS** | SPI2 chip select (ESP32 → STM32) | U3.GPIO7, U1.pin51 (PB12 / SPI2_NSS, AF5) |
+| **SPI2_SCK** | SPI2 clock | U3.GPIO4, U1.pin52 (PB13 / SPI2_SCK, AF5) |
+| **SPI2_MISO** | SPI2 data, STM32 → ESP32 | U3.GPIO5, U1.pin53 (PB14 / SPI2_MISO, AF5) |
+| **SPI2_MOSI** | SPI2 data, ESP32 → STM32 | U3.GPIO6, U1.pin54 (PB15 / SPI2_MOSI, AF5) |
 
-COMM1 (PB-03F) VCC → BLE_VCC (switched rail), GND → GND (already in power nets above).
+PB12-PB15 were chosen to match the STM32U575 ROM bootloader's SPI slave pins,
+so the ESP32 can recover a bricked STM32 via the system bootloader.
+
+### ESP32 Shared Control Lines (existing nets — just add the ESP32 pin)
+
+| Net Port | Add Pin | Existing Pins on Net | Notes |
+|----------|---------|----------------------|-------|
+| **NRST**  | U3.GPIO2 | U1.pin14 (NRST), C10, SW1 | ESP32 normally hi-Z; drives low for STM32 OTA reset. |
+| **BOOT0** | U3.GPIO3 | U1.pin94 (PP1/BOOT0), R6, SW2 | ESP32 normally hi-Z; drives high for OTA bootloader entry. |
+
+### ESP32 Power
+
+U3.3V3 → 3V3 net (always-on rail — see Load Switches note above for why ESP32
+cannot be on a switched rail). U3.GND → GND. Local 100nF decoupling cap (C24)
+across U3.3V3 / U3.GND, placed close to the module.
 
 ---
 
@@ -137,10 +156,14 @@ CARD1 VDD → PERIPH_VCC (switched rail), VSS → GND (already in power nets abo
 
 | Net Port | Description | Connected Pins |
 |----------|-------------|----------------|
-| **PDM_CLK** | PDM clock to mic breakout | CN2.1, U1.pin40 (PE9 / ADF1_CCK0, AF3) |
-| **PDM_DATA** | PDM data from mic breakout | CN2.2, U1.pin41 (PE10 / ADF1_SDI0, AF3) |
+| **PDM_CLK** | PDM clock to mic breakout | CN2.1, U1.pin40 (PE9 / MDF1_CCK0, AF6) |
+| **PDM_DATA** | PDM data from mic breakout | CN2.2, U1.pin84 (PD3 / MDF1_SDI0, AF6) |
 
 CN2 (JST PH 4-pin): pin 1 = CLK, pin 2 = DATA, pin 3 = VDD (3V3), pin 4 = GND.
+
+V5 switched the audio capture peripheral from ADF1 to MDF1 to support stereo
+PDM. PE9 is the same physical pin (different AF), but the data line moved
+from PE10 (ADF1_SDI0, AF3) to PD3 (MDF1_SDI0, AF6).
 
 ---
 
@@ -297,8 +320,9 @@ These connections are short enough to wire directly — no net port label needed
 | R16.1 | 3V3 net | CHRG pull-up |
 | R17.1 | 3V3 net | DONE pull-up |
 | U4.VIN | 3V3 net | GPS load switch input |
-| U5.VIN | 3V3 net | BLE load switch input |
 | U6.VIN | 3V3 net | Peripheral load switch input |
+| C24.+ | U3.3V3 | ESP32 decoupling cap (placed close to module) |
+| C24.− | GND net | ESP32 decoupling cap return |
 | R6.1 | U1.pin94 (PP1/BOOT0) | BOOT0 pull-down |
 | R6.2 | GND | Via GND net port |
 | SW2.2 | U1.pin94 (PP1/BOOT0) | BOOT0 button (same node as R6.1) |
@@ -349,23 +373,24 @@ Only pins with net port connections are listed — all others are unused (config
 | 35 | PB0 | CHRG_STATUS | GPIO input (solar charging) |
 | 36 | PB1 | DONE_STATUS | GPIO input (charge complete) |
 | 67 | PA8 | GPS_PPS | EXTI |
-| 25 | PA2 | BLE_RX | USART2_TX (AF7) |
-| 26 | PA3 | BLE_TX | USART2_RX (AF7) |
 | 29 | PA4 | SD_CS | GPIO output |
 | 30 | PA5 | SD_SCK | SPI1_SCK (AF5) |
 | 31 | PA6 | SD_MISO | SPI1_MISO (AF5) |
 | 32 | PA7 | SD_MOSI | SPI1_MOSI (AF5) |
 | 33 | PC4 | SD_CD | GPIO input (card detect) |
-| 40 | PE9 | PDM_CLK | ADF1_CCK0 (AF3) |
-| 41 | PE10 | PDM_DATA | ADF1_SDI0 (AF3) |
+| 40 | PE9 | PDM_CLK | MDF1_CCK0 (AF6) |
+| 51 | PB12 | SPI2_NSS | SPI2_NSS (AF5) — ESP32 CS |
+| 52 | PB13 | SPI2_SCK | SPI2_SCK (AF5) — ESP32 clock |
+| 53 | PB14 | SPI2_MISO | SPI2_MISO (AF5) — STM32→ESP32 |
+| 54 | PB15 | SPI2_MOSI | SPI2_MOSI (AF5) — ESP32→STM32 |
 | 55 | PD8 | DBG_TX | USART3_TX (AF7) |
 | 56 | PD9 | DBG_RX | USART3_RX (AF7) |
-| 57 | PD10 | BLE_EN | GPIO output |
 | 58 | PD11 | PERIPH_EN | GPIO output |
 | 59 | PD12 | GPS_EN | GPIO output |
 | 60 | PD13 | LED_OUT | GPIO output |
 | 61 | PD14 | GPS_WAKE | GPIO output |
 | 62 | PD15 | GPS_RST | GPIO output |
+| 84 | PD3 | PDM_DATA | MDF1_SDI0 (AF6) |
 | 68 | PA9 | GPS_RX | USART1_TX (AF7) |
 | 69 | PA10 | GPS_TX | USART1_RX (AF7) |
 | 72 | PA13 | SWDIO | SWD (AF0) |
@@ -402,12 +427,13 @@ L1 is the GPS antenna bias tee inductor (not SMPS-related).
 
 | C17 | 10uF | GPS_VCC rail (near U2 pin 8) | GPS_VCC | GND |
 | C18 | 1uF | PERIPH_VCC load switch output | PERIPH_VCC | GND |
-| C19 | 1uF | BLE_VCC load switch output | BLE_VCC | GND |
 
 | C20 | 10uF | Solar charger input (U7 VCC) | SOLAR_IN | GND |
 | C21 | 10uF | Solar charger output (U7 BAT) | VBAT+ | GND |
 
-**Totals:** 11x 100nF (C1-C10 + C23), 1x 220nF (C22), 4x 10uF (C11, C17, C20, C21), 1x 4.7uF (C12), 6x 1uF (C13-C16, C18, C19) = 23 caps.
+| C24 | 100nF | ESP32-C3 (U3) 3V3 decoupling | 3V3 | GND |
+
+**Totals:** 12x 100nF (C1-C10, C23, C24), 1x 220nF (C22), 4x 10uF (C11, C17, C20, C21), 1x 4.7uF (C12), 5x 1uF (C13-C16, C18) = 23 caps.
 
 ---
 
@@ -415,15 +441,19 @@ L1 is the GPS antenna bias tee inductor (not SMPS-related).
 
 - [ ] Every U1 pin from `stm32u575_pinout.md` appears in a net or marked unused
 - [ ] No MCU pin used in two different nets
-- [ ] All 19 decoupling caps connected (10x 100nF + 2x 10uF + 1x 4.7uF + 6x 1uF)
+- [ ] All 23 decoupling caps connected (12x 100nF + 4x 10uF + 1x 4.7uF + 5x 1uF + 1x 220nF)
 - [ ] VCAP (pin 48): 4.7uF cap to GND (pin 49)
 - [ ] VREF- (pin 20): tied to VSSA/GND
 - [ ] All component VCC pins on correct rail, all GND pins on GND
-- [ ] Load switches: U4/U5/U6 VIN on 3V3, GND on GND, ON on respective GPIO
+- [ ] Load switches: U4/U6 VIN on 3V3, GND on GND, ON on respective GPIO
 - [ ] GPS_VCC rail: U4.VOUT → U2.pin8 (VCC), C17
-- [ ] BLE_VCC rail: U5.VOUT → COMM1.VCC, C19
 - [ ] PERIPH_VCC rail: U6.VOUT → CARD1.VDD, H1.1, C18
 - [ ] H1.1 connects ONLY to PERIPH_VCC — do NOT route 3V3 through H1.1 as a via
+- [ ] ESP32 (U3) 3V3 directly on always-on 3V3 rail (NOT a switched rail)
+- [ ] ESP32 decoupling: C24 (100nF) close to U3.3V3 / U3.GND
+- [ ] SPI2: PB12-PB15 wired to U3.GPIO7/4/5/6 (NSS/SCK/MISO/MOSI)
+- [ ] ESP32 NRST share: U3.GPIO2 → NRST net (alongside C10, SW1)
+- [ ] ESP32 BOOT0 share: U3.GPIO3 → BOOT0 net (alongside R6, SW2)
 - [ ] GPS: U2.pin6 (VBAT) on 3V3 (always-on, NOT GPS_VCC)
 - [ ] GPS: U2.pin4 (1PPS) on GPS_PPS, U2.pin5 (ON/OFF) on GPS_WAKE, U2.pin9 (nRESET) on GPS_RST
 - [ ] GPS: U2.pin1/10/12 (GND) all on GND net
