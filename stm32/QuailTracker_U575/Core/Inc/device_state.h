@@ -20,7 +20,7 @@
 typedef enum {
     PWR_SCHEDULED_NONREC = 0,  /* Sleeping between recording windows */
     PWR_SCHEDULED_REC    = 1,  /* Recording during a scheduled window */
-    PWR_USER_CONNECTED   = 2,  /* User connected via BLE/WiFi */
+    PWR_USER_CONNECTED   = 2,  /* User connected via WiFi */
     PWR_DEV_MODE         = 3,  /* Development mode — everything on */
 } power_state_t;
 
@@ -156,7 +156,6 @@ typedef struct {
     struct {
         uint8_t  espReady;           /* 1 = ESP32 bridge responding on SPI */
         uint8_t  wifiActive;         /* 1 = WiFi AP running */
-        uint8_t  bleConnected;       /* 1 = BLE client connected to ESP32 */
         uint32_t spiTransactions;    /* total SPI exchanges */
         uint32_t lastSpiTick;        /* HAL tick of last successful SPI */
         char     espFwVersion[16];   /* ESP32 firmware version string */

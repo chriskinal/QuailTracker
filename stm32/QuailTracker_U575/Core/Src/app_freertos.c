@@ -992,7 +992,6 @@ void StartCliTask(void *argument)
                (unsigned long)dev.comms.spiTransactions);
         printf("Last SPI:     %lu ms ago\r\n", (unsigned long)age);
         printf("WiFi AP:      Managed by ESP32\r\n");
-        printf("BLE Beacon:   Managed by ESP32\r\n");
         printf("====================\r\n");
         printMenu();
         break;
@@ -2258,7 +2257,7 @@ static void configSetDefaults(device_config_t *c)
     c->magic = CONFIG_MAGIC;
     c->version = CONFIG_VERSION;
     /* Per-unit default derived from STM32U5 96-bit unique ID so unprovisioned
-     * boards don't collide on the BLE/WiFi name. User can still rename via app. */
+     * boards don't collide on the WiFi AP name. User can rename via web UI. */
     uint32_t uid = HAL_GetUIDw0() ^ HAL_GetUIDw1() ^ HAL_GetUIDw2();
     snprintf(c->stationId, sizeof(c->stationId), "QT_%04lX",
              (unsigned long)(uid & 0xFFFFu));
