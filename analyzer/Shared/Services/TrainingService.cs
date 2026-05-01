@@ -47,12 +47,24 @@ public sealed class TrainingService : ITrainingService, IDisposable
     {
         _http = new HttpClient
         {
-            BaseAddress = new Uri(baseUrl ?? DefaultBaseUrl),
+            BaseAddress = new Uri(NormalizeUrl(baseUrl) ?? DefaultBaseUrl),
             // Short timeout for control endpoints. SSE streaming uses its own
             // long-lived request that bypasses this.
             Timeout = TimeSpan.FromSeconds(15),
         };
         _ownsHttp = true;
+    }
+
+    public TrainingService(ConfigService config)
+        : this(config.TrainingApiBaseUrl)
+    {
+    }
+
+    private static string? NormalizeUrl(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return null;
+        var trimmed = url.Trim();
+        return Uri.TryCreate(trimmed, UriKind.Absolute, out _) ? trimmed : null;
     }
 
     // For tests / DI: caller-supplied HttpClient (BaseAddress must be set).

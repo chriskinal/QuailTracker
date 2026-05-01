@@ -18,6 +18,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -30,16 +33,25 @@ namespace QuailTracker.Analyzer.Shared.ViewModels;
 public sealed partial class ModelingTrainingViewModel : ObservableObject
 {
     private const int MaxLogLines = 300;
-    private const int ReachabilityPollMs = 3000;
 
     private readonly ITrainingService _service;
-    private readonly CancellationTokenSource _lifetimeCts = new();
+    private readonly TrainingContainerStatusService _status;
+    private readonly ConfigService _configService;
     private readonly Queue<string> _logLines = new();
 
     private CancellationTokenSource? _jobCts;
     private bool _isStreaming;
 
     public string ContainerEndpoint => _service.BaseAddress.ToString();
+
+    [ObservableProperty]
+    private string _baseUrlEdit = string.Empty;
+
+    [ObservableProperty]
+    private string _settingsHint = string.Empty;
+
+    [ObservableProperty]
+    private bool _canStartContainer;
 
     // --- Hyperparameters ---
 
@@ -69,9 +81,8 @@ public sealed partial class ModelingTrainingViewModel : ObservableObject
     [NotifyCanExecuteChangedFor(nameof(CancelCommand))]
     private bool _isRunning;
 
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(StartTrainingCommand))]
-    private bool _isContainerReachable;
+    /// <summary>Projection of <see cref="TrainingContainerStatusService.IsContainerReachable"/>.</summary>
+    public bool IsContainerReachable => _status.IsContainerReachable;
 
     [ObservableProperty]
     private string _stage = string.Empty;
@@ -91,10 +102,35 @@ public sealed partial class ModelingTrainingViewModel : ObservableObject
     [ObservableProperty]
     private string _lastError = string.Empty;
 
-    public ModelingTrainingViewModel(ITrainingService service)
+    public ModelingTrainingViewModel(
+        ITrainingService service,
+        TrainingContainerStatusService status,
+        ConfigService configService)
     {
         _service = service;
-        _ = PollReachabilityAsync(_lifetimeCts.Token);
+        _status = status;
+        _configService = configService;
+        _baseUrlEdit = service.BaseAddress.ToString().TrimEnd('/');
+        _canStartContainer = TrainingDirectoryLocator.Find() is not null;
+        _status.PropertyChanged += OnStatusPropertyChanged;
+        _status.CameOnline += () => AppendLog("[container online]");
+        _status.WentOffline += () => AppendLog("[container offline]");
+    }
+
+    private void OnStatusPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(TrainingContainerStatusService.IsContainerReachable))
+        {
+            OnPropertyChanged(nameof(IsContainerReachable));
+            StartTrainingCommand.NotifyCanExecuteChanged();
+            // Reconcile if server says no job is running but we still think one is.
+            // Don't touch IsRunning while the SSE stream is still alive — it owns that flag.
+            var serverRunning = _status.LastStatus?.Running ?? false;
+            if (IsRunning && !serverRunning && !_isStreaming)
+            {
+                IsRunning = false;
+            }
+        }
     }
 
     [RelayCommand(CanExecute = nameof(CanStart))]
@@ -211,29 +247,76 @@ public sealed partial class ModelingTrainingViewModel : ObservableObject
         }
     }
 
-    private async Task PollReachabilityAsync(CancellationToken ct)
+    [RelayCommand]
+    private void OpenWebUi()
     {
-        while (!ct.IsCancellationRequested)
+        try
         {
-            try
+            var psi = new ProcessStartInfo(_service.BaseAddress.ToString())
             {
-                var status = await _service.GetStatusAsync(ct);
-                IsContainerReachable = true;
-                // Reconcile if server says no job is running but we still think one is.
-                // Don't touch IsRunning while the SSE stream is still alive — it owns that flag.
-                if (IsRunning && !status.Running && !_isStreaming)
-                {
-                    IsRunning = false;
-                }
-            }
-            catch (OperationCanceledException) { break; }
-            catch
-            {
-                IsContainerReachable = false;
-            }
-            try { await Task.Delay(ReachabilityPollMs, ct); }
-            catch (OperationCanceledException) { break; }
+                UseShellExecute = true,
+            };
+            Process.Start(psi);
         }
+        catch (Exception ex)
+        {
+            AppendLog($"Could not open browser: {ex.Message}");
+        }
+    }
+
+    [RelayCommand]
+    private async Task StartContainerAsync()
+    {
+        var dir = TrainingDirectoryLocator.Find();
+        if (dir is null)
+        {
+            AppendLog("Cannot find training/ directory with docker-compose.yml — start the container manually.");
+            return;
+        }
+
+        AppendLog($"docker compose up -d  (cwd: {dir})");
+        try
+        {
+            var psi = new ProcessStartInfo("docker", "compose up -d")
+            {
+                WorkingDirectory = dir,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            using var p = Process.Start(psi)
+                ?? throw new InvalidOperationException("docker did not start");
+            await p.WaitForExitAsync(CancellationToken.None);
+            if (p.ExitCode == 0)
+            {
+                AppendLog("Container start requested. Watch for [container online].");
+            }
+            else
+            {
+                var err = await p.StandardError.ReadToEndAsync(CancellationToken.None);
+                AppendLog($"docker compose up -d failed (exit {p.ExitCode}): {err.Trim()}");
+            }
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"Could not run docker: {ex.Message}. Is Docker installed and on PATH?");
+        }
+    }
+
+    [RelayCommand]
+    private async Task SaveBaseUrlAsync()
+    {
+        var url = (BaseUrlEdit ?? string.Empty).Trim();
+        if (!Uri.TryCreate(url, UriKind.Absolute, out _))
+        {
+            SettingsHint = "Invalid URL. Example: http://localhost:5050";
+            return;
+        }
+        _configService.TrainingApiBaseUrl = url;
+        await _configService.SaveAsync();
+        SettingsHint = url == _service.BaseAddress.ToString().TrimEnd('/')
+            ? "Saved."
+            : "Saved. Restart the analyzer to apply.";
     }
 
     private void AppendLog(string msg)

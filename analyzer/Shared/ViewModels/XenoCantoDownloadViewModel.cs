@@ -18,6 +18,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -30,11 +33,10 @@ namespace QuailTracker.Analyzer.Shared.ViewModels;
 public sealed partial class XenoCantoDownloadViewModel : ObservableObject
 {
     private const int MaxLogLines = 150;
-    private const int ReachabilityPollMs = 3000;
 
     private readonly ITrainingService _service;
+    private readonly TrainingContainerStatusService _status;
     private readonly ConfigService _configService;
-    private readonly CancellationTokenSource _lifetimeCts = new();
     private readonly Queue<string> _logLines = new();
 
     private CancellationTokenSource? _jobCts;
@@ -43,6 +45,14 @@ public sealed partial class XenoCantoDownloadViewModel : ObservableObject
     public string ContainerEndpoint => _service.BaseAddress.ToString();
 
     public IReadOnlyList<string> QualityOptions { get; } = ["A", "B", "C"];
+
+    /// <summary>
+    /// Species the user already has clips for, read from the local training
+    /// data directory. Used as a picker source so users pick existing names
+    /// rather than typing variants that create duplicate dirs (e.g. "Bobwhite"
+    /// vs "Northern Bobwhite"). Free-text entry is still allowed.
+    /// </summary>
+    public ObservableCollection<string> KnownSpecies { get; } = [];
 
     // --- Form fields ---
 
@@ -73,9 +83,8 @@ public sealed partial class XenoCantoDownloadViewModel : ObservableObject
     [NotifyCanExecuteChangedFor(nameof(CancelCommand))]
     private bool _isRunning;
 
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(StartDownloadCommand))]
-    private bool _isContainerReachable;
+    /// <summary>Projection of <see cref="TrainingContainerStatusService.IsContainerReachable"/>.</summary>
+    public bool IsContainerReachable => _status.IsContainerReachable;
 
     [ObservableProperty]
     private string _logTail = string.Empty;
@@ -83,12 +92,37 @@ public sealed partial class XenoCantoDownloadViewModel : ObservableObject
     [ObservableProperty]
     private string _lastError = string.Empty;
 
-    public XenoCantoDownloadViewModel(ITrainingService service, ConfigService configService)
+    [ObservableProperty]
+    private bool _canStartContainer;
+
+    public XenoCantoDownloadViewModel(
+        ITrainingService service,
+        TrainingContainerStatusService status,
+        ConfigService configService)
     {
         _service = service;
+        _status = status;
         _configService = configService;
         _apiKey = configService.XenoCantoApiKey ?? string.Empty;
-        _ = PollReachabilityAsync(_lifetimeCts.Token);
+        _canStartContainer = TrainingDirectoryLocator.Find() is not null;
+        foreach (var name in SpeciesCatalog.LoadKnownSpecies()) KnownSpecies.Add(name);
+        _status.PropertyChanged += OnStatusPropertyChanged;
+        _status.CameOnline += () => AppendLog("[container online]");
+        _status.WentOffline += () => AppendLog("[container offline]");
+    }
+
+    private void OnStatusPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(TrainingContainerStatusService.IsContainerReachable))
+        {
+            OnPropertyChanged(nameof(IsContainerReachable));
+            StartDownloadCommand.NotifyCanExecuteChanged();
+            var serverRunning = _status.LastStatus?.Running ?? false;
+            if (IsRunning && !serverRunning && !_isStreaming)
+            {
+                IsRunning = false;
+            }
+        }
     }
 
     // Persist API key when the user edits it. Fire-and-forget save — non-critical
@@ -196,34 +230,74 @@ public sealed partial class XenoCantoDownloadViewModel : ObservableObject
         }
     }
 
-    private async Task PollReachabilityAsync(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                var status = await _service.GetStatusAsync(ct);
-                IsContainerReachable = true;
-                if (IsRunning && !status.Running && !_isStreaming)
-                {
-                    IsRunning = false;
-                }
-            }
-            catch (OperationCanceledException) { break; }
-            catch
-            {
-                IsContainerReachable = false;
-            }
-            try { await Task.Delay(ReachabilityPollMs, ct); }
-            catch (OperationCanceledException) { break; }
-        }
-    }
-
     private void AppendLog(string msg)
     {
         _logLines.Enqueue(msg);
         while (_logLines.Count > MaxLogLines) _logLines.Dequeue();
         LogTail = string.Join("\n", _logLines);
+    }
+
+    [RelayCommand]
+    private void RefreshSpecies()
+    {
+        KnownSpecies.Clear();
+        foreach (var name in SpeciesCatalog.LoadKnownSpecies()) KnownSpecies.Add(name);
+    }
+
+    [RelayCommand]
+    private void OpenWebUi()
+    {
+        try
+        {
+            var psi = new ProcessStartInfo(_service.BaseAddress.ToString())
+            {
+                UseShellExecute = true,
+            };
+            Process.Start(psi);
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"Could not open browser: {ex.Message}");
+        }
+    }
+
+    [RelayCommand]
+    private async Task StartContainerAsync()
+    {
+        var dir = TrainingDirectoryLocator.Find();
+        if (dir is null)
+        {
+            AppendLog("Cannot find training/ directory with docker-compose.yml — start the container manually.");
+            return;
+        }
+
+        AppendLog($"docker compose up -d  (cwd: {dir})");
+        try
+        {
+            var psi = new ProcessStartInfo("docker", "compose up -d")
+            {
+                WorkingDirectory = dir,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            using var p = Process.Start(psi)
+                ?? throw new InvalidOperationException("docker did not start");
+            await p.WaitForExitAsync(CancellationToken.None);
+            if (p.ExitCode == 0)
+            {
+                AppendLog("Container start requested. Watch for [container online].");
+            }
+            else
+            {
+                var err = await p.StandardError.ReadToEndAsync(CancellationToken.None);
+                AppendLog($"docker compose up -d failed (exit {p.ExitCode}): {err.Trim()}");
+            }
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"Could not run docker: {ex.Message}. Is Docker installed and on PATH?");
+        }
     }
 
     private bool CanStart() =>

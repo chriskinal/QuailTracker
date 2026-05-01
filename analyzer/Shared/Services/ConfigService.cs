@@ -43,6 +43,8 @@ public class ConfigService
 
     public string? XenoCantoApiKey { get; set; }
 
+    public string? TrainingApiBaseUrl { get; set; }
+
     // Window bounds — null means use XAML defaults
     public double? WindowX { get; set; }
     public double? WindowY { get; set; }

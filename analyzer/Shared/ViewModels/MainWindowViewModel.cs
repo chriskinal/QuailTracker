@@ -98,6 +98,16 @@ public partial class MainWindowViewModel : ObservableObject
     private MapViewModel _mapViewModel;
 
     public MainWindowViewModel()
+        : this(ConfigService.Load())
+    {
+    }
+
+    private MainWindowViewModel(ConfigService config)
+        : this(config, new TrainingService(config))
+    {
+    }
+
+    private MainWindowViewModel(ConfigService config, ITrainingService trainingService)
         : this(
             new AudioFileService(),
             new BirdNetService(),
@@ -106,8 +116,9 @@ public partial class MainWindowViewModel : ObservableObject
             new KmlExportService(),
             new PopulationService(),
             new WeatherService(),
-            new TrainingService(),
-            ConfigService.Load(),
+            trainingService,
+            new TrainingContainerStatusService(trainingService),
+            config,
             new AppStateService())
     {
     }
@@ -121,6 +132,7 @@ public partial class MainWindowViewModel : ObservableObject
         IPopulationService populationService,
         IWeatherService weatherService,
         ITrainingService trainingService,
+        TrainingContainerStatusService trainingStatus,
         ConfigService configService,
         AppStateService appState)
     {
@@ -155,11 +167,11 @@ public partial class MainWindowViewModel : ObservableObject
             AudioFiles,
             Detections);
 
-        _modelingTrainingViewModel = new ModelingTrainingViewModel(trainingService);
+        _modelingTrainingViewModel = new ModelingTrainingViewModel(trainingService, trainingStatus, configService);
 
-        _xenoCantoDownloadViewModel = new XenoCantoDownloadViewModel(trainingService, configService);
+        _xenoCantoDownloadViewModel = new XenoCantoDownloadViewModel(trainingService, trainingStatus, configService);
 
-        _modelingEvaluationViewModel = new ModelingEvaluationViewModel(trainingService);
+        _modelingEvaluationViewModel = new ModelingEvaluationViewModel(trainingService, trainingStatus);
 
         _localizationViewModel = new LocalizationViewModel(
             tdoaService,

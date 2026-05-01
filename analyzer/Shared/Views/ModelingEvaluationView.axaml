@@ -25,49 +25,60 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
         <!-- Toolbar -->
         <Border Grid.Row="0" Classes="CardPanel" Margin="0,0,0,8">
-            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*">
-                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" Margin="0,0,12,0">
-                    <Ellipse Width="10" Height="10" Fill="#4CAF50"
-                             IsVisible="{Binding IsContainerReachable}"
-                             VerticalAlignment="Center" />
-                    <Ellipse Width="10" Height="10" Fill="#F44336"
-                             IsVisible="{Binding !IsContainerReachable}"
-                             VerticalAlignment="Center" />
-                    <TextBlock Text="Connected" Foreground="#4CAF50" FontWeight="SemiBold"
-                               IsVisible="{Binding IsContainerReachable}" VerticalAlignment="Center" />
-                    <TextBlock Text="Not reachable" Foreground="#F44336" FontWeight="SemiBold"
-                               IsVisible="{Binding !IsContainerReachable}" VerticalAlignment="Center" />
-                    <TextBlock Text="{Binding ContainerEndpoint}"
-                               Foreground="#AAAAAA" FontSize="11" VerticalAlignment="Center" />
-                </StackPanel>
+            <StackPanel Spacing="8">
+                <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*">
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" Margin="0,0,12,0">
+                        <Ellipse Width="10" Height="10" Fill="#4CAF50"
+                                 IsVisible="{Binding IsContainerReachable}"
+                                 VerticalAlignment="Center" />
+                        <Ellipse Width="10" Height="10" Fill="#F44336"
+                                 IsVisible="{Binding !IsContainerReachable}"
+                                 VerticalAlignment="Center" />
+                        <TextBlock Text="Connected" Foreground="#4CAF50" FontWeight="SemiBold"
+                                   IsVisible="{Binding IsContainerReachable}" VerticalAlignment="Center" />
+                        <TextBlock Text="Not reachable" Foreground="#F44336" FontWeight="SemiBold"
+                                   IsVisible="{Binding !IsContainerReachable}" VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding ContainerEndpoint}"
+                                   Foreground="#AAAAAA" FontSize="11" VerticalAlignment="Center" />
+                    </StackPanel>
 
-                <Button Grid.Column="1"
-                        Content="Refresh"
-                        Classes="SecondaryButton"
-                        Margin="0,0,8,0"
-                        Command="{Binding RefreshCommand}" />
-                <Button Grid.Column="2"
-                        Content="Save Selected..."
-                        Classes="ToolbarButton"
-                        Margin="0,0,8,0"
-                        Click="OnSaveSelectedClick" />
-                <Button Grid.Column="3"
-                        Content="Save All..."
-                        Classes="AccentButton"
-                        Margin="0,0,8,0"
-                        Click="OnSaveAllClick" />
-                <ProgressBar Grid.Column="4"
-                             IsIndeterminate="True"
-                             Width="120" Height="4"
-                             VerticalAlignment="Center"
-                             Margin="0,0,12,0"
-                             IsVisible="{Binding IsRefreshing}" />
-                <TextBlock Grid.Column="5"
-                           Text="{Binding StatusMessage}"
-                           VerticalAlignment="Center"
-                           Foreground="#AAAAAA"
-                           TextTrimming="CharacterEllipsis" />
-            </Grid>
+                    <Button Grid.Column="1"
+                            Content="Refresh"
+                            Classes="SecondaryButton"
+                            Margin="0,0,8,0"
+                            Command="{Binding RefreshCommand}" />
+                    <Button Grid.Column="2"
+                            Content="Save Selected..."
+                            Classes="ToolbarButton"
+                            Margin="0,0,8,0"
+                            Click="OnSaveSelectedClick" />
+                    <Button Grid.Column="3"
+                            Content="Save All..."
+                            Classes="AccentButton"
+                            Margin="0,0,8,0"
+                            Click="OnSaveAllClick" />
+                    <ProgressBar Grid.Column="4"
+                                 IsIndeterminate="True"
+                                 Width="120" Height="4"
+                                 VerticalAlignment="Center"
+                                 Margin="0,0,12,0"
+                                 IsVisible="{Binding IsRefreshing}" />
+                    <TextBlock Grid.Column="5"
+                               Text="{Binding StatusMessage}"
+                               VerticalAlignment="Center"
+                               Foreground="#AAAAAA"
+                               TextTrimming="CharacterEllipsis" />
+                </Grid>
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <Button Classes="ToolbarButton"
+                            Content="Open Web UI"
+                            Command="{Binding OpenWebUiCommand}" />
+                    <Button Classes="AccentButton"
+                            Content="Start Container"
+                            Command="{Binding StartContainerCommand}"
+                            IsEnabled="{Binding CanStartContainer}" />
+                </StackPanel>
+            </StackPanel>
         </Border>
 
         <!-- Last error -->

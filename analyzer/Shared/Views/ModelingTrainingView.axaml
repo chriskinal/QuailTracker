@@ -30,31 +30,67 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
             <ScrollViewer HorizontalScrollBarVisibility="Disabled">
                 <StackPanel Spacing="12">
 
-                    <!-- Container reachability -->
+                    <!-- Container reachability + actions -->
                     <Border Classes="StatusBox">
-                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                            <Ellipse Width="10" Height="10"
-                                     Fill="#4CAF50"
-                                     IsVisible="{Binding IsContainerReachable}"
-                                     VerticalAlignment="Center" />
-                            <Ellipse Width="10" Height="10"
-                                     Fill="#F44336"
-                                     IsVisible="{Binding !IsContainerReachable}"
-                                     VerticalAlignment="Center" />
-                            <TextBlock Text="Connected"
-                                       IsVisible="{Binding IsContainerReachable}"
-                                       VerticalAlignment="Center"
-                                       Foreground="#4CAF50"
-                                       FontWeight="SemiBold" />
-                            <TextBlock Text="Not reachable"
-                                       IsVisible="{Binding !IsContainerReachable}"
-                                       VerticalAlignment="Center"
-                                       Foreground="#F44336"
-                                       FontWeight="SemiBold" />
-                            <TextBlock Text="{Binding ContainerEndpoint}"
-                                       VerticalAlignment="Center"
-                                       Foreground="#AAAAAA"
-                                       FontSize="11" />
+                        <StackPanel Spacing="8">
+                            <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <Ellipse Width="10" Height="10"
+                                         Fill="#4CAF50"
+                                         IsVisible="{Binding IsContainerReachable}"
+                                         VerticalAlignment="Center" />
+                                <Ellipse Width="10" Height="10"
+                                         Fill="#F44336"
+                                         IsVisible="{Binding !IsContainerReachable}"
+                                         VerticalAlignment="Center" />
+                                <TextBlock Text="Connected"
+                                           IsVisible="{Binding IsContainerReachable}"
+                                           VerticalAlignment="Center"
+                                           Foreground="#4CAF50"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="Not reachable"
+                                           IsVisible="{Binding !IsContainerReachable}"
+                                           VerticalAlignment="Center"
+                                           Foreground="#F44336"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Text="{Binding ContainerEndpoint}"
+                                           VerticalAlignment="Center"
+                                           Foreground="#AAAAAA"
+                                           FontSize="11" />
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <Button Classes="ToolbarButton"
+                                        Content="Settings"
+                                        ToolTip.Tip="Edit training container URL">
+                                    <Button.Flyout>
+                                        <Flyout Placement="Bottom">
+                                            <StackPanel Spacing="6" Width="280">
+                                                <TextBlock Text="Training container URL"
+                                                           Classes="DataLabel" />
+                                                <TextBox Text="{Binding BaseUrlEdit}"
+                                                         PlaceholderText="http://localhost:5050" />
+                                                <Button Content="Save"
+                                                        Classes="PrimaryButton"
+                                                        HorizontalAlignment="Right"
+                                                        Command="{Binding SaveBaseUrlCommand}" />
+                                                <TextBlock Text="{Binding SettingsHint}"
+                                                           Classes="DataLabel"
+                                                           FontSize="11"
+                                                           TextWrapping="Wrap"
+                                                           IsVisible="{Binding SettingsHint, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                            </StackPanel>
+                                        </Flyout>
+                                    </Button.Flyout>
+                                </Button>
+                                <Button Classes="ToolbarButton"
+                                        Content="Open Web UI"
+                                        Command="{Binding OpenWebUiCommand}"
+                                        ToolTip.Tip="Open the Flask UI in your default browser" />
+                                <Button Classes="AccentButton"
+                                        Content="Start Container"
+                                        Command="{Binding StartContainerCommand}"
+                                        IsEnabled="{Binding CanStartContainer}"
+                                        ToolTip.Tip="Run docker compose up -d in training/" />
+                            </StackPanel>
                         </StackPanel>
                     </Border>
 

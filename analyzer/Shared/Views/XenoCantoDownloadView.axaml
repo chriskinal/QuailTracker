@@ -32,39 +32,67 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
                           Margin="0,0,8,0">
             <StackPanel Spacing="8">
 
-                <!-- Container reachability strip -->
+                <!-- Container reachability strip + actions -->
                 <Border Classes="StatusBox">
-                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                        <Ellipse Width="10" Height="10"
-                                 Fill="#4CAF50"
-                                 IsVisible="{Binding IsContainerReachable}"
-                                 VerticalAlignment="Center" />
-                        <Ellipse Width="10" Height="10"
-                                 Fill="#F44336"
-                                 IsVisible="{Binding !IsContainerReachable}"
-                                 VerticalAlignment="Center" />
-                        <TextBlock Text="Connected"
-                                   IsVisible="{Binding IsContainerReachable}"
-                                   VerticalAlignment="Center"
-                                   Foreground="#4CAF50"
-                                   FontWeight="SemiBold" />
-                        <TextBlock Text="Not reachable"
-                                   IsVisible="{Binding !IsContainerReachable}"
-                                   VerticalAlignment="Center"
-                                   Foreground="#F44336"
-                                   FontWeight="SemiBold" />
-                        <TextBlock Text="{Binding ContainerEndpoint}"
-                                   VerticalAlignment="Center"
-                                   Foreground="#AAAAAA"
-                                   FontSize="11" />
+                    <StackPanel Spacing="8">
+                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                            <Ellipse Width="10" Height="10"
+                                     Fill="#4CAF50"
+                                     IsVisible="{Binding IsContainerReachable}"
+                                     VerticalAlignment="Center" />
+                            <Ellipse Width="10" Height="10"
+                                     Fill="#F44336"
+                                     IsVisible="{Binding !IsContainerReachable}"
+                                     VerticalAlignment="Center" />
+                            <TextBlock Text="Connected"
+                                       IsVisible="{Binding IsContainerReachable}"
+                                       VerticalAlignment="Center"
+                                       Foreground="#4CAF50"
+                                       FontWeight="SemiBold" />
+                            <TextBlock Text="Not reachable"
+                                       IsVisible="{Binding !IsContainerReachable}"
+                                       VerticalAlignment="Center"
+                                       Foreground="#F44336"
+                                       FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding ContainerEndpoint}"
+                                       VerticalAlignment="Center"
+                                       Foreground="#AAAAAA"
+                                       FontSize="11" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Button Classes="ToolbarButton"
+                                    Content="Open Web UI"
+                                    Command="{Binding OpenWebUiCommand}" />
+                            <Button Classes="AccentButton"
+                                    Content="Start Container"
+                                    Command="{Binding StartContainerCommand}"
+                                    IsEnabled="{Binding CanStartContainer}" />
+                        </StackPanel>
                     </StackPanel>
                 </Border>
 
                 <!-- Species -->
                 <StackPanel Spacing="4">
-                    <TextBlock Text="Species" Classes="DataLabel" />
-                    <TextBox Text="{Binding Species}"
-                             PlaceholderText="e.g. Northern Bobwhite" />
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0" Text="Species" Classes="DataLabel" VerticalAlignment="Center" />
+                        <Button Grid.Column="1"
+                                Classes="ToolbarButton"
+                                Content="Refresh list"
+                                Padding="6,2"
+                                FontSize="11"
+                                Command="{Binding RefreshSpeciesCommand}"
+                                ToolTip.Tip="Re-read labels.txt and species directories" />
+                    </Grid>
+                    <AutoCompleteBox Text="{Binding Species, Mode=TwoWay}"
+                                     ItemsSource="{Binding KnownSpecies}"
+                                     FilterMode="Contains"
+                                     MinimumPrefixLength="0"
+                                     IsTextCompletionEnabled="False"
+                                     PlaceholderText="Pick from list or type a new name" />
+                    <TextBlock Text="Picking an existing entry avoids duplicate directories from name variants."
+                               Classes="DataLabel"
+                               FontSize="11"
+                               TextWrapping="Wrap" />
                 </StackPanel>
 
                 <!-- API key -->

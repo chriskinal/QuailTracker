@@ -20,6 +20,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -34,9 +35,8 @@ namespace QuailTracker.Analyzer.Shared.ViewModels;
 
 public sealed partial class ModelingEvaluationViewModel : ObservableObject
 {
-    private const int ReachabilityPollMs = 3000;
-
     private readonly ITrainingService _service;
+    private readonly TrainingContainerStatusService _status;
     private readonly CancellationTokenSource _lifetimeCts = new();
     private CancellationTokenSource? _refreshCts;
 
@@ -49,11 +49,8 @@ public sealed partial class ModelingEvaluationViewModel : ObservableObject
     [NotifyCanExecuteChangedFor(nameof(SaveSelectedCommand))]
     private int _checkedCount;
 
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(RefreshCommand))]
-    [NotifyCanExecuteChangedFor(nameof(SaveAllCommand))]
-    [NotifyCanExecuteChangedFor(nameof(SaveSelectedCommand))]
-    private bool _isContainerReachable;
+    /// <summary>Projection of <see cref="TrainingContainerStatusService.IsContainerReachable"/>.</summary>
+    public bool IsContainerReachable => _status.IsContainerReachable;
 
     [ObservableProperty]
     private bool _isRefreshing;
@@ -64,10 +61,28 @@ public sealed partial class ModelingEvaluationViewModel : ObservableObject
     [ObservableProperty]
     private string _lastError = string.Empty;
 
-    public ModelingEvaluationViewModel(ITrainingService service)
+    [ObservableProperty]
+    private bool _canStartContainer;
+
+    public ModelingEvaluationViewModel(ITrainingService service, TrainingContainerStatusService status)
     {
         _service = service;
-        _ = PollReachabilityAsync(_lifetimeCts.Token);
+        _status = status;
+        _canStartContainer = TrainingDirectoryLocator.Find() is not null;
+        _status.PropertyChanged += OnStatusPropertyChanged;
+        _status.CameOnline += () => StatusMessage = "Container online.";
+        _status.WentOffline += () => StatusMessage = "Container offline.";
+    }
+
+    private void OnStatusPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(TrainingContainerStatusService.IsContainerReachable))
+        {
+            OnPropertyChanged(nameof(IsContainerReachable));
+            RefreshCommand.NotifyCanExecuteChanged();
+            SaveAllCommand.NotifyCanExecuteChanged();
+            SaveSelectedCommand.NotifyCanExecuteChanged();
+        }
     }
 
     [RelayCommand(CanExecute = nameof(CanRefresh))]
@@ -186,22 +201,59 @@ public sealed partial class ModelingEvaluationViewModel : ObservableObject
         }
     }
 
-    private async Task PollReachabilityAsync(CancellationToken ct)
+    [RelayCommand]
+    private void OpenWebUi()
     {
-        while (!ct.IsCancellationRequested)
+        try
         {
-            try
+            var psi = new ProcessStartInfo(_service.BaseAddress.ToString())
             {
-                _ = await _service.GetStatusAsync(ct);
-                IsContainerReachable = true;
-            }
-            catch (OperationCanceledException) { break; }
-            catch
+                UseShellExecute = true,
+            };
+            Process.Start(psi);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Could not open browser: {ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private async Task StartContainerAsync()
+    {
+        var dir = TrainingDirectoryLocator.Find();
+        if (dir is null)
+        {
+            StatusMessage = "Cannot find training/ directory with docker-compose.yml.";
+            return;
+        }
+
+        StatusMessage = $"docker compose up -d  (cwd: {dir})";
+        try
+        {
+            var psi = new ProcessStartInfo("docker", "compose up -d")
             {
-                IsContainerReachable = false;
+                WorkingDirectory = dir,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            using var p = Process.Start(psi)
+                ?? throw new InvalidOperationException("docker did not start");
+            await p.WaitForExitAsync(CancellationToken.None);
+            if (p.ExitCode == 0)
+            {
+                StatusMessage = "Container start requested. Watch for online indicator.";
             }
-            try { await Task.Delay(ReachabilityPollMs, ct); }
-            catch (OperationCanceledException) { break; }
+            else
+            {
+                var err = await p.StandardError.ReadToEndAsync(CancellationToken.None);
+                StatusMessage = $"docker compose up -d failed (exit {p.ExitCode}): {err.Trim()}";
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Could not run docker: {ex.Message}. Is Docker installed and on PATH?";
         }
     }
 
