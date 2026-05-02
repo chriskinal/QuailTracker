@@ -41,8 +41,10 @@ jobs:
           path: stm32/QuailTracker_U575/Middlewares/Third_Party/TFLiteMicro
           key: tflm-${{ hashFiles('tools/fetch_tflite_micro.sh') }}
 
-      - name: Install PlatformIO
-        run: pip install --upgrade platformio
+      - name: Install PlatformIO and TFLM build deps
+        # numpy is pulled in by TFLM's generate_cc_arrays.py during the
+        # source-tree generation step; pillow follows it on some paths.
+        run: pip install --upgrade platformio numpy pillow
 
       - name: Install ststm32 platform (downloads ARM GCC toolchain)
         run: pio platform install ststm32
