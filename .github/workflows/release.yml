@@ -18,6 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive  # pulls CMSIS-DSP
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -33,8 +35,20 @@ jobs:
           key: pio-${{ runner.os }}-${{ hashFiles('**/platformio.ini') }}
           restore-keys: pio-${{ runner.os }}-
 
+      - name: Cache TFLite Micro generated tree
+        uses: actions/cache@v4
+        with:
+          path: stm32/QuailTracker_U575/Middlewares/Third_Party/TFLiteMicro
+          key: tflm-${{ hashFiles('tools/fetch_tflite_micro.sh') }}
+
       - name: Install PlatformIO
         run: pip install --upgrade platformio
+
+      - name: Install ststm32 platform (downloads ARM GCC toolchain)
+        run: pio platform install ststm32
+
+      - name: Fetch TFLite Micro source tree
+        run: ./tools/fetch_tflite_micro.sh
 
       - name: Build STM32 firmware
         run: pio run -e stm32u575
@@ -98,7 +112,12 @@ jobs:
               -p:DebugType=embedded \
               -o "$out"
             zip_name="qt_analyzer_${rid}_${TAG}.zip"
-            (cd "$out" && zip -qr "../../$zip_name" .)
+            # Windows runners' Git Bash doesn't ship `zip` — use 7z (pre-installed on windows-latest)
+            if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+              (cd "$out" && 7z a -tzip -mx=5 "../../$zip_name" . > /dev/null)
+            else
+              (cd "$out" && zip -qr "../../$zip_name" .)
+            fi
             echo "Built $zip_name ($(du -h "$zip_name" | cut -f1))"
           done
 

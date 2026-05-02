@@ -1,0 +1,3 @@
+[submodule "stm32/QuailTracker_U575/Middlewares/Third_Party/CMSIS_DSP"]
+	path = stm32/QuailTracker_U575/Middlewares/Third_Party/CMSIS_DSP
+	url = https://github.com/ARM-software/CMSIS-DSP.git

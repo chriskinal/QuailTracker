@@ -56,8 +56,7 @@ stm32/QuailTracker_U575/Middlewares/Third_Party/TFLiteMicro/third_party/
 stm32/QuailTracker_U575/Middlewares/Third_Party/TFLiteMicro/signal/
 stm32/QuailTracker_U575/Middlewares/Third_Party/TFLiteMicro/LICENSE
 
-# CMSIS-DSP (downloaded separately)
-stm32/QuailTracker_U575/Middlewares/Third_Party/CMSIS_DSP/
+# CMSIS-DSP is a git submodule pinned at v1.10.0 (see .gitmodules)
 
 # .NET
 bin/
