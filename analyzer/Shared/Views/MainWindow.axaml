@@ -6,6 +6,7 @@
         x:Class="QuailTracker.Analyzer.Shared.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="QuailTracker Analyzer"
+        Icon="avares://QuailTracker.Analyzer.Shared/Assets/icon.png"
         Width="1200" Height="800"
         MinWidth="900" MinHeight="600">
 

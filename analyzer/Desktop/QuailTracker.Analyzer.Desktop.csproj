@@ -4,6 +4,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
+    <!-- Embedded into the Windows .exe so File Explorer shows the QuailTracker logo -->
+    <ApplicationIcon>../Shared/Assets/icon.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
