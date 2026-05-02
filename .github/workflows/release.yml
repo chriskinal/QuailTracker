@@ -1,0 +1,108 @@
+name: release
+
+# Triggers when a release is published manually on GitHub.
+# Builds firmware (STM32 + ESP32) and the analyzer (mac/win/linux,
+# x64+arm64 each) and attaches the artifacts to the release.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write   # needed to upload assets to the release
+
+jobs:
+  # ──────────────────────────── Firmware ────────────────────────────
+  firmware:
+    name: Firmware (STM32 + ESP32)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ hashFiles('**/platformio.ini') }}
+          restore-keys: pio-${{ runner.os }}-
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Build STM32 firmware
+        run: pio run -e stm32u575
+        # Post-build hook copies qt_stm_v<ver>.bin to repo root.
+
+      - name: Build ESP32 firmware (merged image)
+        working-directory: esp32_bridge
+        run: pio run
+        # Post-build hook merges bootloader + partitions + app into
+        # qt_esp_v<ver>.bin at repo root, ready to flash at offset 0x0.
+
+      - name: Upload firmware to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            qt_stm_v*.bin
+            qt_esp_v*.bin
+
+  # ──────────────────────────── Analyzer ────────────────────────────
+  # One job per OS. Each job cross-publishes both x64 and arm64 from
+  # the host runner — .NET supports this for self-contained output.
+  analyzer:
+    name: Analyzer (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            rids: osx-arm64 osx-x64
+          - os: windows-latest
+            rids: win-x64 win-arm64
+          - os: ubuntu-latest
+            rids: linux-x64 linux-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: dotnet restore analyzer/QuailTracker.Analyzer.sln
+
+      - name: Publish + zip per RID
+        shell: bash
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          for rid in ${{ matrix.rids }}; do
+            out="publish/$rid"
+            rm -rf "$out"
+            dotnet publish analyzer/Desktop/QuailTracker.Analyzer.Desktop.csproj \
+              -c Release -r "$rid" \
+              -p:PublishSingleFile=true \
+              -p:SelfContained=true \
+              -p:IncludeNativeLibrariesForSelfExtract=true \
+              -p:EnableCompressionInSingleFile=true \
+              -p:DebugType=embedded \
+              -o "$out"
+            zip_name="qt_analyzer_${rid}_${TAG}.zip"
+            (cd "$out" && zip -qr "../../$zip_name" .)
+            echo "Built $zip_name ($(du -h "$zip_name" | cut -f1))"
+          done
+
+      - name: Upload analyzer to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: qt_analyzer_*.zip

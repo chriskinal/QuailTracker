@@ -12,23 +12,35 @@ FLAC) and you want to actually look at the data.
 
 ## Installing and running
 
-You need:
+Download the analyzer for your platform from
+<https://github.com/chriskinal/QuailTracker/releases/latest>:
 
-- **.NET 10 SDK** — install from <https://dotnet.microsoft.com/download>.
-- (Optional) **Docker Desktop** — only if you want to train custom
-  models. The analyzer will work fine without Docker; training is
-  the only feature that depends on it.
+| Platform | Asset |
+|----------|-------|
+| macOS, Apple Silicon | `qt_analyzer_osx-arm64_v<tag>.zip` |
+| macOS, Intel         | `qt_analyzer_osx-x64_v<tag>.zip` |
+| Windows, x64         | `qt_analyzer_win-x64_v<tag>.zip` |
+| Windows, ARM64       | `qt_analyzer_win-arm64_v<tag>.zip` |
+| Linux, x64           | `qt_analyzer_linux-x64_v<tag>.zip` |
+| Linux, ARM64         | `qt_analyzer_linux-arm64_v<tag>.zip` |
 
-Build and launch:
+Unzip and run the `QuailTracker.Analyzer.Desktop` executable inside.
+The build is self-contained — no .NET runtime install required. First
+launch may take a few seconds while the runtime initializes.
 
-```bash
-git clone <repo URL>
-cd QuailTracker
-dotnet run --project analyzer/Desktop
-```
+The releases are **unsigned**. macOS will warn that the app is from an
+unidentified developer on first launch — right-click the executable
+in Finder, choose **Open**, and confirm. Windows SmartScreen will
+similarly prompt; click **More info** → **Run anyway**. After the
+first allow, both OSes remember the decision.
 
-First run takes a minute (NuGet restore + first build). Subsequent
-launches are quick.
+(Optional) **Docker Desktop** is only needed if you want to train
+custom species models. Everything else works without it.
+
+> **Building from source** is supported if you want a specific commit:
+> install the **.NET 10 SDK**, clone the repo, and run
+> `dotnet run --project analyzer/Desktop`. First build takes a minute
+> for the NuGet restore.
 
 The analyzer ships with everything you need bundled — BirdNET ONNX
 models drop into a configurable directory, Cesium 3D globe loads

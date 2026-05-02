@@ -22,24 +22,23 @@ wireless via the ESP32's web UI.
 
 ## Get the firmware files
 
-If you cloned the repo and have PlatformIO installed, build them:
+Download the latest release from
+<https://github.com/chriskinal/QuailTracker/releases/latest>. You want
+the two firmware assets:
 
-```bash
-# STM32 production firmware
-pio run
+- `qt_esp_v<ver>.bin` — merged ESP32 image (bootloader + partition
+  table + app combined). Flash at offset 0x0.
+- `qt_stm_v<ver>.bin` — STM32 production firmware. Sideloaded via the
+  web UI later in this guide.
 
-# ESP32 companion firmware
-cd esp32_bridge && pio run
-```
+The release page also has the analyzer installers — those come into
+play in the [analyzer guide](analyzer.md), not here.
 
-Both builds drop their post-build artifact at the repo root:
-`qt_stm_v<ver>.bin` and `qt_esp_v<ver>.bin`. The version strings are
-pulled from the firmware source — `Core/Inc/main.h` for the STM32 and
-`src/main.c` (`ESP_FW_VERSION`) for the ESP32.
-
-If you don't want to build from source, grab the same two files from
-the project's releases page (whenever that exists) or from someone who
-has built them.
+> **Building from source** is also supported (PlatformIO required):
+> `pio run` builds the STM32 firmware, `cd esp32_bridge && pio run`
+> builds the ESP32 firmware, and the post-build hooks drop the same
+> two `.bin` files at the repo root. Use this path if you've modified
+> the firmware or want a build from a specific commit.
 
 ## Step 1 — Flash the ESP32 over USB-C
 
