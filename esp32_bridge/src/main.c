@@ -49,6 +49,7 @@ static bool laser_wake_enabled = false;
 #define WIFI_DUTY_SLEEP_S  60
 #define LASER_IDLE_SLEEP_S 30   /* seconds idle before deep sleep in laser wake mode */
 #define BOOT_GRACE_MS      180000  /* 3 min always-on after boot for WiFi setup */
+#define CLIENT_GRACE_MS    60000   /* keep AP alive 60s after last client disconnect */
 #define PIN_LASER_WAKE     0   /* GPIO0: phototransistor for laser wake */
 bool spi_initialized = false;
 static TaskHandle_t spi_task_handle = NULL;
@@ -315,10 +316,23 @@ static esp_err_t esp_config_post_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* iOS captive-portal probe handler. iOS hits captive.apple.com/hotspot-detect.html
+ * (DNS-hijacked to us) and expects the EXACT body below with 200 OK to consider
+ * the network "has internet". Anything else → iOS treats it as a flaky/captive
+ * network and aggressively drops it after a few minutes, even when the user is
+ * actively browsing. Returning Success here keeps iOS happy. */
+static esp_err_t ios_success_handler(httpd_req_t *req)
+{
+    static const char body[] =
+        "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>";
+    httpd_resp_set_status(req, "200 OK");
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, body, sizeof(body) - 1);
+    return ESP_OK;
+}
+
 /* Catch-all: return 204 for everything not matched by registered handlers.
- * This satisfies ALL captive portal probes (Android, iOS, Windows) so
- * the phone accepts the connection without showing a portal popup.
- * User types any URL → DNS resolves to us → root handler serves the page. */
+ * Android and Windows are happy with 204; iOS uses the dedicated handler above. */
 static esp_err_t catchall_handler(httpd_req_t *req)
 {
     httpd_resp_set_status(req, "204 No Content");
@@ -888,16 +902,32 @@ static httpd_handle_t start_webserver(void)
         };
         httpd_register_uri_handler(server, &api_state);
 
-        /* Register captive portal probe URLs — return 204 so phones
-         * don't show portal popup. Any URL typed by user gets resolved
-         * to 192.168.9.1 by our DNS, hitting the root "/" handler. */
+        /* iOS-specific probe URLs — must return 200 OK with the "Success"
+         * HTML body, otherwise iOS treats the network as broken/captive
+         * and drops it within a few minutes. */
+        const char *ios_uris[] = {
+            "/hotspot-detect.html",
+            "/library/test/success.html",
+            "/success.html",
+            NULL
+        };
+        httpd_uri_t ios_probe = {
+            .method = HTTP_GET,
+            .handler = ios_success_handler,
+        };
+        for (int i = 0; ios_uris[i]; i++) {
+            ios_probe.uri = ios_uris[i];
+            httpd_register_uri_handler(server, &ios_probe);
+        }
+
+        /* Android / Windows probe URLs — 204 No Content is the expected
+         * "no captive portal" response. */
         const char *probe_uris[] = {
             "/generate_204",
-            "/hotspot-detect.html",
+            "/gen_204",
             "/ncsi.txt",
             "/connecttest.txt",
             "/redirect",
-            "/success.txt",
             NULL
         };
         httpd_uri_t probe = {
@@ -1583,6 +1613,7 @@ static void dns_task(void *arg)
 static void power_mgmt_task(void *arg)
 {
     uint32_t duty_cycle_tick = xTaskGetTickCount();
+    uint32_t last_client_tick = 0;  /* xTaskGetTickCount when a client was last seen */
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -1594,20 +1625,26 @@ static void power_mgmt_task(void *arg)
             wifi_clients = sta_list.num;
         }
 
-        /* Reset duty cycle timer while client is connected */
+        /* Track "last client seen" — used to bridge brief iOS disconnect/reconnect
+         * cycles. We treat the AP as "in use" if a client was associated within
+         * the last CLIENT_GRACE_MS, even if not right this second. */
         if (wifi_clients > 0) {
+            last_client_tick = xTaskGetTickCount();
             duty_cycle_tick = xTaskGetTickCount();
         }
+        uint32_t now_tick = xTaskGetTickCount();
+        bool client_recent = (last_client_tick != 0) &&
+                             ((now_tick - last_client_tick) * portTICK_PERIOD_MS) < CLIENT_GRACE_MS;
 
         /* Boot grace period: stay awake for 3 min after boot so user can connect */
-        uint32_t uptime_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
+        uint32_t uptime_ms = now_tick * portTICK_PERIOD_MS;
         if (uptime_ms < BOOT_GRACE_MS) continue;
 
-        /* WiFi duty cycle: on 20s, then deep sleep 40s.
-         * Deep sleep draws ~5µA vs 44mA with WiFi off + CPU idle.
-         * On wake, ESP32 reboots — WiFi/NVS reinitialize. */
-        if (wifi_duty_cycle && wifi_clients == 0) {
-            uint32_t elapsed = (xTaskGetTickCount() - duty_cycle_tick) * portTICK_PERIOD_MS;
+        /* WiFi duty cycle: on 30s with no client (and no recent client),
+         * then deep sleep 60s. Deep sleep draws ~5µA vs 44mA with WiFi off
+         * + CPU idle. On wake, ESP32 reboots — WiFi/NVS reinitialize. */
+        if (wifi_duty_cycle && !client_recent) {
+            uint32_t elapsed = (now_tick - duty_cycle_tick) * portTICK_PERIOD_MS;
             if (elapsed >= WIFI_DUTY_ON_MS) {
                 ESP_LOGI(TAG, "Duty cycle: entering deep sleep for %ds", WIFI_DUTY_SLEEP_S);
                 esp_deep_sleep(WIFI_DUTY_SLEEP_S * 1000000ULL);
@@ -1616,9 +1653,9 @@ static void power_mgmt_task(void *arg)
         }
 
         /* Laser wake: deep sleep indefinitely, wake on GPIO0 high.
-         * Stay awake while WiFi clients are connected + 30s grace period. */
-        if (laser_wake_enabled && wifi_clients == 0) {
-            uint32_t elapsed = (xTaskGetTickCount() - duty_cycle_tick) * portTICK_PERIOD_MS;
+         * Stay awake while WiFi clients are connected + grace period. */
+        if (laser_wake_enabled && !client_recent) {
+            uint32_t elapsed = (now_tick - duty_cycle_tick) * portTICK_PERIOD_MS;
             if (elapsed >= (LASER_IDLE_SLEEP_S * 1000)) {
                 ESP_LOGI(TAG, "Laser wake: entering deep sleep (GPIO%d wake)", PIN_LASER_WAKE);
                 esp_err_t err = esp_deep_sleep_enable_gpio_wakeup(
