@@ -64,6 +64,37 @@ static void hf_hex32(uint32_t v) {
     for (int i = 0; i < 8; i++) buf[i] = hex[(v >> (28 - i * 4)) & 0xF];
     SEGGER_RTT_Write(0, buf, 8);
 }
+/* Print the stacked frame + status registers for any precise fault, then
+ * spin with the status LED on so the bench operator sees something. */
+static __attribute__((used, noreturn)) void hf_dump_and_spin(const char *tag, uint32_t *frame)
+{
+    volatile uint32_t cfsr  = SCB->CFSR;
+    volatile uint32_t hfsr  = SCB->HFSR;
+    volatile uint32_t mmfar = SCB->MMFAR;
+    volatile uint32_t bfar  = SCB->BFAR;
+    hf_puts("\r\n!!! "); hf_puts(tag); hf_puts("\r\n");
+    hf_puts("PC=");  hf_hex32(frame[6]); hf_puts("\r\n");
+    hf_puts("LR=");  hf_hex32(frame[5]); hf_puts("\r\n");
+    hf_puts("SP=");  hf_hex32((uint32_t)frame); hf_puts("\r\n");
+    hf_puts("CFSR="); hf_hex32(cfsr); hf_puts("\r\n");
+    hf_puts("HFSR="); hf_hex32(hfsr); hf_puts("\r\n");
+    hf_puts("BFAR="); hf_hex32(bfar); hf_puts("\r\n");
+    hf_puts("MMFAR="); hf_hex32(mmfar); hf_puts("\r\n");
+    hf_puts("R0="); hf_hex32(frame[0]); hf_puts(" R1="); hf_hex32(frame[1]); hf_puts("\r\n");
+    hf_puts("R2="); hf_hex32(frame[2]); hf_puts(" R3="); hf_hex32(frame[3]); hf_puts("\r\n");
+    hf_puts("R12="); hf_hex32(frame[4]); hf_puts("\r\n");
+    GPIOD->BSRR = GPIO_PIN_13;  /* status LED on (PD13) */
+    for (;;) { }
+}
+#define HF_DUMP(tag) do {                                            \
+    uint32_t *frame;                                                 \
+    __asm volatile ("tst lr, #4 \n"                                  \
+                    "ite eq     \n"                                  \
+                    "mrseq %0, msp \n"                               \
+                    "mrsne %0, psp \n"                               \
+                    : "=r" (frame));                                 \
+    hf_dump_and_spin((tag), frame);                                  \
+} while (0)
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
@@ -147,7 +178,7 @@ void HardFault_Handler(void)
 void MemManage_Handler(void)
 {
   /* USER CODE BEGIN MemoryManagement_IRQn 0 */
-  GPIOD->BSRR = GPIO_PIN_13; /* status LED on (PD13) */
+  HF_DUMP("MEMMANAGE");
   /* USER CODE END MemoryManagement_IRQn 0 */
   while (1)
   {
@@ -162,7 +193,7 @@ void MemManage_Handler(void)
 void BusFault_Handler(void)
 {
   /* USER CODE BEGIN BusFault_IRQn 0 */
-  GPIOD->BSRR = GPIO_PIN_13; /* status LED on (PD13) */
+  HF_DUMP("BUSFAULT");
   /* USER CODE END BusFault_IRQn 0 */
   while (1)
   {
@@ -177,7 +208,7 @@ void BusFault_Handler(void)
 void UsageFault_Handler(void)
 {
   /* USER CODE BEGIN UsageFault_IRQn 0 */
-  GPIOD->BSRR = GPIO_PIN_13; /* status LED on (PD13) */
+  HF_DUMP("USAGEFAULT");
   /* USER CODE END UsageFault_IRQn 0 */
   while (1)
   {

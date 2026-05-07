@@ -213,6 +213,7 @@ static uint32_t streamLastSpiTick = 0;  /* auto-stop timeout */
 #define GPS_DUTY_CYCLE_DEFAULT_SEC  300  /* GPS wake every 5 min during recording */
 #define GPS_FIX_TIMEOUT_MS         15000 /* max wait for GPS fix during duty cycle */
 #define SCHEDULE_CHECK_INTERVAL_MS 1000  /* how often to evaluate schedule */
+#define USER_CONNECTED_IDLE_MS    300000 /* 5 min: STM stays awake after ESP wake until SPI idle */
 static uint32_t lastScheduleCheckTick = 0;
 static uint32_t lastGpsDutyTick = 0;
 static uint8_t  gpsDutyActive = 0;   /* 1 = GPS is on for duty cycle fix */
@@ -1972,6 +1973,7 @@ static void StartBridgeTask(void *argument)
     dev.pwr.state = PWR_DEV_MODE;
     dev.pwr.devMode = 1;
     dev.pwr.rtcSynced = 0;
+    dev.pwr.userConnectedTick = 0;
     dev.pwr.gpsDutyCycleSec = GPS_DUTY_CYCLE_DEFAULT_SEC;
 
     printf("Config loaded (station=%s, gain=%d, fmt=%s)\r\n",
@@ -2084,6 +2086,13 @@ static void StartBridgeTask(void *argument)
                     lastCmdSeq = cmd_seq;
                 }
 
+                /* Any real command counts as user activity — bump the
+                 * USER_CONNECTED idle timer so the schedule stays paused
+                 * while the operator is interacting via the web UI. */
+                if (cmd != SPI_CMD_NONE) {
+                    dev.pwr.userConnectedTick = HAL_GetTick();
+                }
+
                 /* Extract ESP32 firmware version from CMD_ESP_VERSION */
                 if (cmd == SPI_CMD_ESP_VERSION) {
                     int vlen = strnlen((char *)cmd_payload, sizeof(cmd_payload));
@@ -2161,9 +2170,9 @@ static void StartBridgeTask(void *argument)
                     break;
                 case SPI_CMD_SCHEDULE_ON:
                     /* "Schedule on" = leave dev mode. Activation happens
-                     * automatically when RTC is synced and windows exist;
-                     * otherwise the device stays awake but the intent is
-                     * recorded. */
+                     * automatically when RTC is synced and windows exist
+                     * (see scheduleArmed()); otherwise the device stays
+                     * awake but the intent is recorded. */
                     dev.pwr.devMode = 0;
                     dev.pwr.state = PWR_DEV_MODE;  /* bootstrap branch picks up */
                     printf("SPI cmd: schedule_on (devMode=0)\r\n");
@@ -2554,19 +2563,23 @@ void sd_space_refresh(void)
 
 /* ========================= Power Management ========================= */
 
-/* Transition to Non-Record state: stop recording, unmount SD, power down peripherals, sleep */
+/* Transition to Non-Record state: stop recording, unmount SD, prepare for Stop 2.
+ * Peripheral power (PERIPH_VCC, GPS) is cut by enterStop2() itself via its
+ * GPIO save/BSRR/restore pass; doing it here in addition was redundant and
+ * was the most likely cause of the bus fault on first activation. */
 static void powerEnterNonRecord(void)
 {
     dev.pwr.state = PWR_SCHEDULED_NONREC;
+    gpsDutyActive = 0;
 
-    /* Stop recording if active */
+    /* Stop recording if active and give the audio task time to close the file */
     if (isRecording) {
         uint8_t cmd = CMD_STOP_REC;
         osMessageQueuePut(audioCmdQueueHandle, &cmd, 0, 0);
-        osDelay(200);  /* let audio task finalize file */
+        osDelay(500);
     }
 
-    /* Unmount SD to prevent FAT corruption */
+    /* Unmount SD to prevent FAT corruption across the sleep boundary */
     if (sdMounted) {
         extern char USERPath[];
         osMutexAcquire(fileMtxHandle, osWaitForever);
@@ -2575,11 +2588,6 @@ static void powerEnterNonRecord(void)
         sdMounted = 0;
         osMutexRelease(fileMtxHandle);
     }
-
-    /* Power down peripherals */
-    HAL_GPIO_WritePin(GPIOD, GPIO_PIN_11, GPIO_PIN_RESET);  /* PERIPH_VCC off */
-    gpsSetPower(0);
-    gpsDutyActive = 0;
 
     printf("PWR: Entering Non-Record sleep\r\n");
     fflush(stdout);
@@ -2660,14 +2668,19 @@ static void gpsDutyCycle(void)
     }
 }
 
+/* Schedule is "armed" when the user hasn't overridden via dev mode AND we have
+ * the inputs needed to evaluate it (RTC clock + at least one window). */
+static uint8_t scheduleArmed(void)
+{
+    return !dev.pwr.devMode
+        && dev.pwr.rtcSynced
+        && schedule_has_windows(&cfg);
+}
+
 /* Main schedule check — called every second from CLI task */
 static void powerScheduleCheck(void)
 {
-    /* Schedule is "armed" when the user hasn't overridden via dev mode
-     * AND we have the inputs needed to evaluate it (RTC clock + at least
-     * one window). */
-    if (dev.pwr.devMode || !dev.pwr.rtcSynced || !schedule_has_windows(&cfg))
-        return;
+    if (!scheduleArmed()) return;
 
     /* Read current time from RTC */
     uint8_t hh, mm, ss;
@@ -2691,60 +2704,101 @@ static void powerScheduleCheck(void)
 
     power_state_t curState = dev.pwr.state;
 
+    /* User connected (woken by ESP CS pulse): keep peripherals up and skip
+     * schedule transitions. Resume scheduled mode after USER_CONNECTED_IDLE_MS
+     * with no SPI activity. */
+    if (curState == PWR_USER_CONNECTED) {
+        uint32_t idle = HAL_GetTick() - dev.pwr.userConnectedTick;
+        if (idle < USER_CONNECTED_IDLE_MS) return;
+
+        printf("PWR: user idle %lus — resuming schedule\r\n",
+               (unsigned long)(idle / 1000));
+        /* Drop into the schedule transition logic. Synthetic SCHEDULED_REC
+         * lets the REC→NONREC branch fire if we're outside a window, or the
+         * NONREC→REC branch handles us if shouldRecord turned true while we
+         * were awake. */
+        dev.pwr.state = PWR_SCHEDULED_REC;
+        curState = PWR_SCHEDULED_REC;
+    }
+
+    /* Bootstrap: first armed tick after exiting dev mode. Pick the right
+     * branch directly so we don't depend on a synthetic "REC" state set
+     * by the toggle path. */
+    if (curState == PWR_DEV_MODE) {
+        if (sched.shouldRecord) {
+            powerEnterRecord();
+        } else {
+            dev.pwr.state = PWR_SCHEDULED_REC;  /* will fall through to REC→NONREC below */
+            curState = PWR_SCHEDULED_REC;
+        }
+    }
+
     if (sched.shouldRecord && curState == PWR_SCHEDULED_NONREC) {
         /* Time to start recording */
         powerEnterRecord();
-    } else if (!sched.shouldRecord && curState == PWR_SCHEDULED_REC) {
-        /* Recording window ended — stop and sleep */
-        powerEnterNonRecord();
+    } else if (!sched.shouldRecord &&
+               (curState == PWR_SCHEDULED_REC ||
+                curState == PWR_SCHEDULED_NONREC)) {
+        /* Either: recording window just ended (REC→NONREC), or we re-entered
+         * the schedule check still in NONREC (e.g. after a previous sleep
+         * loop exited because secsUntilNext was small). Either way, sleep
+         * until shouldRecord turns true or the user connects.
+         *
+         * Only call powerEnterNonRecord (which stops recording + unmounts SD)
+         * on the REC→NONREC edge — if we're already in NONREC, peripherals
+         * are already torn down. */
+        if (curState == PWR_SCHEDULED_REC) {
+            powerEnterNonRecord();
+        } else {
+            dev.pwr.state = PWR_SCHEDULED_NONREC;  /* defensive — was already */
+        }
 
-        /* Calculate sleep duration, chain if needed (RTC timer max 65535s) */
-        uint32_t sleepSec = sched.secsUntilNext;
-        if (sleepSec < 10) sleepSec = 10;  /* minimum sleep */
+        /* Sleep loop: re-evaluate every iteration, sleep one RTC chunk at
+         * a time, exit only on shouldRecord transition or USER_CONNECTED. */
+        for (;;) {
+            uint32_t sleepSec = sched.secsUntilNext;
+            if (sleepSec < 60)    sleepSec = 60;     /* min 60s — avoid rapid wake/sleep churn */
+            if (sleepSec > 65000) sleepSec = 65000;  /* RTC wake-timer max */
 
-        while (sleepSec > 0 && dev.pwr.state == PWR_SCHEDULED_NONREC) {
-            uint32_t chunk = (sleepSec > 65000) ? 65000 : sleepSec;
-
-            wake_source_t ws = enterStop2((uint32_t)chunk);
+            wake_source_t ws = enterStop2(sleepSec);
             printf("\r\nPWR: Woke from Stop 2 (%s)\r\n",
                    ws == WAKE_ESP32 ? "ESP32" : "RTC");
 
             if (ws == WAKE_ESP32) {
-                /* User connected via ESP32 — break out of sleep chain */
+                /* User connected. Stay awake until idle timeout. Inline
+                 * peripheral-up + SD-remount — calling powerEnterRecord()
+                 * would clobber state back to SCHEDULED_REC. */
+                HAL_GPIO_WritePin(GPIOD, GPIO_PIN_11, GPIO_PIN_SET);
+                osDelay(50);
+                if (!sdMounted) {
+                    extern FATFS USERFatFS;
+                    extern char USERPath[];
+                    osMutexAcquire(fileMtxHandle, osWaitForever);
+                    if (f_mount(&USERFatFS, USERPath, 1) == FR_OK) {
+                        sdMounted = 1;
+                    }
+                    osMutexRelease(fileMtxHandle);
+                }
                 dev.pwr.state = PWR_USER_CONNECTED;
-                powerEnterRecord();  /* power everything up */
+                dev.pwr.userConnectedTick = HAL_GetTick();
+                printf("PWR: USER_CONNECTED (idle timeout %lu s)\r\n",
+                       (unsigned long)(USER_CONNECTED_IDLE_MS / 1000));
                 return;
             }
 
-            sleepSec -= chunk;
-
-            /* Re-evaluate schedule in case we should start recording now */
-            if (sleepSec > 0) {
-                rtcGetTime(&hh, &mm, &ss);
-                rtcGetDate(&day, &month, &year);
-                nowMinUTC = (uint16_t)(hh * 60 + mm);
-                sched = schedule_evaluate(&cfg, nowMinUTC,
-                                           day, month, year, lat, lon);
-                if (sched.shouldRecord) {
-                    /* Remount and start recording */
-                    powerEnterRecord();
-                    return;
-                }
+            /* RTC wake — re-evaluate. If a recording window just opened,
+             * power everything back up and start recording. */
+            rtcGetTime(&hh, &mm, &ss);
+            rtcGetDate(&day, &month, &year);
+            nowMinUTC = (uint16_t)(hh * 60 + mm);
+            sched = schedule_evaluate(&cfg, nowMinUTC,
+                                       day, month, year, lat, lon);
+            if (sched.shouldRecord) {
+                powerEnterRecord();
+                return;
             }
-        }
-
-        /* If we exited the loop naturally, re-evaluate once more */
-        if (dev.pwr.state == PWR_SCHEDULED_NONREC) {
-            /* Remount SD for next cycle */
-            HAL_GPIO_WritePin(GPIOD, GPIO_PIN_11, GPIO_PIN_SET);
-            osDelay(50);
-            extern FATFS USERFatFS;
-            extern char USERPath[];
-            osMutexAcquire(fileMtxHandle, osWaitForever);
-            if (f_mount(&USERFatFS, USERPath, 1) == FR_OK) {
-                sdMounted = 1;
-            }
-            osMutexRelease(fileMtxHandle);
+            /* Still outside any window — sleep again with refreshed
+             * secsUntilNext on the next iteration. */
         }
     }
 

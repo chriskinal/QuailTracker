@@ -181,6 +181,11 @@ uint8_t tensorArena[112 * 1024] __attribute__((aligned(16)));
 /* Absolute sample counter (monotonically increasing, never reset) */
 volatile uint64_t absSampleCount = 0;
 
+/* Set by HAL_GPIO_EXTI_Falling_Callback when an ESP32 CS wake pulse hits PB12.
+ * Cleared by enterStop2() before WFI; checked after wake to determine source.
+ * Defined later in this file alongside the EXTI callback. */
+extern volatile uint8_t espWakePulseSeen;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -1953,9 +1958,22 @@ wake_source_t enterStop2(uint32_t seconds)
     GPIOB->PUPDR &= ~(0x3u << (12*2));
     GPIOB->PUPDR |=  (0x1u << (12*2));        /* PB12 = pull-up */
 
+    /* Mux EXTI line 12 to port B (default is port A → PA12, which is
+     * floating and never transitions). On STM32U5, EXTI->EXTICR[3]
+     * holds lines 12-15, 8 bits per line. Port B = 0x01.
+     * Without this mux, the wake pulse on PB12 is invisible to EXTI. */
+    uint32_t exticr3_save = EXTI->EXTICR[3];
+    EXTI->EXTICR[3] = (exticr3_save & ~0xFFu) | 0x01u;
+
     /* Enable EXTI12 falling edge (PB12) for ESP32 wake */
     EXTI->FTSR1 |= EXTI_FTSR1_FT12;          /* falling edge trigger */
     EXTI->IMR1  |= EXTI_IMR1_IM12;            /* unmask EXTI line 12 */
+
+    /* Force the heartbeat LED OFF before sleep so it's a clean indicator:
+     * dark = sleeping, lit = awake/faulted. Otherwise it freezes wherever
+     * the 1Hz toggle landed and ON-during-sleep looks identical to a
+     * stuck-on-fault. */
+    GPIOD->BSRR = (1u << (13 + 16));
 
     /* Disable SysTick + HAL timebase (TIM17) to stop periodic ticks */
     SysTick->CTRL &= ~(SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk);
@@ -1991,19 +2009,18 @@ wake_source_t enterStop2(uint32_t seconds)
         NVIC->ICPR[i] = 0xFFFFFFFFu;
     EXTI->RPR1 = 0xFFFFFFFFu;              /* clear all rising pending  */
     EXTI->FPR1 = 0xFFFFFFFFu;              /* clear all falling pending */
+    espWakePulseSeen = 0;                  /* reset before sleep */
     __DSB();
     __ISB();
 
     /* Enter Stop 2 */
     HAL_PWREx_EnterSTOP2Mode(PWR_STOPENTRY_WFI);
 
-    /* --- CPU resumes here after RTC or EXTI0 wake-up --- */
-
-    /* Determine wake source: check EXTI FPR1 bit 0 before clearing */
-    wake_source_t wakeSource = WAKE_RTC;
-    if (EXTI->FPR1 & EXTI_FPR1_FPIF12) {
-        wakeSource = WAKE_ESP32;
-    }
+    /* --- CPU resumes here after RTC or EXTI12 wake-up ---
+     * Note: by the time we get here, the EXTI12 IRQ handler has already
+     * run and cleared EXTI->FPR1 bit 12. We rely on espWakePulseSeen
+     * which is set by HAL_GPIO_EXTI_Falling_Callback. */
+    wake_source_t wakeSource = espWakePulseSeen ? WAKE_ESP32 : WAKE_RTC;
 
     /* Restore PLL / 160MHz system clock */
     SystemClock_Config();
@@ -2021,6 +2038,9 @@ wake_source_t enterStop2(uint32_t seconds)
     EXTI->FTSR1 &= ~EXTI_FTSR1_FT12;
     EXTI->IMR1  &= ~EXTI_IMR1_IM12;
     EXTI->FPR1   = EXTI_FPR1_FPIF12;   /* clear pending */
+
+    /* Restore EXTICR mux for line 12 to its original (default port A) value */
+    EXTI->EXTICR[3] = exticr3_save;
 
     /* Restore PB12 to its original mode (SPI2 CS output) */
     GPIOB->PUPDR &= ~(0x3u << (12*2));
@@ -2184,12 +2204,20 @@ void HAL_GPIO_EXTI_Rising_Callback(uint16_t GPIO_Pin)
     }
 }
 
+/* Set by EXTI12 falling callback so enterStop2() can detect the ESP32 wake
+ * pulse even though the HAL IRQ handler clears EXTI->FPR1 bit 12 before
+ * we get a chance to read it. */
+volatile uint8_t espWakePulseSeen = 0;
+
 /* SD card detect: falling edge = card inserted (active low) */
 void HAL_GPIO_EXTI_Falling_Callback(uint16_t GPIO_Pin)
 {
     if (GPIO_Pin == SD_CD_Pin) {
         extern osThreadId_t cliTaskHandle;
         osThreadFlagsSet(cliTaskHandle, 0x10);  /* mount request */
+    } else if (GPIO_Pin == GPIO_PIN_12) {
+        /* ESP32 CS wake pulse on PB12 — record it for enterStop2() */
+        espWakePulseSeen = 1;
     }
 }
 /* USER CODE END 4 */
