@@ -2755,10 +2755,16 @@ static void powerScheduleCheck(void)
 
         /* Sleep loop: re-evaluate every iteration, sleep one RTC chunk at
          * a time, exit only on shouldRecord transition or USER_CONNECTED. */
+        uint32_t loopIter = 0;
         for (;;) {
             uint32_t sleepSec = sched.secsUntilNext;
             if (sleepSec < 60)    sleepSec = 60;     /* min 60s — avoid rapid wake/sleep churn */
             if (sleepSec > 65000) sleepSec = 65000;  /* RTC wake-timer max */
+
+            printf("PWR: sleep iter=%lu rtc=%02u:%02u:%02u sleepSec=%lu nextWindow=%lu\r\n",
+                   (unsigned long)loopIter, hh, mm, ss,
+                   (unsigned long)sleepSec,
+                   (unsigned long)sched.secsUntilNext);
 
             wake_source_t ws = enterStop2(sleepSec);
             printf("\r\nPWR: Woke from Stop 2 (%s)\r\n",
@@ -2793,6 +2799,11 @@ static void powerScheduleCheck(void)
             nowMinUTC = (uint16_t)(hh * 60 + mm);
             sched = schedule_evaluate(&cfg, nowMinUTC,
                                        day, month, year, lat, lon);
+            printf("PWR: re-eval iter=%lu rtc=%02u:%02u:%02u shouldRec=%d secsUntilNext=%lu\r\n",
+                   (unsigned long)loopIter, hh, mm, ss,
+                   (int)sched.shouldRecord,
+                   (unsigned long)sched.secsUntilNext);
+            loopIter++;
             if (sched.shouldRecord) {
                 powerEnterRecord();
                 return;
