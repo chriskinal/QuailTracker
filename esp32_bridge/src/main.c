@@ -452,13 +452,20 @@ static void ws_process_command(const char *json)
     }
 }
 
+static volatile bool stm32_wake_pending = false;  /* set from any task; spi_task drains */
+
 static esp_err_t ws_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
         /* WebSocket handshake — track this client */
         int fd = httpd_req_to_sockfd(req);
         ws_add_client(fd);
-        ESP_LOGI(TAG, "WS handshake: fd=%d", fd);
+        ESP_LOGI(TAG, "WS handshake: fd=%d — queuing STM32 wake", fd);
+        /* Don't call stm32_wake() inline here. It does spi_slave_free()
+         * + 10ms vTaskDelay, which blocks the HTTP server response and
+         * races with spi_task. iOS sees the WS handshake stall, aborts
+         * the connection, and drops the AP. Defer to spi_task instead. */
+        stm32_wake_pending = true;
         return ESP_OK;
     }
 
@@ -919,8 +926,9 @@ static void wifi_ap_event_handler(void *arg, esp_event_base_t base,
 {
     if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STACONNECTED) {
         wifi_event_ap_staconnected_t *e = (wifi_event_ap_staconnected_t *)data;
-        ESP_LOGI(TAG, "AP STA connected (aid=%d) — waking STM32", e->aid);
-        stm32_wake();
+        ESP_LOGI(TAG, "AP STA connected (aid=%d) — queuing STM32 wake", e->aid);
+        /* Defer to spi_task — same reason as ws_handler. */
+        stm32_wake_pending = true;
     }
 }
 
@@ -1184,6 +1192,16 @@ static void spi_task(void *arg)
             vTaskDelete(NULL);
             return;
         }
+
+        /* Drain deferred wake requests. Other tasks set stm32_wake_pending
+         * (WS handshake, WiFi STA_CONNECTED) and we run the actual SPI
+         * teardown / GPIO pulse / re-init here, in our own context, so
+         * we don't race with ourselves and don't block the caller. */
+        if (stm32_wake_pending) {
+            stm32_wake_pending = false;
+            stm32_wake();
+        }
+
         if (!spi_initialized) {
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
