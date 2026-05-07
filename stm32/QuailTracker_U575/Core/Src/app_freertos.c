@@ -1118,22 +1118,25 @@ void StartCliTask(void *argument)
 
       case 'a':
       case 'A':
+      case 'd':
+      case 'D':
       {
-        /* Toggle autonomous schedule mode */
-        if (dev.pwr.scheduleActive) {
-            dev.pwr.scheduleActive = 0;
+        /* Toggle dev mode. Schedule activation is implicit:
+         * powerScheduleCheck() runs whenever dev mode is OFF, RTC is synced,
+         * and windows are configured. 'A' is kept as an alias for muscle memory. */
+        dev.pwr.devMode = !dev.pwr.devMode;
+        if (dev.pwr.devMode) {
             dev.pwr.state = PWR_DEV_MODE;
-            printf("Schedule: OFF (dev mode)\r\n");
+            printf("Dev mode: ON (always awake)\r\n");
         } else {
+            /* Leave state as PWR_DEV_MODE; powerScheduleCheck()'s bootstrap
+             * branch will transition it on the next tick. */
             if (!dev.pwr.rtcSynced) {
-                printf("Schedule: Need GPS fix to sync RTC first!\r\n");
+                printf("Dev mode: OFF (waiting for RTC sync)\r\n");
             } else if (!schedule_has_windows(&cfg)) {
-                printf("Schedule: No windows configured\r\n");
+                printf("Dev mode: OFF (no schedule windows — stays awake)\r\n");
             } else {
-                dev.pwr.scheduleActive = 1;
-                dev.pwr.devMode = 0;
-                dev.pwr.state = PWR_SCHEDULED_REC;  /* start evaluating */
-                printf("Schedule: ON — autonomous recording enabled\r\n");
+                printf("Dev mode: OFF — schedule armed\r\n");
             }
         }
         printMenu();
@@ -1148,23 +1151,6 @@ void StartCliTask(void *argument)
         } else {
             audioChannelRight = !audioChannelRight;
             printf("Audio channel: %s\r\n", audioChannelRight ? "RIGHT" : "LEFT");
-        }
-        printMenu();
-        break;
-      }
-
-      case 'd':
-      case 'D':
-      {
-        /* Toggle dev mode */
-        dev.pwr.devMode = !dev.pwr.devMode;
-        if (dev.pwr.devMode) {
-            dev.pwr.scheduleActive = 0;
-            dev.pwr.state = PWR_DEV_MODE;
-            printf("Dev mode: ON (schedule disabled, everything stays on)\r\n");
-        } else {
-            dev.pwr.state = PWR_SCHEDULED_REC;
-            printf("Dev mode: OFF\r\n");
         }
         printMenu();
         break;
@@ -1981,10 +1967,10 @@ static void StartBridgeTask(void *argument)
     /* Apply persisted config to runtime state */
     config_apply(&cfg);
 
-    /* Initialize power management state — default to dev mode (everything on) */
+    /* Initialize power management state — boot in dev mode (everything on)
+     * until user opts into schedule mode and conditions are met. */
     dev.pwr.state = PWR_DEV_MODE;
     dev.pwr.devMode = 1;
-    dev.pwr.scheduleActive = 0;
     dev.pwr.rtcSynced = 0;
     dev.pwr.gpsDutyCycleSec = GPS_DUTY_CYCLE_DEFAULT_SEC;
 
@@ -2174,25 +2160,22 @@ static void StartBridgeTask(void *argument)
                     printf("SPI cmd: model_reload\r\n");
                     break;
                 case SPI_CMD_SCHEDULE_ON:
-                    if (dev.pwr.rtcSynced && schedule_has_windows(&cfg)) {
-                        dev.pwr.scheduleActive = 1;
-                        dev.pwr.devMode = 0;
-                        dev.pwr.state = PWR_SCHEDULED_REC;
-                        printf("SPI cmd: schedule_on\r\n");
-                    }
+                    /* "Schedule on" = leave dev mode. Activation happens
+                     * automatically when RTC is synced and windows exist;
+                     * otherwise the device stays awake but the intent is
+                     * recorded. */
+                    dev.pwr.devMode = 0;
+                    dev.pwr.state = PWR_DEV_MODE;  /* bootstrap branch picks up */
+                    printf("SPI cmd: schedule_on (devMode=0)\r\n");
                     break;
                 case SPI_CMD_SCHEDULE_OFF:
-                    dev.pwr.scheduleActive = 0;
                     dev.pwr.devMode = 1;
                     dev.pwr.state = PWR_DEV_MODE;
-                    printf("SPI cmd: schedule_off\r\n");
+                    printf("SPI cmd: schedule_off (devMode=1)\r\n");
                     break;
                 case SPI_CMD_DEV_MODE:
                     dev.pwr.devMode = !dev.pwr.devMode;
-                    if (dev.pwr.devMode) {
-                        dev.pwr.scheduleActive = 0;
-                        dev.pwr.state = PWR_DEV_MODE;
-                    }
+                    dev.pwr.state = PWR_DEV_MODE;  /* bootstrap will retransition */
                     printf("SPI cmd: dev_mode=%d\r\n", dev.pwr.devMode);
                     break;
                 case SPI_CMD_AUDIO_STREAM: {
@@ -2680,11 +2663,11 @@ static void gpsDutyCycle(void)
 /* Main schedule check — called every second from CLI task */
 static void powerScheduleCheck(void)
 {
-    /* Skip if not in autonomous mode or in dev mode */
-    if (dev.pwr.devMode || !dev.pwr.scheduleActive) return;
-
-    /* Skip if RTC not synced (no reliable time) */
-    if (!dev.pwr.rtcSynced) return;
+    /* Schedule is "armed" when the user hasn't overridden via dev mode
+     * AND we have the inputs needed to evaluate it (RTC clock + at least
+     * one window). */
+    if (dev.pwr.devMode || !dev.pwr.rtcSynced || !schedule_has_windows(&cfg))
+        return;
 
     /* Read current time from RTC */
     uint8_t hh, mm, ss;

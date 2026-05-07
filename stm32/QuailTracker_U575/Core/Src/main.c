@@ -561,8 +561,9 @@ void printMenu(void)
     printf("S. Toggle GPS Survey-In (%s)\r\n",
            configGetSurveyCount() > 0 ? "has data" : "no data");
     printf("Z. Sleep (Stop 2)\r\n");
-    printf("A. Toggle Autonomous Schedule (%s)\r\n",
-           dev.pwr.scheduleActive ? "ON" : "OFF");
+    printf("A/D. Toggle Dev Mode (%s)\r\n",
+           dev.pwr.devMode ? "ON — always awake"
+                           : "OFF — schedule runs when armed");
     {
         extern volatile uint8_t audioChannelRight;
         printf("C. Toggle Audio Channel (%s)\r\n",

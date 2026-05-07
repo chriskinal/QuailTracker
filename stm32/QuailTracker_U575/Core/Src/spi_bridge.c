@@ -6,6 +6,7 @@
 
 #include "spi_bridge.h"
 #include "main.h"
+#include "schedule.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -52,11 +53,14 @@ void spi_state_fill(spi_state_t *s, const device_state_t *dev,
     s->audio_actRatio  = dev->audio.actRatio;
     s->audio_clipCount = dev->audio.clipCount;
 
-    /* Power */
+    /* Power. schedActive is derived: schedule "active" means dev mode is OFF
+     * AND the schedule is armable (RTC synced + at least one window). */
     s->pwr_state       = (uint8_t)dev->pwr.state;
     s->pwr_devMode     = dev->pwr.devMode;
     s->pwr_rtcSynced   = dev->pwr.rtcSynced;
-    s->pwr_schedActive = dev->pwr.scheduleActive;
+    s->pwr_schedActive = (!dev->pwr.devMode
+                          && dev->pwr.rtcSynced
+                          && schedule_has_windows(cfg)) ? 1 : 0;
 
     /* Detection */
     s->det_modelLoaded       = dev->det.modelLoaded;

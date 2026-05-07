@@ -558,6 +558,19 @@
             </div>
             <div class="val-sm" style="text-align:center;margin-top:6px;color:#888" id="cfgStatus"></div>
 
+            <!-- STM32 Power Mode -->
+            <div class="card" style="margin-top:12px">
+                <div class="lbl" style="margin-bottom:6px">STM32 Power Mode</div>
+                <div class="row" style="align-items:center">
+                    <span class="val-sm">Dev Mode (always awake)</span>
+                    <span class="spacer"></span>
+                    <label class="toggle"><input type="checkbox" id="devModeChk" onchange="toggleDevMode(this)"><span class="tsl"></span></label>
+                    <span class="val-sm" style="margin-left:6px" id="devModeLbl">On</span>
+                </div>
+                <div class="val-sm" style="color:#888;margin-top:6px" id="schedStatus">Dev mode — STM stays awake</div>
+                <div class="val-sm" style="color:#888;margin-top:4px">Turn off to enable scheduled recording. Sleep is automatic when GPS-synced and at least one schedule window is configured.</div>
+            </div>
+
             <!-- ESP32 Settings -->
             <div class="card" style="margin-top:12px">
                 <div class="lbl" style="margin-bottom:6px">ESP32 Power Mode</div>
@@ -742,6 +755,14 @@
         function loadSchedule() {
             sendCmd('get_schedule');
             document.getElementById('schStatus').textContent = 'Schedule loaded';
+        }
+
+        function toggleDevMode(el) {
+            // 'dev_mode' on the STM toggles its devMode flag.
+            // Pre-flip already happened in the checkbox; if the device's
+            // current value disagrees, the next status frame will resync us.
+            sendCmd('dev_mode');
+            document.getElementById('devModeLbl').textContent = el.checked ? 'On' : 'Off';
         }
 
         /* Config */
@@ -1034,6 +1055,33 @@
                 }
                 if (d.ppsCnt !== undefined)
                     document.getElementById('ppsCount').textContent = '(' + d.ppsCnt + ' pulses)';
+
+                /* Dev Mode toggle + derived schedule status */
+                if (d.devMode !== undefined) {
+                    var dm = document.getElementById('devModeChk');
+                    var dmLbl = document.getElementById('devModeLbl');
+                    var on = !!d.devMode;
+                    if (dm && dm.checked !== on) dm.checked = on;
+                    if (dmLbl) dmLbl.textContent = on ? 'On' : 'Off';
+                }
+                if (d.devMode !== undefined || d.schedActive !== undefined || d.rtcSync !== undefined) {
+                    var st = document.getElementById('schedStatus');
+                    if (st) {
+                        if (d.devMode) {
+                            st.textContent = 'Dev mode — STM stays awake';
+                            st.style.color = '#888';
+                        } else if (d.schedActive) {
+                            st.textContent = 'Schedule armed — STM sleeps between windows';
+                            st.style.color = '#4CAF50';
+                        } else if (!d.rtcSync) {
+                            st.textContent = 'Waiting for GPS fix to sync RTC';
+                            st.style.color = '#FF9800';
+                        } else {
+                            st.textContent = 'No schedule windows configured — STM stays awake';
+                            st.style.color = '#FF9800';
+                        }
+                    }
+                }
 
                 /* Recording */
                 if (d.rec !== undefined) {

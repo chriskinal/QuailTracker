@@ -169,11 +169,11 @@ typedef struct {
 
     struct {
         volatile power_state_t state;    /* current power state */
-        uint8_t  devMode;                /* 1 = dev mode override */
+        uint8_t  devMode;                /* 1 = stay awake; 0 = run schedule when armed */
         uint8_t  rtcSynced;             /* 1 = RTC has been set from GPS */
-        uint8_t  scheduleActive;        /* 1 = autonomous schedule running */
         uint32_t lastGpsSyncTick;       /* HAL tick of last GPS→RTC sync */
         uint32_t gpsDutyCycleSec;       /* GPS wake interval during recording (0=off) */
+        uint32_t userConnectedTick;     /* HAL tick of last user activity (SPI cmd / ESP wake) */
     } pwr;
 
     struct {
