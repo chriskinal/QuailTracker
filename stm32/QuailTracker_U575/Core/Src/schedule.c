@@ -138,7 +138,11 @@ schedule_result_t schedule_evaluate(const device_config_t *cfg,
         result.secsUntilEnd = (minSecsToEnd < UINT32_MAX) ? minSecsToEnd : 0;
         result.secsUntilNext = 0;
     } else {
-        result.secsUntilNext = (minSecsToNext < UINT32_MAX) ? minSecsToNext : 0;
+        /* If no windows could be built (e.g. sunrise/sunset enabled but no
+         * lat/lon yet), fall back to one full day instead of 0 — otherwise
+         * the sleep loop in powerScheduleCheck clamps to its 60 s minimum
+         * and thrashes wake/sleep until conditions change. */
+        result.secsUntilNext = (minSecsToNext < UINT32_MAX) ? minSecsToNext : 86400u;
         result.secsUntilEnd = 0;
     }
 

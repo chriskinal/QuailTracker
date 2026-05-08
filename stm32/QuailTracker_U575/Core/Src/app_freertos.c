@@ -2690,12 +2690,26 @@ static void powerScheduleCheck(void)
     rtcGetDate(&day, &month, &year);
     uint16_t nowMinUTC = (uint16_t)(hh * 60 + mm);
 
-    /* Get lat/lon for solar calc — prefer survey, fallback to live GPS */
+    /* Get lat/lon for solar calc — prefer survey, fallback to live GPS,
+     * fall back further to a RAM cache of the last live fix. The cache
+     * stops gpsData.valid flipping to 0 mid-window (e.g. while GPS is
+     * still warming up after powerEnterRecord turns it on) from blanking
+     * the schedule and causing immediate-stop recordings. */
+    static float lastGoodLat = 0.0f, lastGoodLon = 0.0f;
+    static uint8_t haveLastGood = 0;
     float lat = cfg.surveyLat;
     float lon = cfg.surveyLon;
-    if (cfg.surveyCount == 0 && gpsData.valid) {
-        lat = gpsData.latitude;
-        lon = gpsData.longitude;
+    if (cfg.surveyCount == 0) {
+        if (gpsData.valid) {
+            lat = gpsData.latitude;
+            lon = gpsData.longitude;
+            lastGoodLat = lat;
+            lastGoodLon = lon;
+            haveLastGood = 1;
+        } else if (haveLastGood) {
+            lat = lastGoodLat;
+            lon = lastGoodLon;
+        }
     }
 
     /* Evaluate schedule */
