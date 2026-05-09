@@ -1781,6 +1781,13 @@ static void printGpsStatus(void)
 static void gpsSetPower(uint8_t on)
 {
     if (on) {
+        /* Invalidate any cached fix before we power up. Without this, the
+         * gpsDutyCycle "wait for valid" check sees the previous power-on's
+         * fix still latched in RAM, fires rtcSyncFromGps with a stale
+         * utc_time, and immediately powers GPS back off — pinning RTC to
+         * whatever timestamp the first fix-of-the-day delivered. */
+        gpsData.valid = 0;
+        gpsData.fix = 0;
         HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_SET);   /* GPS_EN high */
         osDelay(10);
         HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_SET);   /* WAKE high */
