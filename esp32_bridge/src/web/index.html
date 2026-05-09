@@ -766,13 +766,17 @@
             return _tzCache;
         }
 
-        function tzLabel() {
+        function tzShort() {
             var tz = computeTz();
             var sign = tz.utcOff >= 0 ? '+' : '-';
             var abs = Math.abs(tz.utcOff);
             var hh = Math.floor(abs / 60);
             var mm = abs % 60;
-            var s = 'UTC' + sign + hh + (mm ? ':' + (mm < 10 ? '0' + mm : mm) : '');
+            return 'UTC' + sign + hh + (mm ? ':' + (mm < 10 ? '0' + mm : mm) : '');
+        }
+
+        function tzLabel() {
+            var s = tzShort();
             try { s += ' (' + Intl.DateTimeFormat().resolvedOptions().timeZone + ')'; } catch (e) {}
             return s;
         }
@@ -1073,12 +1077,14 @@
                     return;
                 }
 
-                /* Timestamp */
+                /* Timestamp — local wall-clock with the user's UTC offset
+                 * appended so the schedule (also in local time) is unambiguous. */
                 var now = new Date();
                 document.getElementById('lastUpdate').textContent =
                     now.getHours().toString().padStart(2,'0') + ':' +
                     now.getMinutes().toString().padStart(2,'0') + ':' +
-                    now.getSeconds().toString().padStart(2,'0');
+                    now.getSeconds().toString().padStart(2,'0') +
+                    ' ' + tzShort();
 
                 /* Sync indicator */
                 if (d.synced !== undefined) {
