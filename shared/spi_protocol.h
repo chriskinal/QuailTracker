@@ -68,7 +68,20 @@ typedef enum {
     SPI_CMD_SET_DETECT     = 13,
     SPI_CMD_MODEL_RELOAD   = 14,
     SPI_CMD_AUDIO_STREAM   = 15,
+    SPI_CMD_SET_TZ         = 16,  /* RAM-only TZ refresh — see qt_spi_tz_payload_t */
 } spi_cmd_type_t;
+
+/* Payload for SPI_CMD_SET_TZ. Sent by ESP32 (browser-driven) so the device
+ * can apply the user's local timezone without persisting to flash on every
+ * heartbeat. The full triple lets the device flip offsets autonomously at
+ * the next DST transition; nextTransitionUtc=0 means "no transition known". */
+typedef struct __attribute__((packed)) {
+    int16_t  utcOffsetMin;       /* current offset (signed minutes) */
+    int16_t  nextOffsetMin;      /* offset that takes effect at nextTransitionUtc */
+    uint32_t nextTransitionUtc;  /* seconds since 1970-01-01 00:00 UTC; 0 = none */
+} qt_spi_tz_payload_t;
+
+_Static_assert(sizeof(qt_spi_tz_payload_t) == 8, "qt_spi_tz_payload_t must be 8 bytes");
 
 /* ── Command slot (64 bytes) ─────────────────────────────────── */
 

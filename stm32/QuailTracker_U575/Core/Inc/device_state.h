@@ -78,8 +78,15 @@ typedef struct __attribute__((packed, aligned(16))) {
     uint8_t  detWindowStep;   /* 1-3 seconds inference window step */
     uint8_t  chunkMinutes;    /* 0=no chunking, 1-240 = chunk duration in minutes */
     uint16_t micHeading;      /* mic axis compass heading 0-359 degrees, 0xFFFF=unset */
+    /* Timezone — schedule windows are interpreted in local time using
+     * utcOffsetMin until currentEpoch >= nextTransitionUtc, at which point
+     * the device autonomously flips to nextOffsetMin. Browser refreshes
+     * these on connect so DST is handled without device-side TZ tables. */
+    int16_t  utcOffsetMin;       /* signed minutes from UTC; 0 = UTC mode */
+    int16_t  nextOffsetMin;      /* offset that takes effect at next DST transition */
+    uint32_t nextTransitionUtc;  /* epoch seconds; 0 = no transition known */
     uint32_t cfg_seq;         /* config sequence number for SPI sync (higher wins) */
-    uint8_t  _pad[128 - 106 - 4]; /* pad to 128 bytes: 106 pre-pad + 18 pad + 4 crc */
+    uint8_t  _pad[128 - 114 - 4]; /* pad to 128 bytes: 114 pre-pad + 10 pad + 4 crc */
     uint32_t crc32;           /* CRC-32 over bytes 0..123 */
 } device_config_t;
 

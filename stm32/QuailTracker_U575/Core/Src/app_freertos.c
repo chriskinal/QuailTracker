@@ -43,7 +43,7 @@
 
 /* ---- Flash config/health constants (types now in device_state.h) ---- */
 #define CONFIG_MAGIC      0x51544346   /* "QTCF" */
-#define CONFIG_VERSION    9
+#define CONFIG_VERSION    10
 #define CONFIG_FLASH_ADDR 0x080FE000   /* Last page of Bank 1 on 2MB (Nucleo ZI), Bank 2 page 63 on 1MB (VGT6) */
 
 #define HEALTH_MAGIC       0x51544853   /* "QTHS" */
@@ -2194,6 +2194,17 @@ static void StartBridgeTask(void *argument)
                     dev.pwr.state = PWR_DEV_MODE;  /* bootstrap will retransition */
                     printf("SPI cmd: dev_mode=%d\r\n", dev.pwr.devMode);
                     break;
+                case SPI_CMD_SET_TZ: {
+                    /* RAM-only TZ refresh from the browser. Don't bump
+                     * cfg_seq and don't persist — heartbeat-driven; only
+                     * an explicit user save (set_schedule) writes flash. */
+                    qt_spi_tz_payload_t tz;
+                    memcpy(&tz, cmd_payload, sizeof(tz));
+                    cfg.utcOffsetMin = tz.utcOffsetMin;
+                    cfg.nextOffsetMin = tz.nextOffsetMin;
+                    cfg.nextTransitionUtc = tz.nextTransitionUtc;
+                    break;
+                }
                 case SPI_CMD_AUDIO_STREAM: {
                     uint8_t ch = cmd_payload[0];
                     uint8_t en = cmd_payload[1];
@@ -2291,6 +2302,9 @@ static void configSetDefaults(device_config_t *c)
     c->detWindowStep = 3;    /* 3 seconds */
     c->chunkMinutes = 30;    /* 30-minute file chunks */
     c->micHeading = 0xFFFF;  /* unset — installer enters via web UI */
+    c->utcOffsetMin = 0;          /* UTC until browser populates */
+    c->nextOffsetMin = 0;
+    c->nextTransitionUtc = 0;
     c->cfg_seq = 1;          /* start at 1 so ESP32 (seq=0) adopts on first sync */
     memset(c->_pad, 0xFF, sizeof(c->_pad));
     c->crc32 = 0;
