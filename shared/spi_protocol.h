@@ -208,7 +208,7 @@ _Static_assert(sizeof(spi_state_t) == 384, "spi_state_t must be 384 bytes");
 #ifndef DEVICE_STATE_H
 
 #define CONFIG_MAGIC      0x51544346   /* "QTCF" */
-#define CONFIG_VERSION    8
+#define CONFIG_VERSION    10
 
 typedef struct __attribute__((packed)) {
     uint32_t magic;
@@ -245,8 +245,11 @@ typedef struct __attribute__((packed)) {
     uint8_t  detWindowStep;
     uint8_t  chunkMinutes;
     uint16_t micHeading;                       /* mic axis compass heading 0-359, 0xFFFF=unset */
+    int16_t  utcOffsetMin;                     /* signed minutes from UTC */
+    int16_t  nextOffsetMin;                    /* offset after nextTransitionUtc */
+    uint32_t nextTransitionUtc;                /* epoch s; 0 = none */
     uint32_t cfg_seq;                          /* config sequence number */
-    uint8_t  _pad[128 - 106 - 4];             /* pad to 128 bytes */
+    uint8_t  _pad[128 - 114 - 4];             /* pad to 128 bytes */
     uint32_t crc32;
 } device_config_t;
 

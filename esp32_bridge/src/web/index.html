@@ -405,6 +405,7 @@
 
         <!-- ════════════════ Schedule Tab ════════════════ -->
         <div class="tab" id="t-schedule">
+            <div class="val-sm" style="text-align:center;margin-bottom:8px;color:#888" id="tzInfo">Times below are in your device's local time</div>
             <!-- Sunrise -->
             <div class="card">
                 <div class="row">
@@ -728,6 +729,64 @@
         document.getElementById('schSunrise').addEventListener('change', updateToggleLabels);
         document.getElementById('schSunset').addEventListener('change', updateToggleLabels);
 
+        /* ── Timezone capture ───────────────────────────────────────
+         * Browser computes current UTC offset and the next DST transition.
+         * Device interprets schedule windows as local time using these.
+         * Cached for the session — DST transitions don't move while you
+         * browse. */
+        var _tzCache = null;
+        function computeTz() {
+            if (_tzCache) return _tzCache;
+            var now = new Date();
+            var current = -now.getTimezoneOffset();  // minutes east of UTC
+            var oneDay = 86400000;
+            var nextTrMs = 0;
+            var nextOff = current;
+            for (var d = 1; d <= 366; d++) {
+                var probe = new Date(now.getTime() + d * oneDay);
+                if (-probe.getTimezoneOffset() !== current) {
+                    /* Binary search to minute precision */
+                    var lo = now.getTime() + (d - 1) * oneDay;
+                    var hi = now.getTime() + d * oneDay;
+                    while (hi - lo > 60000) {
+                        var mid = lo + (hi - lo) / 2;
+                        if (-new Date(mid).getTimezoneOffset() === current) lo = mid;
+                        else hi = mid;
+                    }
+                    nextTrMs = hi;
+                    nextOff = -new Date(hi).getTimezoneOffset();
+                    break;
+                }
+            }
+            _tzCache = {
+                utcOff: current,
+                nextOff: nextOff,
+                nextTr: Math.floor(nextTrMs / 1000)
+            };
+            return _tzCache;
+        }
+
+        function tzLabel() {
+            var tz = computeTz();
+            var sign = tz.utcOff >= 0 ? '+' : '-';
+            var abs = Math.abs(tz.utcOff);
+            var hh = Math.floor(abs / 60);
+            var mm = abs % 60;
+            var s = 'UTC' + sign + hh + (mm ? ':' + (mm < 10 ? '0' + mm : mm) : '');
+            try { s += ' (' + Intl.DateTimeFormat().resolvedOptions().timeZone + ')'; } catch (e) {}
+            return s;
+        }
+
+        function sendTz() {
+            if (ws && ws.readyState === 1) {
+                var tz = computeTz();
+                ws.send(JSON.stringify({
+                    cmd: 'update_tz',
+                    utcOff: tz.utcOff, nextOff: tz.nextOff, nextTr: tz.nextTr
+                }));
+            }
+        }
+
         function saveSchedule() {
             var wins = [];
             for (var i = 0; i < schWindows.length; i++) {
@@ -735,6 +794,7 @@
                 var e = schWindows[i].end.replace(':', '');
                 wins.push(parseInt(s), parseInt(e));
             }
+            var tz = computeTz();
             var obj = {
                 cmd: 'set_schedule',
                 sunEn: document.getElementById('schSunrise').checked ? 1 : 0,
@@ -744,7 +804,8 @@
                 setB: parseInt(document.getElementById('schSetBefore').value),
                 setA: parseInt(document.getElementById('schSetAfter').value),
                 nWin: schWindows.length,
-                wins: wins
+                wins: wins,
+                utcOff: tz.utcOff, nextOff: tz.nextOff, nextTr: tz.nextTr
             };
             if (ws && ws.readyState === 1) {
                 ws.send(JSON.stringify(obj));
@@ -937,6 +998,11 @@
             }
         }, 3000);
 
+        /* Refresh device TZ once a minute. Cheap (cached after first call)
+         * and survives the rare case where someone changes their system
+         * clock or DST table while keeping the page open. */
+        setInterval(sendTz, 60000);
+
         function connect() {
             /* Debounce — cancel any pending retry */
             if (_connectTimer) { clearTimeout(_connectTimer); _connectTimer = null; }
@@ -959,6 +1025,12 @@
                 document.getElementById('dot').className = 'dot on';
                 document.getElementById('connSt').textContent = 'Live';
                 loadEspConfig();
+                /* Push the user's TZ so the device can interpret schedule
+                 * windows as local time and auto-flip at the next DST
+                 * transition. Also paint the banner in the Schedule tab. */
+                sendTz();
+                var ti = document.getElementById('tzInfo');
+                if (ti) ti.textContent = 'Times below are local — ' + tzLabel();
             };
 
             ws.onerror = function() {};

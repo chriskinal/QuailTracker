@@ -35,7 +35,7 @@
 #include "spi_protocol.h"
 
 #define TAG "BRIDGE"
-#define ESP_FW_VERSION "0.3.0"
+#define ESP_FW_VERSION "0.4.0"
 
 static bool wifi_started = false;
 
@@ -357,6 +357,26 @@ static void ws_process_command(const char *json)
     if (strstr(json, "dev_mode"))       { cmd_enqueue(SPI_CMD_DEV_MODE, NULL, 0); return; }
     if (strstr(json, "model_reload"))   { cmd_enqueue(SPI_CMD_MODEL_RELOAD, NULL, 0); return; }
 
+    /* TZ refresh from browser. Heartbeat-style — updates RAM only, doesn't
+     * bump cfg_seq, doesn't persist. STM32 picks up via SPI_CMD_SET_TZ; we
+     * also patch local_cfg so the next round-trip carries it back to STM32
+     * if it loses the RAM copy on reboot. */
+    if (strstr(json, "update_tz")) {
+        char *p;
+        qt_spi_tz_payload_t tz = {0};
+        if ((p = strstr(json, "\"utcOff\":")) != NULL)
+            tz.utcOffsetMin = (int16_t)atoi(p + 9);
+        if ((p = strstr(json, "\"nextOff\":")) != NULL)
+            tz.nextOffsetMin = (int16_t)atoi(p + 10);
+        if ((p = strstr(json, "\"nextTr\":")) != NULL)
+            tz.nextTransitionUtc = (uint32_t)strtoul(p + 9, NULL, 10);
+        local_cfg.utcOffsetMin = tz.utcOffsetMin;
+        local_cfg.nextOffsetMin = tz.nextOffsetMin;
+        local_cfg.nextTransitionUtc = tz.nextTransitionUtc;
+        cmd_enqueue(SPI_CMD_SET_TZ, (const uint8_t *)&tz, sizeof(tz));
+        return;
+    }
+
     if (strstr(json, "audio_stream")) {
         char *p;
         uint8_t ch = 0, en = 1;
@@ -459,6 +479,16 @@ static void ws_process_command(const char *json)
                 if (next) p = next + 1; else break;
             }
         }
+
+        /* Capture browser TZ alongside the schedule save so the persisted
+         * cfg matches the windows the user just typed. update_tz can refresh
+         * these later between saves without bumping cfg_seq. */
+        if ((p = strstr(json, "\"utcOff\":")) != NULL)
+            local_cfg.utcOffsetMin = (int16_t)atoi(p + 9);
+        if ((p = strstr(json, "\"nextOff\":")) != NULL)
+            local_cfg.nextOffsetMin = (int16_t)atoi(p + 10);
+        if ((p = strstr(json, "\"nextTr\":")) != NULL)
+            local_cfg.nextTransitionUtc = (uint32_t)strtoul(p + 9, NULL, 10);
 
         local_cfg_seq++;
         local_cfg.cfg_seq = local_cfg_seq;
