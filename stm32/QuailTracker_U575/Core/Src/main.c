@@ -702,17 +702,19 @@ void startRecording(void)
 
     const char *ext = (dev.rec.format == REC_FMT_WAV) ? "wav" : "flac";
     char fname[48];
-    if (ppsSynced && ppsUtcDate != 0) {
-        /* ppsUtcDate = DDMMYY, ppsUtcTime = HHMMSS */
-        uint32_t dd = ppsUtcDate / 10000;
-        uint32_t mm = (ppsUtcDate / 100) % 100;
-        uint32_t yy = ppsUtcDate % 100;
-        uint32_t hh = ppsUtcTime / 10000;
-        uint32_t mn = (ppsUtcTime / 100) % 100;
-        uint32_t ss = ppsUtcTime % 100;
-        snprintf(fname, sizeof(fname), "audio/20%02lu%02lu%02lu_%02lu%02lu%02lu_%s.%s",
-                 (unsigned long)yy, (unsigned long)mm, (unsigned long)dd,
-                 (unsigned long)hh, (unsigned long)mn, (unsigned long)ss,
+    /* Use RTC (kept current by GPS duty-cycle) for the filename rather than
+     * the PPS-cached ppsUtcTime/Date — those lag real time when GPS lock is
+     * intermittent, which produced wrong-time filenames and same-named
+     * chunks. RTC's seconds-resolution is plenty for filenames; PPS-tied
+     * sub-ms accuracy still flows into the GUANO metadata below. */
+    if (dev.pwr.rtcSynced) {
+        uint8_t rtcH, rtcM, rtcS, rtcD, rtcMo;
+        uint16_t rtcY;
+        rtcGetTime(&rtcH, &rtcM, &rtcS);
+        rtcGetDate(&rtcD, &rtcMo, &rtcY);
+        snprintf(fname, sizeof(fname), "audio/%04u%02u%02u_%02u%02u%02u_%s.%s",
+                 (unsigned int)rtcY, (unsigned int)rtcMo, (unsigned int)rtcD,
+                 (unsigned int)rtcH, (unsigned int)rtcM, (unsigned int)rtcS,
                  deviceStationId, ext);
     } else {
         snprintf(fname, sizeof(fname), "audio/rec_%03lu_%s.%s",

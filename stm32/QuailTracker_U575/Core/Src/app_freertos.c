@@ -1895,13 +1895,18 @@ void diagLog(const char *event)
 
     uint32_t uptimeS = HAL_GetTick() / 1000;
     char line[160];
-    if (ppsSynced && ppsUtcDate != 0) {
-        uint32_t d = ppsUtcDate, t = ppsUtcTime;
-        snprintf(line, sizeof(line), "[%02lu/%02lu/%02lu %02lu:%02lu:%02lu up=%lus] %s\n",
-                 (unsigned long)(d/10000), (unsigned long)((d/100)%100),
-                 (unsigned long)(d%100),
-                 (unsigned long)(t/10000), (unsigned long)((t/100)%100),
-                 (unsigned long)(t%100),
+    /* Read directly from RTC. Previously this used ppsUtcTime/Date which
+     * are PPS-cached — every diag line printed the time of the last GPS
+     * sync, not when the event actually happened, so chunk rotations all
+     * appeared at the same minute even when many minutes apart. */
+    if (dev.pwr.rtcSynced) {
+        uint8_t hh, mm, ss, dd, mo;
+        uint16_t yy;
+        rtcGetTime(&hh, &mm, &ss);
+        rtcGetDate(&dd, &mo, &yy);
+        snprintf(line, sizeof(line), "[%02u/%02u/%02u %02u:%02u:%02u up=%lus] %s\n",
+                 (unsigned int)dd, (unsigned int)mo, (unsigned int)(yy % 100),
+                 (unsigned int)hh, (unsigned int)mm, (unsigned int)ss,
                  (unsigned long)uptimeS, event);
     } else {
         snprintf(line, sizeof(line), "[up=%lus] %s\n",
