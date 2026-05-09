@@ -1739,10 +1739,15 @@ static void MX_ADC1_Init(void)
 }
 
 /* Read battery voltage via ADC1 CH1 (PC0).
- * 1M/1M divider: VBAT = ADC_mV * 2.  Returns millivolts. */
+ * 1M/1M divider: VBAT = ADC_mV * 2.  Returns millivolts.
+ *
+ * Sample time must be long: 500 kΩ Thevenin source from the divider sees
+ * τ ≈ 2.5 µs into the ADC's S&H cap, so 68 cycles (1.7 µs at 40 MHz ADC
+ * clock) doesn't let the cap settle and the reading comes in ~10% low.
+ * 814 cycles (20.4 µs, ~8τ) settles to within 14-bit accuracy. */
 uint32_t battReadMv(void)
 {
-    uint32_t raw = adcReadRaw(ADC_CHANNEL_1, ADC_SAMPLETIME_68CYCLES);
+    uint32_t raw = adcReadRaw(ADC_CHANNEL_1, ADC_SAMPLETIME_814CYCLES);
     if (raw > 0)
         batteryMv = (raw * vddaMv * 2) / 16383;
     return batteryMv;
