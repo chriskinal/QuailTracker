@@ -8,6 +8,7 @@
    Or via the Espressif Web Flasher in a browser (no install required).
    Version is pulled from ESP_FW_VERSION in src/main.c."""
 
+import glob
 import os
 import re
 import subprocess
@@ -52,6 +53,23 @@ def _merge_firmware(source, target, env):
     ]
     subprocess.check_call(cmd)
     print("Post-build: merged image -> {}".format(os.path.basename(dest)))
+
+    # Keep only the two most recently built ESP images at repo root —
+    # stops accumulation across version bumps.
+    _prune_old_bins(repo_root, "qt_esp_v*.bin", keep=2)
+
+
+def _prune_old_bins(repo_root, glob_pattern, keep):
+    """Delete older versioned bins matching glob_pattern in repo_root,
+    keeping the `keep` most recently modified."""
+    paths = glob.glob(os.path.join(repo_root, glob_pattern))
+    paths.sort(key=os.path.getmtime, reverse=True)
+    for p in paths[keep:]:
+        try:
+            os.remove(p)
+            print("Post-build: pruned {}".format(os.path.basename(p)))
+        except OSError:
+            pass
 
 
 env.AddPostAction("$BUILD_DIR/${PROGNAME}.bin", _merge_firmware)

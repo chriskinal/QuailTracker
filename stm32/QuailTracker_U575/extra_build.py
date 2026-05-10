@@ -1,3 +1,4 @@
+import glob
 import os
 import re
 import shutil
@@ -39,13 +40,29 @@ def _read_fw_version():
     return "unknown"
 
 
+def _prune_old_bins(repo_root, glob_pattern, keep):
+    """Delete older versioned bins matching glob_pattern, keeping the
+    `keep` most recently modified. Stops the project root from filling
+    up with every build's artifact across many version bumps."""
+    paths = glob.glob(os.path.join(repo_root, glob_pattern))
+    paths.sort(key=os.path.getmtime, reverse=True)
+    for p in paths[keep:]:
+        try:
+            os.remove(p)
+            print("Post-build: pruned {}".format(os.path.basename(p)))
+        except OSError:
+            pass
+
+
 def _copy_firmware(source, target, env):
     """Post-build: copy firmware.bin to repo root as qt_stm_v<ver>.bin."""
     src_bin = str(target[0])
     version = _read_fw_version()
-    dest = os.path.join(env["PROJECT_DIR"], "qt_stm_v{}.bin".format(version))
+    repo_root = env["PROJECT_DIR"]
+    dest = os.path.join(repo_root, "qt_stm_v{}.bin".format(version))
     shutil.copy2(src_bin, dest)
     print("Post-build: {} -> {}".format(os.path.basename(src_bin), os.path.basename(dest)))
+    _prune_old_bins(repo_root, "qt_stm_v*.bin", keep=2)
 
 
 env.AddPostAction("$BUILD_DIR/${PROGNAME}.bin", _copy_firmware)
