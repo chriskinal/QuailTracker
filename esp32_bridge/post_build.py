@@ -1,16 +1,17 @@
-"""Post-build script: merge bootloader + partitions + app into a single
-   flashable image at repo root as qt_esp_v<ver>.bin.
+"""Post-build script: drop two flashable images at repo root:
 
-   The merged image starts at flash offset 0x0 — flash with one command:
+   qt_esp_v<ver>.bin     - merged bootloader + partitions + app, for full-flash
+                           sideloading. Starts at offset 0x0 — flash with:
+                              esptool.py --chip esp32c3 write_flash 0x0 qt_esp_v<ver>.bin
+                           or via the Espressif Web Flasher.
+   qt_esp_app_v<ver>.bin - app-only image, for OTA upload through the web UI.
 
-       esptool.py --chip esp32c3 write_flash 0x0 qt_esp_v<ver>.bin
-
-   Or via the Espressif Web Flasher in a browser (no install required).
    Version is pulled from ESP_FW_VERSION in src/main.c."""
 
 import glob
 import os
 import re
+import shutil
 import subprocess
 
 Import("env")
@@ -38,6 +39,7 @@ def _merge_firmware(source, target, env):
     version = _read_fw_version()
     repo_root = os.path.dirname(env["PROJECT_DIR"])
     dest = os.path.join(repo_root, "qt_esp_v{}.bin".format(version))
+    app_dest = os.path.join(repo_root, "qt_esp_app_v{}.bin".format(version))
 
     esptool_dir = env.PioPlatform().get_package_dir("tool-esptoolpy")
     esptool = os.path.join(esptool_dir, "esptool.py")
@@ -54,9 +56,13 @@ def _merge_firmware(source, target, env):
     subprocess.check_call(cmd)
     print("Post-build: merged image -> {}".format(os.path.basename(dest)))
 
+    shutil.copyfile(firmware, app_dest)
+    print("Post-build: app image  -> {}".format(os.path.basename(app_dest)))
+
     # Keep only the two most recently built ESP images at repo root —
     # stops accumulation across version bumps.
-    _prune_old_bins(repo_root, "qt_esp_v*.bin", keep=2)
+    _prune_old_bins(repo_root, "qt_esp_v[0-9]*.bin", keep=2)
+    _prune_old_bins(repo_root, "qt_esp_app_v[0-9]*.bin", keep=2)
 
 
 def _prune_old_bins(repo_root, glob_pattern, keep):
