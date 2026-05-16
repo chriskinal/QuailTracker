@@ -66,6 +66,10 @@ obj/
 *.cache
 *.nupkg
 
+# JetBrains Rider
+*.lscache
+.idea/
+
 # Datasheets
 datasheets/
 audio/
