@@ -9,11 +9,20 @@
  */
 
 using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Avalonia.Threading;
 using QuailTracker.Analyzer.Shared.Models;
 
 namespace QuailTracker.Analyzer.Shared.Services;
+
+/// <summary>
+/// Progress payload for the stereo bearing phase.
+/// </summary>
+public record BearingProgress(int Current, int Total, string CurrentFileName);
 
 /// <summary>
 /// Computes bearing angle from stereo TDOA using cross-correlation.
@@ -95,20 +104,114 @@ public class StereoBearingService
     }
 
     /// <summary>
-    /// Compute bearing for all detections in a list.
+    /// Compute bearings for all detections, grouping by file so each stereo
+    /// file is decoded exactly once and per-detection windows are sliced from
+    /// the cached buffer. Avoids the O(N²) FLAC re-decode pattern that made
+    /// the legacy per-detection path stall on long recordings. Files are
+    /// processed in parallel up to <paramref name="maxThreads"/>.
     /// </summary>
     public async Task ComputeBearingsAsync(
-        System.Collections.Generic.IReadOnlyList<Detection> detections,
+        IReadOnlyList<Detection> detections,
         int sampleRate = 48000,
-        IProgress<(int current, int total)>? progress = null,
+        IProgress<BearingProgress>? progress = null,
+        int maxThreads = 0,
         CancellationToken ct = default)
     {
-        for (int i = 0; i < detections.Count; i++)
+        if (detections.Count == 0) return;
+
+        var byFile = detections
+            .GroupBy(d => d.AudioFilePath)
+            .ToList();
+
+        var total = detections.Count;
+        var done = 0;
+        var lastReportTicks = 0L;
+        var maxConcurrency = Math.Max(1, maxThreads > 0 ? maxThreads : (int)(Environment.ProcessorCount * 0.8));
+
+        // Throttle progress to ~10 fps so parallel workers don't flood the UI
+        // dispatcher. Always emit the final tick at the end.
+        const long minReportIntervalTicks = TimeSpan.TicksPerMillisecond * 100;
+
+        void ReportThrottled(int currentDone, string fileName)
         {
-            ct.ThrowIfCancellationRequested();
-            await ComputeBearingAsync(detections[i], sampleRate, ct);
-            progress?.Report((i + 1, detections.Count));
+            if (progress == null) return;
+            var now = DateTime.UtcNow.Ticks;
+            var prev = Interlocked.Read(ref lastReportTicks);
+            if (now - prev < minReportIntervalTicks) return;
+            if (Interlocked.CompareExchange(ref lastReportTicks, now, prev) != prev) return;
+            progress.Report(new BearingProgress(currentDone, total, fileName));
         }
+
+        await Parallel.ForEachAsync(byFile,
+            new ParallelOptions { MaxDegreeOfParallelism = maxConcurrency, CancellationToken = ct },
+            async (fileGroup, token) =>
+            {
+                var fileName = Path.GetFileName(fileGroup.Key);
+                var (left, right, fileRate) = await _audioService.LoadAllStereoSamplesAsync(fileGroup.Key, token);
+
+                if (left.Length == 0 || right.Length == 0)
+                {
+                    // Mono or unreadable — count detections as done in one shot.
+                    var skipCount = fileGroup.Count();
+                    var ticked = Interlocked.Add(ref done, skipCount);
+                    ReportThrottled(ticked, fileName);
+                    return;
+                }
+
+                var rate = fileRate > 0 ? fileRate : sampleRate;
+
+                // Stage results in worker-local list. Apply on UI thread in one
+                // batch so PropertyChanged events don't fire from worker threads
+                // (Avalonia has to marshal them otherwise — beach-balls the UI
+                // when many workers fire concurrently).
+                var results = new List<(Detection d, int lag, double conf, double bearing)>(fileGroup.Count());
+
+                foreach (var detection in fileGroup)
+                {
+                    token.ThrowIfCancellationRequested();
+
+                    var startSample = (int)Math.Round(detection.OffsetSeconds * rate);
+                    var segSamples = (int)Math.Round(detection.DurationSeconds * rate);
+                    var available = Math.Min(segSamples, left.Length - startSample);
+
+                    if (startSample < 0 || available <= 0) continue;
+
+                    var ls = new float[available];
+                    var rs = new float[available];
+                    Array.Copy(left, startSample, ls, 0, available);
+                    Array.Copy(right, startSample, rs, 0, available);
+
+                    var (lagSamples, confidence) = CrossCorrelate(ls, rs, rate);
+                    var tdoaSeconds = (double)lagSamples / rate;
+                    var sinAngle = Math.Clamp(tdoaSeconds * SpeedOfSound / MicSpacingMeters, -1.0, 1.0);
+                    var bearing = Math.Asin(sinAngle) * (180.0 / Math.PI);
+
+                    results.Add((detection, lagSamples, confidence, bearing));
+                }
+
+                // Apply on UI thread — synchronous PropertyChanged batched per
+                // file. Await so the bearing phase doesn't "complete" before
+                // the property writes actually land (otherwise the Bearing
+                // column appears not to update at all).
+                if (results.Count > 0)
+                {
+                    await Dispatcher.UIThread.InvokeAsync(() =>
+                    {
+                        foreach (var (d, lag, conf, bearing) in results)
+                        {
+                            d.TdoaSamples = lag;
+                            d.TdoaConfidence = conf;
+                            d.BearingDeg = bearing;
+                        }
+                    });
+                }
+
+                var ticked2 = Interlocked.Add(ref done, fileGroup.Count());
+                ReportThrottled(ticked2, fileName);
+            });
+
+        // Final tick so the UI lands on N/N.
+        progress?.Report(new BearingProgress(Volatile.Read(ref done), total, string.Empty));
     }
 
     /// <summary>

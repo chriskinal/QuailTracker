@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:QuailTracker.Analyzer.Shared.ViewModels"
+             xmlns:models="using:QuailTracker.Analyzer.Shared.Models"
              x:Class="QuailTracker.Analyzer.Shared.Views.ProcessingView"
              x:DataType="vm:ProcessingViewModel">
 
@@ -108,7 +109,7 @@
                               VerticalAlignment="Center" />
                 </StackPanel>
 
-                <!-- Progress Row (visible during processing) -->
+                <!-- Inference Progress (visible while detections are being produced) -->
                 <Grid Grid.Row="1"
                       Margin="0,12,0,0"
                       IsVisible="{Binding IsProcessing}">
@@ -116,18 +117,28 @@
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
-                    <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="16">
-                        <TextBlock Text="{Binding CurrentFileName}" FontWeight="SemiBold" />
-                        <TextBlock Text="{Binding DetectionsFound, StringFormat='Detections: {0}'}" />
-                    </StackPanel>
+                    <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0"
+                                   Text="{Binding CurrentFileName}"
+                                   FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1"
+                                   Text="{Binding DetectionsFound, StringFormat='Detections: {0}'}"
+                                   VerticalAlignment="Center"
+                                   Margin="16,0,0,0" />
+                    </Grid>
                     <ProgressBar Grid.Row="1"
                                  Minimum="0"
                                  Maximum="{Binding TotalSegments}"
                                  Value="{Binding CurrentSegment}"
                                  Margin="0,4" />
                     <TextBlock Grid.Row="2"
-                               Text="{Binding CurrentFile, StringFormat='File {0}'}"
                                FontSize="12"
                                Foreground="#757575">
                         <TextBlock.Text>
@@ -136,6 +147,39 @@
                                 <Binding Path="TotalFiles" />
                                 <Binding Path="CurrentSegment" />
                                 <Binding Path="TotalSegments" />
+                            </MultiBinding>
+                        </TextBlock.Text>
+                    </TextBlock>
+
+                    <!-- Bearings Progress (visible during stereo bearing phase) -->
+                    <Grid Grid.Row="3"
+                          ColumnDefinitions="*,Auto"
+                          Margin="0,12,0,0"
+                          IsVisible="{Binding IsComputingBearings}">
+                        <TextBlock Grid.Column="0"
+                                   Text="{Binding BearingFileName}"
+                                   FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1"
+                                   Text="{Binding TotalBearings, StringFormat='Stereo segments: {0}'}"
+                                   VerticalAlignment="Center"
+                                   Margin="16,0,0,0" />
+                    </Grid>
+                    <ProgressBar Grid.Row="4"
+                                 Minimum="0"
+                                 Maximum="{Binding TotalBearings}"
+                                 Value="{Binding CurrentBearing}"
+                                 Margin="0,4"
+                                 IsVisible="{Binding IsComputingBearings}" />
+                    <TextBlock Grid.Row="5"
+                               FontSize="12"
+                               Foreground="#757575"
+                               IsVisible="{Binding IsComputingBearings}">
+                        <TextBlock.Text>
+                            <MultiBinding StringFormat="Bearings {0} of {1}">
+                                <Binding Path="CurrentBearing" />
+                                <Binding Path="TotalBearings" />
                             </MultiBinding>
                         </TextBlock.Text>
                     </TextBlock>
@@ -168,14 +212,19 @@
 
         <!-- Detection Results -->
         <Grid Grid.Row="2" RowDefinitions="Auto,*,Auto">
-            <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto" Margin="0,0,0,8">
+            <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto,Auto" Margin="0,0,0,8">
                 <TextBlock Text="Detections" Classes="SectionHeader" VerticalAlignment="Center" />
-                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                <CheckBox Grid.Column="1"
+                          Content="Group by species"
+                          IsChecked="{Binding IsGroupedBySpecies}"
+                          VerticalAlignment="Center"
+                          Margin="0,0,12,0" />
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8">
                     <TextBox Text="{Binding SpeciesFilter}"
                              PlaceholderText="Filter by species..."
                              Width="150" />
                 </StackPanel>
-                <Button Grid.Column="2"
+                <Button Grid.Column="3"
                         Content="Export..."
                         Classes="SecondaryButton"
                         Click="OnExportClick"
@@ -184,22 +233,24 @@
             </Grid>
 
             <DataGrid Grid.Row="1"
-                      ItemsSource="{Binding FilteredDetections}"
+                      Name="DetectionsGrid"
+                      ItemsSource="{Binding DetectionsView}"
                       SelectedItem="{Binding SelectedDetection}"
                       AutoGenerateColumns="False"
                       IsReadOnly="False"
                       GridLinesVisibility="Horizontal"
                       BorderBrush="#E0E0E0"
-                      BorderThickness="1">
+                      BorderThickness="1"
+                      LoadingRowGroup="OnLoadingRowGroup">
                 <DataGrid.Columns>
-                    <DataGridCheckBoxColumn Header="" Binding="{Binding IsSelected}" Width="40" />
-                    <DataGridTextColumn Header="Species" Binding="{Binding CommonName}" Width="2*" IsReadOnly="True" />
-                    <DataGridTextColumn Header="Scientific Name" Binding="{Binding ScientificName}" Width="2*" IsReadOnly="True" />
-                    <DataGridTextColumn Header="Confidence" Binding="{Binding ConfidencePercent}" Width="*" IsReadOnly="True" />
-                    <DataGridTextColumn Header="Station" Binding="{Binding StationId}" Width="*" IsReadOnly="True" />
-                    <DataGridTextColumn Header="Time" Binding="{Binding Timestamp, StringFormat='{}{0:HH:mm:ss}'}" Width="*" IsReadOnly="True" />
-                    <DataGridTextColumn Header="Offset" Binding="{Binding OffsetSeconds, StringFormat='{}{0:F1}s'}" Width="*" IsReadOnly="True" />
-                    <DataGridTextColumn Header="Bearing" Binding="{Binding BearingDisplay}" Width="70" IsReadOnly="True" />
+                    <DataGridCheckBoxColumn Header="" Binding="{Binding IsSelected, DataType=models:Detection}" Width="40" />
+                    <DataGridTextColumn Header="Species" Binding="{Binding CommonName, DataType=models:Detection}" Width="2*" IsReadOnly="True" />
+                    <DataGridTextColumn Header="Scientific Name" Binding="{Binding ScientificName, DataType=models:Detection}" Width="2*" IsReadOnly="True" />
+                    <DataGridTextColumn Header="Confidence" Binding="{Binding ConfidencePercent, DataType=models:Detection}" Width="80" IsReadOnly="True" />
+                    <DataGridTextColumn Header="Station" Binding="{Binding StationId, DataType=models:Detection}" Width="*" IsReadOnly="True" />
+                    <DataGridTextColumn Header="Time" Binding="{Binding Timestamp, StringFormat='{}{0:HH:mm:ss}', DataType=models:Detection}" Width="*" IsReadOnly="True" />
+                    <DataGridTextColumn Header="Offset" Binding="{Binding OffsetSeconds, StringFormat='{}{0:F1}s', DataType=models:Detection}" Width="*" IsReadOnly="True" />
+                    <DataGridTextColumn Header="Bearing" Binding="{Binding BearingDisplay, DataType=models:Detection}" Width="100" IsReadOnly="True" />
                 </DataGrid.Columns>
             </DataGrid>
 

@@ -53,6 +53,15 @@ public interface IAudioFileService
         CancellationToken ct = default);
 
     /// <summary>
+    /// Decodes the entire file in one sequential pass, downmixed to mono and
+    /// resampled to 48 kHz. Use this when callers will iterate many segments —
+    /// avoids the O(N²) FLAC re-skip cost of repeated per-segment extraction.
+    /// </summary>
+    Task<float[]> LoadAllSamplesAsync(
+        string filePath,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Gets the total number of segments in an audio file, accounting for overlap.
     /// </summary>
     int GetSegmentCount(AudioFile audioFile, double segmentDuration = 3.0, double overlapSeconds = 0.0);
@@ -66,5 +75,16 @@ public interface IAudioFileService
         string filePath,
         double offsetSeconds,
         double durationSeconds = 3.0,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Decodes an entire stereo file in one sequential pass, returning the full
+    /// (left, right, sampleRate) tuple at the file's native rate. Use this when
+    /// many segments will be extracted from the same file (e.g. computing
+    /// bearings for hundreds of detections) — avoids the O(N²) FLAC re-decode
+    /// cost of repeated per-segment extraction. Returns empty arrays if mono.
+    /// </summary>
+    Task<(float[] left, float[] right, int sampleRate)> LoadAllStereoSamplesAsync(
+        string filePath,
         CancellationToken ct = default);
 }

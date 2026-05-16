@@ -301,14 +301,14 @@ public partial class SingleAnalysisViewModel : ObservableObject
             if (_loadedFile.Channels == 2 && detections.Count > 0)
             {
                 _setStatus($"Computing stereo bearings for {detections.Count} detections...");
-                var bearingProgress = new Progress<(int current, int total)>(p =>
-                    _setStatus($"Computing bearing {p.current}/{p.total}..."));
+                var bearingProgress = new Progress<BearingProgress>(p =>
+                    _setStatus($"Computing bearing {p.Current}/{p.Total}..."));
 
                 await _bearingService.ComputeBearingsAsync(
                     detections,
                     _loadedFile.SampleRate > 0 ? _loadedFile.SampleRate : 48000,
                     bearingProgress,
-                    _analysisCts!.Token);
+                    ct: _analysisCts!.Token);
 
                 var withBearing = 0;
                 foreach (var d in detections)

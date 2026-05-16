@@ -222,6 +222,14 @@ public class BirdNetService : IBirdNetService
         var step = SegmentDuration - overlapSeconds;
         if (step <= 0.1) step = SegmentDuration;
 
+        // Decode the file once, then slice. Per-segment ExtractSegment for FLAC
+        // re-decodes from offset 0 every call, which is O(N²) over segments.
+        var fullSamples = await audioService.LoadAllSamplesAsync(audioFile.FilePath, ct);
+        if (fullSamples.Length == 0) return allDetections;
+
+        var stepSamples = (int)Math.Round(step * SampleRate);
+        if (stepSamples <= 0) stepSamples = SegmentSamples;
+
         for (var i = 0; i < segmentCount; i++)
         {
             ct.ThrowIfCancellationRequested();
@@ -229,10 +237,13 @@ public class BirdNetService : IBirdNetService
             progress?.Report((i + 1, segmentCount));
 
             var offsetSeconds = i * step;
-            var samples = await audioService.ExtractSegmentAsync(
-                audioFile.FilePath, offsetSeconds, SegmentDuration, ct);
+            var startSample = i * stepSamples;
+            if (startSample >= fullSamples.Length) break;
 
-            if (samples.Length == 0) continue;
+            var available = Math.Min(SegmentSamples, fullSamples.Length - startSample);
+            var samples = new float[SegmentSamples];
+            Array.Copy(fullSamples, startSample, samples, 0, available);
+            // Tail past EOF stays zero — matches the previous pad-with-zeros path.
 
             if (preprocessor != null)
                 samples = preprocessor(samples);
@@ -240,7 +251,6 @@ public class BirdNetService : IBirdNetService
             var detections = await AnalyzeSegmentAsync(
                 samples, audioFile, offsetSeconds, confidenceThreshold, sensitivity, ct);
 
-            // Filter by target species if specified
             if (targetSpecies != null)
             {
                 detections = detections
@@ -269,7 +279,10 @@ public class BirdNetService : IBirdNetService
         var allDetections = new ConcurrentBag<IReadOnlyList<Detection>>();
         var validFiles = audioFiles.Where(f => f.IsValid).ToList();
         var totalFiles = validFiles.Count;
+        var totalSegments = validFiles
+            .Sum(f => audioService.GetSegmentCount(f, SegmentDuration, overlapSeconds));
         var filesCompleted = 0;
+        var segmentsCompleted = 0;
         var detectionCount = 0;
         var maxConcurrency = Math.Max(1, maxThreads > 0 ? maxThreads : (int)(Environment.ProcessorCount * 0.8));
 
@@ -277,9 +290,22 @@ public class BirdNetService : IBirdNetService
             new ParallelOptions { MaxDegreeOfParallelism = maxConcurrency, CancellationToken = ct },
             async (audioFile, token) =>
             {
+                var fileName = audioFile.FileName;
+                var segmentProgress = new Progress<(int segment, int total)>(_ =>
+                {
+                    var done = Interlocked.Increment(ref segmentsCompleted);
+                    progress?.Report(new BirdNetProgress(
+                        Volatile.Read(ref filesCompleted),
+                        totalFiles,
+                        done,
+                        totalSegments,
+                        fileName,
+                        Volatile.Read(ref detectionCount)));
+                });
+
                 var fileDetections = await AnalyzeFileAsync(
                     audioFile, audioService, confidenceThreshold, targetSpecies,
-                    overlapSeconds, sensitivity, mergeCount, null, null, token);
+                    overlapSeconds, sensitivity, mergeCount, segmentProgress, null, token);
 
                 allDetections.Add(fileDetections);
                 var newDetectionCount = Interlocked.Add(ref detectionCount, fileDetections.Count);
@@ -288,11 +314,10 @@ public class BirdNetService : IBirdNetService
                 progress?.Report(new BirdNetProgress(
                     completed,
                     totalFiles,
-                    0,
-                    0,
-                    audioFile.FileName,
-                    newDetectionCount
-                ));
+                    Volatile.Read(ref segmentsCompleted),
+                    totalSegments,
+                    fileName,
+                    newDetectionCount));
             });
 
         return allDetections.SelectMany(d => d).ToList();

@@ -17,9 +17,12 @@
  */
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using Avalonia.Collections;
 using Avalonia.Controls;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using QuailTracker.Analyzer.Shared.Services;
 using QuailTracker.Analyzer.Shared.ViewModels;
 
@@ -53,6 +56,26 @@ public partial class ProcessingView : UserControl
         {
             await vm.LoadModelCommand.ExecuteAsync(files[0].Path.LocalPath);
         }
+    }
+
+    // Tracks group instances we've already collapsed once, so virtualized
+    // re-loads of the same header don't override the user's expand action.
+    // Re-grouping (filter/toggle changes) creates new group instances, so this
+    // set self-resets without explicit clearing.
+    private readonly HashSet<DataGridCollectionViewGroup> _initiallyCollapsed = new();
+
+    private void OnLoadingRowGroup(object? sender, DataGridRowGroupHeaderEventArgs e)
+    {
+        // CollapseRowGroup must NOT run synchronously here — it triggers focus
+        // changes + edit commits that throw "Items cannot be added… while rows
+        // are loading". Defer past the current layout pass.
+        if (sender is not DataGrid grid) return;
+        if (e.RowGroupHeader.DataContext is not DataGridCollectionViewGroup group) return;
+        if (!_initiallyCollapsed.Add(group)) return;
+
+        Dispatcher.UIThread.Post(
+            () => grid.CollapseRowGroup(group, false),
+            DispatcherPriority.Background);
     }
 
     private async void OnExportClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)

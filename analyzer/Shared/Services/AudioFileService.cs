@@ -257,6 +257,84 @@ public class AudioFileService : IAudioFileService
         }, ct);
     }
 
+    public async Task<float[]> LoadAllSamplesAsync(
+        string filePath,
+        CancellationToken ct = default)
+    {
+        return await Task.Run(() =>
+        {
+            ct.ThrowIfCancellationRequested();
+
+            using var reader = OpenAudioReader(filePath);
+            var waveFormat = reader.WaveFormat;
+            var channels = waveFormat.Channels;
+            var srcRate = waveFormat.SampleRate;
+
+            var totalFrames = reader.Length / waveFormat.BlockAlign;
+            if (totalFrames <= 0 && reader is FlacReader flacReader)
+            {
+                var streamInfo = flacReader.Metadata?
+                    .OfType<FlacMetadataStreamInfo>()
+                    .FirstOrDefault();
+                if (streamInfo != null && streamInfo.TotalSamples > 0)
+                    totalFrames = streamInfo.TotalSamples;
+            }
+
+            var provider = reader.ToSampleProvider();
+
+            // Decode the whole file once. Pre-size the mono buffer when we know
+            // the frame count so we don't pay reallocation cost on long files.
+            var mono = totalFrames > 0
+                ? new float[totalFrames]
+                : new float[srcRate * 60]; // grow as needed for unknown-length files
+            var monoCount = 0;
+
+            const int chunkFrames = 16384;
+            var chunk = new float[chunkFrames * channels];
+
+            while (true)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var samplesRead = provider.Read(chunk, 0, chunk.Length);
+                if (samplesRead == 0) break;
+
+                var framesRead = samplesRead / channels;
+
+                if (monoCount + framesRead > mono.Length)
+                {
+                    var newSize = Math.Max(mono.Length * 2, monoCount + framesRead);
+                    Array.Resize(ref mono, newSize);
+                }
+
+                if (channels == 1)
+                {
+                    Array.Copy(chunk, 0, mono, monoCount, framesRead);
+                }
+                else
+                {
+                    for (var f = 0; f < framesRead; f++)
+                    {
+                        var sum = 0f;
+                        for (var c = 0; c < channels; c++)
+                            sum += chunk[f * channels + c];
+                        mono[monoCount + f] = sum / channels;
+                    }
+                }
+
+                monoCount += framesRead;
+            }
+
+            if (monoCount < mono.Length)
+                Array.Resize(ref mono, monoCount);
+
+            if (srcRate != TargetSampleRate)
+                mono = Resample(mono, srcRate, TargetSampleRate);
+
+            return mono;
+        }, ct);
+    }
+
     public async Task<(float[] left, float[] right)> ExtractStereoSegmentAsync(
         string filePath,
         double offsetSeconds,
@@ -329,6 +407,75 @@ public class AudioFileService : IAudioFileService
             }
 
             return (left, right);
+        }, ct);
+    }
+
+    public async Task<(float[] left, float[] right, int sampleRate)> LoadAllStereoSamplesAsync(
+        string filePath,
+        CancellationToken ct = default)
+    {
+        return await Task.Run(() =>
+        {
+            ct.ThrowIfCancellationRequested();
+
+            using var reader = OpenAudioReader(filePath);
+            var waveFormat = reader.WaveFormat;
+
+            if (waveFormat.Channels != 2)
+                return (Array.Empty<float>(), Array.Empty<float>(), waveFormat.SampleRate);
+
+            var totalFrames = reader.Length / waveFormat.BlockAlign;
+            if (totalFrames <= 0 && reader is FlacReader flacReader)
+            {
+                var streamInfo = flacReader.Metadata?
+                    .OfType<FlacMetadataStreamInfo>()
+                    .FirstOrDefault();
+                if (streamInfo != null && streamInfo.TotalSamples > 0)
+                    totalFrames = streamInfo.TotalSamples;
+            }
+
+            var provider = reader.ToSampleProvider();
+
+            // Pre-size when we know the frame count; otherwise grow on demand.
+            var left = totalFrames > 0 ? new float[totalFrames] : new float[waveFormat.SampleRate * 60];
+            var right = totalFrames > 0 ? new float[totalFrames] : new float[waveFormat.SampleRate * 60];
+            var frameCount = 0;
+
+            const int chunkFrames = 16384;
+            var chunk = new float[chunkFrames * 2];
+
+            while (true)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var samplesRead = provider.Read(chunk, 0, chunk.Length);
+                if (samplesRead == 0) break;
+
+                var framesRead = samplesRead / 2;
+
+                if (frameCount + framesRead > left.Length)
+                {
+                    var newSize = Math.Max(left.Length * 2, frameCount + framesRead);
+                    Array.Resize(ref left, newSize);
+                    Array.Resize(ref right, newSize);
+                }
+
+                for (var f = 0; f < framesRead; f++)
+                {
+                    left[frameCount + f] = chunk[f * 2];
+                    right[frameCount + f] = chunk[f * 2 + 1];
+                }
+
+                frameCount += framesRead;
+            }
+
+            if (frameCount < left.Length)
+            {
+                Array.Resize(ref left, frameCount);
+                Array.Resize(ref right, frameCount);
+            }
+
+            return (left, right, waveFormat.SampleRate);
         }, ct);
     }
 

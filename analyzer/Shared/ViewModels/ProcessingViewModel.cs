@@ -22,6 +22,7 @@ using System.ComponentModel;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Avalonia.Collections;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using QuailTracker.Analyzer.Shared.Models;
@@ -73,6 +74,18 @@ public partial class ProcessingViewModel : ObservableObject
     private int _detectionsFound;
 
     [ObservableProperty]
+    private int _currentBearing;
+
+    [ObservableProperty]
+    private int _totalBearings;
+
+    [ObservableProperty]
+    private string _bearingFileName = string.Empty;
+
+    [ObservableProperty]
+    private bool _isComputingBearings;
+
+    [ObservableProperty]
     private double _confidenceThreshold = 0.5;
 
     [ObservableProperty]
@@ -103,6 +116,12 @@ public partial class ProcessingViewModel : ObservableObject
 
     public ObservableCollection<Detection> FilteredDetections { get; } = [];
 
+    /// <summary>Grouped/sorted view over <see cref="FilteredDetections"/> bound by the DataGrid.</summary>
+    public DataGridCollectionView DetectionsView { get; }
+
+    [ObservableProperty]
+    private bool _isGroupedBySpecies = true;
+
     public ProcessingViewModel(
         IAudioFileService audioFileService,
         IBirdNetService birdNetService,
@@ -120,9 +139,31 @@ public partial class ProcessingViewModel : ObservableObject
         _detections = detections;
         _setStatus = msg => StatusMessage = msg;
 
-        _detections.CollectionChanged += (_, _) => UpdateFilteredDetections();
+        DetectionsView = new DataGridCollectionView(FilteredDetections);
+        ApplyGrouping();
+
+        _detections.CollectionChanged += OnDetectionsChanged;
         _audioFiles.CollectionChanged += (_, _) => StartProcessingCommand.NotifyCanExecuteChanged();
         _appState.PropertyChanged += OnAppStateChanged;
+    }
+
+    private bool _suppressFilteredRebuild;
+
+    private void OnDetectionsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        if (_suppressFilteredRebuild) return;
+        UpdateFilteredDetections();
+    }
+
+    partial void OnIsGroupedBySpeciesChanged(bool value) => ApplyGrouping();
+
+    private void ApplyGrouping()
+    {
+        DetectionsView.GroupDescriptions.Clear();
+        if (IsGroupedBySpecies)
+        {
+            DetectionsView.GroupDescriptions.Add(new DataGridPathGroupDescription(nameof(Detection.CommonName)));
+        }
     }
 
     private void OnAppStateChanged(object? sender, PropertyChangedEventArgs e)
@@ -204,11 +245,14 @@ public partial class ProcessingViewModel : ObservableObject
             {
                 CurrentFile = p.CurrentFile;
                 TotalFiles = p.TotalFiles;
-                CurrentSegment = p.CurrentFile;
-                TotalSegments = p.TotalFiles;
+                CurrentSegment = p.CurrentSegment;
+                TotalSegments = p.TotalSegments;
                 CurrentFileName = p.CurrentFileName;
                 DetectionsFound = p.DetectionsFound;
-                _setStatus($"Processed {p.CurrentFile}/{p.TotalFiles} files ({p.DetectionsFound} detections)...");
+                _setStatus(
+                    $"Files {p.CurrentFile}/{p.TotalFiles} · " +
+                    $"segments {p.CurrentSegment}/{p.TotalSegments} · " +
+                    $"{p.DetectionsFound} detections");
             });
 
             var newDetections = await _birdNetService.AnalyzeBatchAsync(
@@ -223,24 +267,56 @@ public partial class ProcessingViewModel : ObservableObject
                 MaxThreads,
                 _cts.Token);
 
-            // Compute stereo bearings for detections from stereo files
+            // Compute stereo bearings for detections from stereo files.
+            // Add to _detections in one batch (filter view rebuild suppressed
+            // until the end) — adds otherwise trigger O(N²) filter rebuilds.
             var stereoDetections = new System.Collections.Generic.List<Detection>();
-            foreach (var detection in newDetections)
+            _suppressFilteredRebuild = true;
+            try
             {
-                _detections.Add(detection);
-
-                // Check if source file is stereo
-                var af = filesToProcess.FirstOrDefault(f => f.FilePath == detection.AudioFilePath);
-                if (af?.Channels == 2)
-                    stereoDetections.Add(detection);
+                foreach (var detection in newDetections)
+                {
+                    _detections.Add(detection);
+                    var af = filesToProcess.FirstOrDefault(f => f.FilePath == detection.AudioFilePath);
+                    if (af?.Channels == 2)
+                        stereoDetections.Add(detection);
+                }
+            }
+            finally
+            {
+                _suppressFilteredRebuild = false;
+                UpdateFilteredDetections();
             }
 
             if (stereoDetections.Count > 0)
             {
-                _setStatus($"Computing stereo bearings for {stereoDetections.Count} detections...");
-                await _bearingService.ComputeBearingsAsync(
-                    stereoDetections,
-                    ct: _cts.Token);
+                IsComputingBearings = true;
+                CurrentBearing = 0;
+                TotalBearings = stereoDetections.Count;
+                BearingFileName = string.Empty;
+                _setStatus($"Computing bearings: 0/{stereoDetections.Count}");
+
+                var bearingProgress = new Progress<BearingProgress>(p =>
+                {
+                    CurrentBearing = p.Current;
+                    TotalBearings = p.Total;
+                    if (!string.IsNullOrEmpty(p.CurrentFileName))
+                        BearingFileName = p.CurrentFileName;
+                    StatusMessage = $"Computing bearings: {p.Current}/{p.Total}";
+                });
+
+                try
+                {
+                    await _bearingService.ComputeBearingsAsync(
+                        stereoDetections,
+                        progress: bearingProgress,
+                        maxThreads: MaxThreads,
+                        ct: _cts.Token);
+                }
+                finally
+                {
+                    IsComputingBearings = false;
+                }
             }
 
             var withBearing = newDetections.Count(d => !double.IsNaN(d.BearingDeg));
