@@ -78,6 +78,23 @@ public partial class ProcessingView : UserControl
             DispatcherPriority.Background);
     }
 
+    private async void OnSaveClipsClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (DataContext is not ProcessingViewModel vm) return;
+
+        var topLevel = TopLevel.GetTopLevel(this);
+        if (topLevel == null) return;
+
+        var folders = await topLevel.StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = "Save Selected Clips To...",
+            AllowMultiple = false,
+        });
+
+        if (folders.Count == 0) return;
+        await vm.ExportClipsCommand.ExecuteAsync(folders[0].Path.LocalPath);
+    }
+
     private async void OnExportClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (DataContext is not ProcessingViewModel vm) return;

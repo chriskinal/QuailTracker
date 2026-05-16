@@ -193,15 +193,15 @@
                     <Button Content="Start Processing"
                             Classes="PrimaryButton"
                             Command="{Binding StartProcessingCommand}"
-                            IsVisible="{Binding !IsProcessing}" />
+                            IsVisible="{Binding !IsBusy}" />
                     <Button Content="Cancel"
                             Classes="DangerButton"
                             Command="{Binding CancelProcessingCommand}"
-                            IsVisible="{Binding IsProcessing}" />
+                            IsVisible="{Binding IsBusy}" />
                     <Button Content="Clear Detections"
                             Classes="ToolbarButton"
                             Command="{Binding ClearDetectionsCommand}"
-                            IsVisible="{Binding !IsProcessing}" />
+                            IsVisible="{Binding !IsBusy}" />
                     <TextBlock Text="{Binding StatusMessage}"
                                VerticalAlignment="Center"
                                Foreground="#757575"
@@ -243,14 +243,14 @@
                       BorderThickness="1"
                       LoadingRowGroup="OnLoadingRowGroup">
                 <DataGrid.Columns>
-                    <DataGridCheckBoxColumn Header="" Binding="{Binding IsSelected, DataType=models:Detection}" Width="40" />
-                    <DataGridTextColumn Header="Species" Binding="{Binding CommonName, DataType=models:Detection}" Width="2*" IsReadOnly="True" />
-                    <DataGridTextColumn Header="Scientific Name" Binding="{Binding ScientificName, DataType=models:Detection}" Width="2*" IsReadOnly="True" />
-                    <DataGridTextColumn Header="Confidence" Binding="{Binding ConfidencePercent, DataType=models:Detection}" Width="80" IsReadOnly="True" />
-                    <DataGridTextColumn Header="Station" Binding="{Binding StationId, DataType=models:Detection}" Width="*" IsReadOnly="True" />
-                    <DataGridTextColumn Header="Time" Binding="{Binding Timestamp, StringFormat='{}{0:HH:mm:ss}', DataType=models:Detection}" Width="*" IsReadOnly="True" />
-                    <DataGridTextColumn Header="Offset" Binding="{Binding OffsetSeconds, StringFormat='{}{0:F1}s', DataType=models:Detection}" Width="*" IsReadOnly="True" />
-                    <DataGridTextColumn Header="Bearing" Binding="{Binding BearingDisplay, DataType=models:Detection}" Width="100" IsReadOnly="True" />
+                    <DataGridCheckBoxColumn Header="" Binding="{Binding IsSelected, DataType=models:Detection}" Width="40" SortMemberPath="IsSelected" />
+                    <DataGridTextColumn Header="Species" Binding="{Binding CommonName, DataType=models:Detection}" Width="2*" IsReadOnly="True" SortMemberPath="CommonName" />
+                    <DataGridTextColumn Header="Scientific Name" Binding="{Binding ScientificName, DataType=models:Detection}" Width="2*" IsReadOnly="True" SortMemberPath="ScientificName" />
+                    <DataGridTextColumn Header="Confidence" Binding="{Binding ConfidencePercent, DataType=models:Detection}" Width="80" IsReadOnly="True" SortMemberPath="Confidence" />
+                    <DataGridTextColumn Header="Station" Binding="{Binding StationId, DataType=models:Detection}" Width="*" IsReadOnly="True" SortMemberPath="StationId" />
+                    <DataGridTextColumn Header="Time" Binding="{Binding Timestamp, StringFormat='{}{0:HH:mm:ss}', DataType=models:Detection}" Width="*" IsReadOnly="True" SortMemberPath="Timestamp" />
+                    <DataGridTextColumn Header="Offset" Binding="{Binding OffsetSeconds, StringFormat='{}{0:F1}s', DataType=models:Detection}" Width="*" IsReadOnly="True" SortMemberPath="OffsetSeconds" />
+                    <DataGridTextColumn Header="Bearing" Binding="{Binding BearingDisplay, DataType=models:Detection}" Width="100" IsReadOnly="True" SortMemberPath="BearingDeg" />
                 </DataGrid.Columns>
             </DataGrid>
 
@@ -264,6 +264,19 @@
                 <Button Content="Deselect All"
                         Classes="ToolbarButton"
                         Command="{Binding DeselectAllCommand}" />
+                <Button Content="Save Selected Clips..."
+                        Classes="SecondaryButton"
+                        Click="OnSaveClipsClick"
+                        IsEnabled="{Binding HasSelectedDetections}" />
+                <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                    <TextBlock Text="Pad (s):" VerticalAlignment="Center" />
+                    <NumericUpDown Value="{Binding ClipPadSeconds}"
+                                   Minimum="0"
+                                   Maximum="10"
+                                   Increment="0.5"
+                                   FormatString="0.0"
+                                   Width="80" />
+                </StackPanel>
                 <TextBlock Text="{Binding FilteredDetections.Count, StringFormat='Showing {0} detections'}"
                            VerticalAlignment="Center"
                            Margin="12,0,0,0"

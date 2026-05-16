@@ -106,6 +106,17 @@ public class AudioFileService : IAudioFileService
                     }
                     if (tags.TryGetValue("STATION_ID", out var sid) && !string.IsNullOrEmpty(sid))
                         audioFile.StationId = sid;
+
+                    if (tags.TryGetValue("TEMPERATURE", out var tempStr) &&
+                        double.TryParse(tempStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var tempC))
+                    {
+                        audioFile.TemperatureCelsius = tempC;
+                    }
+                    if (tags.TryGetValue("HUMIDITY", out var humStr) &&
+                        double.TryParse(humStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var humPct))
+                    {
+                        audioFile.HumidityPercent = humPct;
+                    }
                 }
 
                 audioFile.IsValid = true;

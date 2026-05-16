@@ -17,7 +17,9 @@
  */
 
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Linq;
 using System.Threading;
@@ -37,6 +39,7 @@ public partial class ProcessingViewModel : ObservableObject
     private readonly ConfigService _configService;
     private readonly AppStateService _appState;
     private readonly StereoBearingService _bearingService;
+    private readonly ClipExportService _clipExportService;
     private readonly ObservableCollection<AudioFile> _audioFiles;
     private readonly ObservableCollection<Detection> _detections;
     [ObservableProperty]
@@ -44,10 +47,20 @@ public partial class ProcessingViewModel : ObservableObject
 
     private readonly Action<string> _setStatus;
     private CancellationTokenSource? _cts;
+    private CancellationTokenSource? _clipCts;
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(StartProcessingCommand))]
     private bool _isProcessing;
+
+    [ObservableProperty]
+    private bool _isExportingClips;
+
+    /// <summary>True while either inference/bearings or clip export is running.</summary>
+    public bool IsBusy => IsProcessing || IsExportingClips;
+
+    partial void OnIsProcessingChanged(bool value) => OnPropertyChanged(nameof(IsBusy));
+    partial void OnIsExportingClipsChanged(bool value) => OnPropertyChanged(nameof(IsBusy));
 
     /// <summary>Projection of <see cref="AppStateService.IsModelLoaded"/> — single source of truth.</summary>
     public bool IsModelLoaded => _appState.IsModelLoaded;
@@ -84,6 +97,9 @@ public partial class ProcessingViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _isComputingBearings;
+
+    [ObservableProperty]
+    private double _clipPadSeconds = 1.0;
 
     [ObservableProperty]
     private double _confidenceThreshold = 0.5;
@@ -135,6 +151,7 @@ public partial class ProcessingViewModel : ObservableObject
         _configService = configService;
         _appState = appState;
         _bearingService = new StereoBearingService(audioFileService);
+        _clipExportService = new ClipExportService(audioFileService, audioFiles);
         _audioFiles = audioFiles;
         _detections = detections;
         _setStatus = msg => StatusMessage = msg;
@@ -148,11 +165,50 @@ public partial class ProcessingViewModel : ObservableObject
     }
 
     private bool _suppressFilteredRebuild;
+    private readonly HashSet<Detection> _subscribedDetections = new();
 
-    private void OnDetectionsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    /// <summary>True if any detection in the bulk list has its IsSelected checkbox set.
+    /// Drives the Save Selected Clips button's enabled state.</summary>
+    public bool HasSelectedDetections => _detections.Any(d => d.IsSelected);
+
+    private void OnDetectionsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
+        if (e.NewItems != null)
+            foreach (Detection d in e.NewItems) HookDetection(d);
+        if (e.OldItems != null)
+            foreach (Detection d in e.OldItems) UnhookDetection(d);
+        if (e.Action == NotifyCollectionChangedAction.Reset)
+        {
+            // Clear blows away all items without populating OldItems — unhook
+            // everything we currently subscribe to, then re-hook whatever is
+            // left in _detections (usually nothing).
+            foreach (var d in _subscribedDetections.ToList())
+                d.PropertyChanged -= OnDetectionPropertyChanged;
+            _subscribedDetections.Clear();
+            foreach (var d in _detections) HookDetection(d);
+        }
+
         if (_suppressFilteredRebuild) return;
         UpdateFilteredDetections();
+        OnPropertyChanged(nameof(HasSelectedDetections));
+    }
+
+    private void HookDetection(Detection d)
+    {
+        if (_subscribedDetections.Add(d))
+            d.PropertyChanged += OnDetectionPropertyChanged;
+    }
+
+    private void UnhookDetection(Detection d)
+    {
+        if (_subscribedDetections.Remove(d))
+            d.PropertyChanged -= OnDetectionPropertyChanged;
+    }
+
+    private void OnDetectionPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(Detection.IsSelected))
+            OnPropertyChanged(nameof(HasSelectedDetections));
     }
 
     partial void OnIsGroupedBySpeciesChanged(bool value) => ApplyGrouping();
@@ -286,6 +342,7 @@ public partial class ProcessingViewModel : ObservableObject
             {
                 _suppressFilteredRebuild = false;
                 UpdateFilteredDetections();
+                OnPropertyChanged(nameof(HasSelectedDetections));
             }
 
             if (stereoDetections.Count > 0)
@@ -369,10 +426,57 @@ public partial class ProcessingViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Export audio clips for all detections currently checked (IsSelected)
+    /// to the chosen folder. Each clip is a mono 48 kHz WAV with embedded
+    /// BWF metadata (species, station, timestamp, location, temp, humidity).
+    /// </summary>
+    [RelayCommand]
+    private async Task ExportClipsAsync(string? folder)
+    {
+        if (string.IsNullOrEmpty(folder)) return;
+
+        var selected = _detections.Where(d => d.IsSelected).ToList();
+        if (selected.Count == 0)
+        {
+            _setStatus("No detections selected to export.");
+            return;
+        }
+
+        IsExportingClips = true;
+        _clipCts = new CancellationTokenSource();
+        var pad = Math.Max(0.0, ClipPadSeconds);
+        var progress = new Progress<ClipExportProgress>(p =>
+            _setStatus($"Exporting clip {p.Current}/{p.Total}: {p.CurrentFileName}"));
+
+        try
+        {
+            _setStatus($"Exporting {selected.Count} clips to {System.IO.Path.GetFileName(folder)}...");
+            var written = await _clipExportService.ExportClipsAsync(
+                selected, folder, pad, progress, _clipCts.Token);
+            _setStatus($"Exported {written} clips to {System.IO.Path.GetFileName(folder)}.");
+        }
+        catch (OperationCanceledException)
+        {
+            _setStatus("Clip export cancelled");
+        }
+        catch (Exception ex)
+        {
+            _setStatus($"Clip export failed: {ex.Message}");
+        }
+        finally
+        {
+            IsExportingClips = false;
+            _clipCts?.Dispose();
+            _clipCts = null;
+        }
+    }
+
     [RelayCommand]
     private void CancelProcessing()
     {
         _cts?.Cancel();
+        _clipCts?.Cancel();
     }
 
     [RelayCommand]

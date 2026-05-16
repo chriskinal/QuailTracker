@@ -45,6 +45,8 @@ public partial class AudioFile
     public double? Latitude { get; set; }
     public double? Longitude { get; set; }
     public double? Altitude { get; set; }
+    public double? TemperatureCelsius { get; set; }
+    public double? HumidityPercent { get; set; }
 
     [GeneratedRegex(@"^(\d{8})_(\d{6})_(.+)\.(wav|flac)$", RegexOptions.IgnoreCase)]
     private static partial Regex FileNamePattern();
