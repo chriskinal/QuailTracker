@@ -179,6 +179,7 @@ extern void sht30Read(void);
 
 #define SURVEY_DURATION_MS  300000      /* 5 minutes */
 #define SURVEY_MIN_SATS     4           /* minimum satellites for valid fix */
+#define SURVEY_MAX_READINGS 150         /* finish early after this many fixes */
 
 static volatile uint8_t gpsRawOutput;
 static uint8_t gpsPowered = 1;
@@ -1849,8 +1850,9 @@ static void surveyAccumulate(float lat, float lon, float alt)
         return;
 
     if (surveyActive) {
-        /* Check if survey duration has elapsed */
-        if ((HAL_GetTick() - surveyStartTick) >= SURVEY_DURATION_MS) {
+        /* Finish when 5 minutes elapse OR enough fixes are collected */
+        if ((HAL_GetTick() - surveyStartTick) >= SURVEY_DURATION_MS ||
+            cfg.surveyCount >= SURVEY_MAX_READINGS) {
             surveyActive = 0;
             if (configSave()) {
                 printf("Survey: Complete (%lu fixes)\r\n",
@@ -1869,9 +1871,13 @@ static void surveyAccumulate(float lat, float lon, float alt)
         /* CLI progress every 10 fixes */
         if ((cfg.surveyCount % 10) == 0) {
             uint32_t elapsed = (HAL_GetTick() - surveyStartTick) / 1000;
-            uint32_t remain = elapsed < 300 ? 300 - elapsed : 0;
-            printf("Survey: %lu fixes, %lus remaining\r\n",
-                   (unsigned long)cfg.surveyCount, (unsigned long)remain);
+            uint32_t secsTotal = SURVEY_DURATION_MS / 1000;
+            uint32_t remain = elapsed < secsTotal ? secsTotal - elapsed : 0;
+            uint32_t fixesRemain = cfg.surveyCount < SURVEY_MAX_READINGS ?
+                                   SURVEY_MAX_READINGS - cfg.surveyCount : 0;
+            printf("Survey: %lu/%u fixes, %lus or %lu fixes remaining\r\n",
+                   (unsigned long)cfg.surveyCount, SURVEY_MAX_READINGS,
+                   (unsigned long)remain, (unsigned long)fixesRemain);
         }
         /* Status pushed to ESP32 via SPI JSON */
     } else if (cfg.surveyCount > 0) {

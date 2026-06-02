@@ -20,6 +20,10 @@
         /* Header */
         .hdr { background: #1b5e20; padding: 14px 16px; }
         .hdr h1 { font-size: 22px; color: #fff; font-weight: bold; }
+        .hdr-top {
+            display: flex; align-items: baseline; justify-content: space-between;
+        }
+        .hdr-station { font-size: 14px; font-weight: bold; color: #a5d6a7; }
         .hdr .sub { font-size: 12px; color: #ccc; margin-top: 2px; }
         .dot {
             display: inline-block; width: 8px; height: 8px;
@@ -154,7 +158,10 @@
 
     <!-- Header -->
     <div class="hdr">
-        <h1>QuailTracker</h1>
+        <div class="hdr-top">
+            <h1>QuailTracker</h1>
+            <span class="hdr-station" id="hdrStation">--</span>
+        </div>
         <div class="sub">
             <span class="dot" id="dot"></span>
             <span id="connSt">Connecting...</span>
@@ -171,7 +178,7 @@
             <!-- Device / Battery / SD / Environment -->
             <div class="card">
                 <div class="row">
-                    <span class="val" id="stationId" style="font-size:16px">--</span>
+                    <span class="sect">Firmware</span>
                     <span class="spacer"></span>
                     <span class="val-sm" id="fwVer">STM32: -- | ESP32: --</span>
                 </div>
@@ -1235,7 +1242,7 @@
 
                 /* Station ID / Firmware */
                 if (d.station !== undefined) {
-                    document.getElementById('stationId').textContent = d.station;
+                    document.getElementById('hdrStation').textContent = d.station;
                     document.getElementById('devName').textContent = d.station;
                 }
                 if (d.fw !== undefined || d.espFw !== undefined) {
