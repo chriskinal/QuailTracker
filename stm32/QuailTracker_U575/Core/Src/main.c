@@ -1259,7 +1259,12 @@ void SystemClock_Config(void)
   */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_LSE
                               |RCC_OSCILLATORTYPE_MSI;
-  RCC_OscInitStruct.LSEState = RCC_LSE_ON_RTC_ONLY;
+  /* RCC_LSE_ON (not _RTC_ONLY): MSI PLL-mode auto-calibration needs LSE
+   * propagated to the system (LSESYSEN), not just running for the RTC. With
+   * _RTC_ONLY, LSERDY=1 but LSESYSEN=0, and MSIPLLEN silently refuses to set
+   * (confirmed via RCC->CR/BDCR) — so MSI never disciplines and the audio rate
+   * stays ~48,5xx. RTC still uses LSE via RTCSEL regardless. */
+  RCC_OscInitStruct.LSEState = RCC_LSE_ON;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.MSIState = RCC_MSI_ON;
@@ -1296,13 +1301,13 @@ void SystemClock_Config(void)
     Error_Handler();
   }
 
-  /* MSI PLL-mode (MSIS auto-cal to LSE) is OUT: it deterministically hard-faults
-   * this device (identical wild-jump dump, PC in .bss) when enabled on the live
-   * 160 MHz PLL — disciplining the running CPU clock is not safe here. Audio
-   * sample rate is corrected per-recording against GPS 1PPS (PPS_SAMPLE_RATE).
-   * If crystal discipline is still wanted, the safe route is MSIK: clock the MDF
-   * kernel from MSIK and auto-cal MSIK (leaves the CPU's MSIS untouched), with
-   * the MDF divider re-derived for the MSIK frequency. */
+  /* MSI auto-calibration: lock MSIS (the PLL source) to the LSE 32.768 kHz
+   * crystal so the audio sample rate tightens from ~±1% to crystal accuracy
+   * (~48,077 Hz). Exact config CubeMX generates for MSIS auto-cal. The earlier
+   * "MSI-PLL hard fault" was actually a NULL-deref in the PPS ISR (fixed in
+   * v0.9.47), NOT this — so retrying cleanly now that the device is stable. */
+  HAL_RCCEx_EnableMSIPLLModeSelection(RCC_MSISPLL_MODE_SEL);
+  HAL_RCCEx_EnableMSIPLLMode();
 }
 
 /**
