@@ -249,19 +249,27 @@ void ota_ab_boot_check(void)
     if (HAL_RTCEx_BKUPRead(&hrtc, OTA_BKP_PENDING) != OTA_PENDING_MAGIC)
         return;  /* not on trial */
 
+    /* AUTO-ROLLBACK TEMPORARILY DISABLED.
+     *
+     * The original logic rolled back to the other bank after N un-confirmed
+     * trial boots. Two problems made it actively harmful:
+     *  1) It decided at the very START of boot, before the image could run and
+     *     self-confirm — so a perfectly good image with a stale BOOTCNT (e.g.
+     *     left high by an earlier crash, or inherited by a J-Link flash that
+     *     doesn't reset the RTC backup counter) got swapped away instantly.
+     *  2) Confirmation depended on the ESP, which is asleep in the field
+     *     (laser-wake) — so good images falsely rolled back.
+     * On the bench this trapped every debugger flash, reverting it to an old
+     * bank. Auto-rollback is a FIELD-OTA recovery feature, not something that
+     * should second-guess a debugger flash, and it needs a proper
+     * image-identity-based redesign (tie the trial to the specific image, not a
+     * bare counter) before it's trustworthy. Until then: clear the trial state
+     * and let the image run. Dual-bank A/B SWAP itself is unaffected. */
     uint32_t cnt = HAL_RTCEx_BKUPRead(&hrtc, OTA_BKP_BOOTCNT);
-    printf("OTA: boot on TRIAL image (swap=%d, attempt %lu/%d)\r\n",
-           (int)ota_swap_enabled(), (unsigned long)cnt + 1, OTA_MAX_TRIAL_BOOTS);
-    if (cnt >= OTA_MAX_TRIAL_BOOTS) {
-        /* New image never confirmed across enough boots — roll back. */
-        printf("OTA: ROLLBACK — reverting swap\r\n");
-        HAL_RTCEx_BKUPWrite(&hrtc, OTA_BKP_PENDING, 0);
-        HAL_RTCEx_BKUPWrite(&hrtc, OTA_BKP_BOOTCNT, 0);
-        uint32_t revertSwap = ota_swap_enabled() ? OB_SWAP_BANK_DISABLE : OB_SWAP_BANK_ENABLE;
-        ob_program_and_launch(OB_USER_SWAP_BANK, revertSwap);  /* resets into prev bank */
-        return;
-    }
-    HAL_RTCEx_BKUPWrite(&hrtc, OTA_BKP_BOOTCNT, cnt + 1);
+    printf("OTA: trial image (swap=%d, prior attempts=%lu) — clearing trial, "
+           "auto-rollback disabled\r\n", (int)ota_swap_enabled(), (unsigned long)cnt);
+    HAL_RTCEx_BKUPWrite(&hrtc, OTA_BKP_PENDING, 0);
+    HAL_RTCEx_BKUPWrite(&hrtc, OTA_BKP_BOOTCNT, 0);
 }
 
 void ota_ab_confirm(void)

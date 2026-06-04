@@ -182,6 +182,42 @@ uint8_t tensorArena[112 * 1024] __attribute__((aligned(16)));
 /* Absolute sample counter (monotonically increasing, never reset) */
 volatile uint64_t absSampleCount = 0;
 
+/* Circular-buffer wrap counter — incremented once per full DMA buffer (1024
+ * samples) in HAL_MDF_AcqCpltCallback. Used by audioAbsSampleNow(). */
+volatile uint32_t dmaWrapCount = 0;
+
+/* Sample-accurate absolute audio sample index, read LIVE from the GPDMA.
+ * Replaces the old HAL_GetTick interpolation (±1ms ≈ ±48 samples ≈ ±343m of
+ * TDOA error). The MDF Left-channel DMA is circular over AUDIO_BUF_SIZE (1024)
+ * samples; BNDT = remaining bytes of the current pass, so (bufBytes - BNDT)/4
+ * is the position within the buffer. A full-buffer base comes from dmaWrapCount,
+ * reconciled so a just-wrapped-but-AcqCplt-ISR-pending instant (TCF set, BNDT
+ * reloaded) still counts the wrap and never loses 1024 samples. The retry loop
+ * guards against a wrap ISR running mid-read. Accurate to ~±1 sample (~7m). */
+static uint64_t audioAbsSampleNow(void)
+{
+    /* Guard: the GPDMA handle is zero-initialized until MX_GPDMA1_Init runs.
+     * A GPS PPS edge (EXTI) can fire during early boot before that — reading
+     * Instance->CBR1 through a NULL Instance is a null-pointer fault. Fall back
+     * to the coarse counter until the DMA is live. */
+    if (handle_GPDMA1_Channel0.Instance == NULL)
+        return absSampleCount;
+
+    uint32_t w1, w2, remaining, tcf;
+    do {
+        w1 = dmaWrapCount;
+        remaining = __HAL_DMA_GET_COUNTER(&handle_GPDMA1_Channel0);
+        tcf = __HAL_DMA_GET_FLAG(&handle_GPDMA1_Channel0, DMA_CSR_TCF);
+        w2 = dmaWrapCount;
+    } while (w1 != w2);
+
+    uint32_t pos = (uint32_t)((AUDIO_BUF_SIZE * 4u - remaining) / 4u);  /* 0..1024 */
+    uint64_t base = (uint64_t)w1 * AUDIO_BUF_SIZE;
+    if (tcf && pos < (AUDIO_BUF_SIZE / 2u))
+        base += AUDIO_BUF_SIZE;   /* wrapped; AcqCplt ISR hasn't bumped wrap yet */
+    return base + pos;
+}
+
 /* Set by HAL_GPIO_EXTI_Falling_Callback when an ESP32 CS wake pulse hits PB12.
  * Cleared by enterStop2() before WFI; checked after wake to determine source.
  * Defined later in this file alongside the EXTI callback. */
@@ -747,9 +783,7 @@ void startRecording(void)
      * and a torn 64-bit write would produce garbage sample positions. */
     HAL_NVIC_DisableIRQ(EXTI8_IRQn);
     __DSB();
-    uint32_t elapsed = HAL_GetTick() - dmaCallbackTick;
-    if (elapsed > 11) elapsed = 11;
-    recStartAbsSample = (uint64_t)dmaCallbackCount * 512 + elapsed * 48;
+    recStartAbsSample = audioAbsSampleNow();
     recPpsEdgesInRec = 0;
     recPpsFirstSample = 0;
     recPpsLastSample = 0;
@@ -1261,6 +1295,14 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+
+  /* MSI PLL-mode (MSIS auto-cal to LSE) is OUT: it deterministically hard-faults
+   * this device (identical wild-jump dump, PC in .bss) when enabled on the live
+   * 160 MHz PLL — disciplining the running CPU clock is not safe here. Audio
+   * sample rate is corrected per-recording against GPS 1PPS (PPS_SAMPLE_RATE).
+   * If crystal discipline is still wanted, the safe route is MSIK: clock the MDF
+   * kernel from MSIK and auto-cal MSIK (leaves the CPU's MSIS untouched), with
+   * the MDF divider re-derived for the MSIK frequency. */
 }
 
 /**
@@ -2155,8 +2197,9 @@ void HAL_MDF_AcqHalfCpltCallback(MDF_HandleTypeDef *hmdf)
 void HAL_MDF_AcqCpltCallback(MDF_HandleTypeDef *hmdf)
 {
     if (hmdf->Instance == MDF1_Filter0) {
-        /* Left channel — second half of DMA buffer */
+        /* Left channel — second half of DMA buffer (buffer wraps here) */
         dmaCallbackCount++;
+        dmaWrapCount++;                 /* one full AUDIO_BUF_SIZE buffer elapsed */
         dmaCallbackTick = HAL_GetTick();
         absSampleCount += AUDIO_BUF_SIZE / 2;
 
@@ -2195,20 +2238,16 @@ void HAL_GPIO_EXTI_Rising_Callback(uint16_t GPIO_Pin)
         return;
     }
     if (GPIO_Pin == GPIO_PIN_8) {
-        uint32_t tick = HAL_GetTick();
-        ppsTick = tick;
+        ppsTick = HAL_GetTick();
         ppsCount++;
 
-        /* Estimate absolute sample position at this PPS edge:
-         * dmaCallbackCount * 512 = samples at last DMA callback
-         * (tick - dmaCallbackTick) * 48 = ~samples since last callback
-         * Gives ~±1ms (±48 sample) accuracy per edge */
-        uint32_t elapsed = tick - dmaCallbackTick;
-        if (elapsed > 11) elapsed = 11; /* clamp to one callback period */
-        uint64_t absSample = (uint64_t)dmaCallbackCount * 512 + elapsed * 48;
-
-        /* Track PPS edges during recording for TDOA */
+        /* Track PPS edges during recording for TDOA. Only read the live DMA
+         * position while recording — that's the only time the latch is needed
+         * AND the only time the audio DMA is guaranteed running. Calling
+         * audioAbsSampleNow() on every PPS edge (incl. early boot, before DMA
+         * init) is what caused the null-pointer hard fault. */
         if (isRecording) {
+            uint64_t absSample = audioAbsSampleNow();
             uint64_t recSample = absSample - recStartAbsSample;
             if (recPpsEdgesInRec == 0)
                 recPpsFirstSample = recSample;

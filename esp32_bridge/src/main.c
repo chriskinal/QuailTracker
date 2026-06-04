@@ -37,7 +37,7 @@
 #include "spi_protocol.h"
 
 #define TAG "BRIDGE"
-#define ESP_FW_VERSION "0.4.10"
+#define ESP_FW_VERSION "0.4.11"
 
 static bool wifi_started = false;
 
@@ -2089,7 +2089,15 @@ void app_main(void)
     xTaskCreate(audio_push_task, "audio_push", 3072, NULL, 4, NULL);
     xTaskCreate(power_mgmt_task, "pwr_mgmt", 4096, NULL, 2, NULL);
     xTaskCreate(dns_task, "dns", 4096, NULL, 2, NULL);
-    xTaskCreate(stm32_watchdog_task, "stm32_wd", 4096, NULL, 2, NULL);
+    /* STM32 self-heal watchdog DISABLED for now. It re-flashes the staged image
+     * whenever the STM goes silent on SPI — but with a faulting staged image it
+     * loops (attempts reset each time the bad image briefly talks before
+     * crashing), and it clobbers debugger flashes during bench work. Needs a
+     * redesign before re-enabling: cap retries hard (don't reset on a brief
+     * blip), never fight an active debugger, and don't re-flash a staged image
+     * that itself fails to confirm.
+     * xTaskCreate(stm32_watchdog_task, "stm32_wd", 4096, NULL, 2, NULL); */
+    (void)stm32_watchdog_task;  /* keep referenced to avoid unused warning */
 
     ESP_LOGI(TAG, "Bridge ready — WiFi AP + SPI + WebSocket");
 }

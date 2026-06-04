@@ -221,6 +221,7 @@ static uint32_t streamLastSpiTick = 0;  /* auto-stop timeout */
 /* ---- Power management ---- */
 #define GPS_DUTY_CYCLE_DEFAULT_SEC  300  /* GPS wake every 5 min during recording */
 #define GPS_FIX_TIMEOUT_MS         15000 /* max wait for GPS fix during duty cycle */
+#define OTA_SELF_CONFIRM_MS        20000 /* uptime after which a trial image self-confirms (not bricked) */
 #define SCHEDULE_CHECK_INTERVAL_MS 1000  /* how often to evaluate schedule */
 #define USER_CONNECTED_IDLE_MS    300000 /* 5 min: STM stays awake after ESP wake until SPI idle */
 static uint32_t lastScheduleCheckTick = 0;
@@ -2145,6 +2146,17 @@ static void StartBridgeTask(void *argument)
                 ota_ab_confirm();
             }
 
+            /* Uptime self-confirm: an image that has run cleanly for a while is
+             * self-evidently not bricked, so confirm even WITHOUT an SPI frame
+             * from the ESP. Essential because the field ESP sleeps during
+             * recording (laser-wake) and a debugger-flashed image on the bench
+             * has no OTA confirm path — without this, a perfectly good image
+             * gets falsely rolled back after 3 trial boots. A genuinely bricked
+             * (crash-looping) image never reaches this uptime, so real failures
+             * still roll back. No-op once already confirmed. */
+            if (HAL_GetTick() > OTA_SELF_CONFIRM_MS)
+                ota_ab_confirm();
+
             /* Process received frame — binary protocol */
             static uint32_t lastCmdSeq = 0;  /* dedup: skip already-processed commands */
             if (spi_rx_frame.header.magic == SPI_FRAME_MAGIC) {
@@ -2728,6 +2740,28 @@ static void powerEnterRecord(void)
 static void gpsDutyCycle(void)
 {
     if (dev.pwr.state != PWR_SCHEDULED_REC) return;
+
+    /* PPS keep-alive during recording: the 1PPS edge is the cross-station time
+     * reference for TDOA, but it only fires while the GPS is powered. The old
+     * duty-cycle synced the RTC then powered GPS off — so NO PPS edges occurred
+     * during recording and every file's TDOA metadata came out empty. While
+     * actively recording, keep GPS powered continuously (sync the RTC once from
+     * the first good fix, then leave it on). Costs ~+30mA, which the measured
+     * power budget supports. Outside recording, the normal duty-cycle resumes
+     * below and powers GPS back down. */
+    if (isRecording) {
+        if (!gpsPowered) {
+            gpsSetPower(1);
+            gpsDutyActive = 1;   /* "powered, waiting for fix to sync RTC" */
+        }
+        if (gpsDutyActive && gpsData.valid && gpsData.fix >= 1) {
+            rtcSyncFromGps();
+            gpsDutyActive = 0;   /* synced — leave GPS ON so PPS keeps flowing */
+            lastGpsDutyTick = HAL_GetTick();
+            printf("PWR: GPS keep-alive (PPS) — RTC synced, GPS stays on\r\n");
+        }
+        return;
+    }
 
     uint32_t dutySec = dev.pwr.gpsDutyCycleSec;
     if (dutySec == 0) dutySec = GPS_DUTY_CYCLE_DEFAULT_SEC;
