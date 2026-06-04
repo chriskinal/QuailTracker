@@ -616,6 +616,16 @@
                 </div>
                 <div class="val-sm" style="text-align:center;margin-top:6px;color:#888" id="stm32OtaStatus"></div>
             </div>
+
+            <!-- STM32 A/B (dual-bank) OTA Update -->
+            <div class="card" style="margin-top:12px">
+                <div class="lbl" style="margin-bottom:6px">STM32 A/B Update (dual-bank, with rollback)</div>
+                <input type="file" id="stm32AbFile" accept=".bin" style="font-size:12px;margin-bottom:8px">
+                <div style="display:flex;gap:8px;align-items:center">
+                    <button class="btn btn-blue" style="flex:1" onclick="doStm32AbOta()">Upload &amp; A/B Flash STM32</button>
+                </div>
+                <div class="val-sm" style="text-align:center;margin-top:6px;color:#888" id="stm32AbStatus"></div>
+            </div>
         </div>
     </div>
 
@@ -991,6 +1001,86 @@
             xhr.send(file);
         }
 
+        function doStm32AbOta() {
+            var fileInput = document.getElementById('stm32AbFile');
+            var status = document.getElementById('stm32AbStatus');
+            if (!fileInput.files.length) {
+                status.textContent = 'Select a .bin file first';
+                return;
+            }
+            var file = fileInput.files[0];
+            if (!file.name.endsWith('.bin')) {
+                status.textContent = 'File must be a .bin firmware image';
+                return;
+            }
+            status.textContent = 'Uploading ' + (file.size / 1024).toFixed(0) + ' KB...';
+            status.style.color = '#888';
+
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/ota_stm32_ab', true);
+            xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+            xhr.timeout = 120000;
+            xhr.upload.onprogress = function(e) {
+                if (e.lengthComputable) {
+                    var pct = Math.round(e.loaded * 100 / e.total);
+                    status.textContent = 'Uploading... ' + pct + '%';
+                    if (pct >= 100) status.textContent = 'Staged — STM32 receiving into spare bank...';
+                }
+            };
+            /* The POST returns once the image is staged + streaming has begun.
+             * The STM32 then writes the inactive bank in the background, swaps and
+             * reboots. We POLL /ab_status (robust to ws drops + the reboot) for the
+             * real state instead of relying on transient WebSocket messages. */
+            xhr.onload = function() {
+                if (xhr.status === 200 && xhr.responseText.indexOf('OK') === 0) {
+                    startAbPoll();
+                } else {
+                    status.textContent = 'A/B update rejected: ' + xhr.responseText;
+                    status.style.color = '#f44336';
+                }
+            };
+            xhr.onerror = function() {
+                status.textContent = 'Upload failed (connection lost)';
+                status.style.color = '#f44336';
+            };
+            xhr.ontimeout = function() {
+                status.textContent = 'Upload timeout';
+                status.style.color = '#FF9800';
+            };
+            xhr.send(file);
+        }
+
+        function startAbPoll() {
+            var status = document.getElementById('stm32AbStatus');
+            if (window._abPoll) clearInterval(window._abPoll);
+            var started = Date.now();
+            function poll() {
+                fetch('/ab_status').then(function(r){ return r.json(); }).then(function(d){
+                    if (!status) return;
+                    if (d.st === 1) {
+                        status.textContent = 'Writing spare bank... ' + d.pct + '%';
+                        status.style.color = '#2196F3';
+                    } else if (d.st === 2) {
+                        status.textContent = 'Swapping banks & rebooting...';
+                        status.style.color = '#2196F3';
+                    } else if (d.st === 3) {
+                        status.textContent = '✓ A/B update complete — STM32 running ' + d.ver;
+                        status.style.color = '#4CAF50';
+                        clearInterval(window._abPoll); window._abPoll = null;
+                    } else if (d.st === 4) {
+                        status.textContent = 'A/B update failed (STM32 reported an error)';
+                        status.style.color = '#f44336';
+                        clearInterval(window._abPoll); window._abPoll = null;
+                    }
+                }).catch(function(){ /* ws/AP hiccup — keep polling */ });
+                if (Date.now() - started > 150000) {  /* safety stop */
+                    clearInterval(window._abPoll); window._abPoll = null;
+                }
+            }
+            poll();
+            window._abPoll = setInterval(poll, 1000);
+        }
+
         var _connectTimer = null;
         var _retries = 0;
         var _lastMsg = 0;
@@ -1081,6 +1171,41 @@
                     var el = document.getElementById('stm32OtaStatus');
                     if (el) { el.textContent = d.stm32Err; el.style.color = '#f44336'; }
                     window._stm32flashing = false;
+                    return;
+                }
+
+                /* STM32 A/B update progress */
+                if (d.abFlash !== undefined && window._abflashing) {
+                    var el = document.getElementById('stm32AbStatus');
+                    if (el) {
+                        if (d.abFlash >= 100) {
+                            el.textContent = 'A/B image received — swapping banks & rebooting...';
+                            el.style.color = '#4CAF50';
+                            window._abflashing = false;
+                        } else {
+                            el.textContent = 'Writing spare bank... ' + d.abFlash + '%';
+                            el.style.color = '#2196F3';
+                        }
+                    }
+                    return;
+                }
+
+                /* STM32 A/B update complete (new image swapped in & checked back in) */
+                if (d.abDone !== undefined) {
+                    var el = document.getElementById('stm32AbStatus');
+                    if (el) {
+                        el.textContent = '✓ A/B update complete — STM32 running ' + d.abDone;
+                        el.style.color = '#4CAF50';
+                    }
+                    window._abflashing = false;
+                    return;
+                }
+
+                /* STM32 A/B update error */
+                if (d.abOtaErr !== undefined) {
+                    var el = document.getElementById('stm32AbStatus');
+                    if (el) { el.textContent = d.abOtaErr; el.style.color = '#f44336'; }
+                    window._abflashing = false;
                     return;
                 }
 

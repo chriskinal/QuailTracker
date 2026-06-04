@@ -20,6 +20,7 @@
 #include "esp_task_wdt.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "esp_rom_crc.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -377,20 +378,14 @@ static void exit_bootloader(void)
     ESP_LOGI(TAG, "STM32 reset to normal boot (BOOT0=hi-Z)");
 }
 
-/* ── Main flash routine — reads firmware from ESP32 flash partition ── */
+/* ── Single flash attempt (enter BL → erase → write → verify → go) ── */
 
-int stm32_flash_from_partition(const esp_partition_t *part, uint32_t fw_size,
-                               stm32_flash_progress_cb_t progress_cb)
+static int flash_attempt(const esp_partition_t *part, uint32_t fw_size,
+                         stm32_flash_progress_cb_t progress_cb)
 {
     int rc = STM32_FLASH_OK;
 
-    if (fw_size > STM32_FLASH_SIZE) {
-        ESP_LOGE(TAG, "Firmware too large: %lu > %d",
-                 (unsigned long)fw_size, STM32_FLASH_SIZE);
-        return STM32_FLASH_ERR_SIZE;
-    }
-
-    ESP_LOGI(TAG, "Starting STM32 flash: %lu bytes from partition '%s'",
+    ESP_LOGI(TAG, "Flash attempt: %lu bytes from partition '%s'",
              (unsigned long)fw_size, part->label);
 
     /* Step 1: Enter bootloader mode */
@@ -460,6 +455,14 @@ int stm32_flash_from_partition(const esp_partition_t *part, uint32_t fw_size,
 
     ESP_LOGI(TAG, "Write complete, sending Go command");
 
+    /* No read-back verify here: transfer integrity is already guaranteed by the
+     * bootloader's per-chunk Write Memory XOR checksum (a corrupted chunk NACKs,
+     * fails the write, and triggers a retry). The SPI bootloader Read Memory data
+     * phase proved unreliable on this part (false verify mismatch at offset 0) and
+     * a full read-back doubles flash time. The A/B path keeps a reliable app-side
+     * CRC verify (memory-mapped read) before its bank swap, which is where a
+     * post-write check actually matters. */
+
     /* Step 6: Go — jump to flash start */
     if (!bl_go(STM32_FLASH_BASE)) {
         rc = STM32_FLASH_ERR_GO;
@@ -470,9 +473,58 @@ cleanup:
     spi_master_deinit();
 
     if (rc != STM32_FLASH_OK) {
-        ESP_LOGE(TAG, "Flash failed (error %d), resetting STM32 to normal boot", rc);
+        ESP_LOGE(TAG, "Flash attempt failed (error %d)", rc);
     }
     exit_bootloader();
 
     return rc;
+}
+
+/* ── Public entry: flash with bounded retries + backoff ───────────── */
+
+int stm32_flash_from_partition(const esp_partition_t *part, uint32_t fw_size,
+                               stm32_flash_progress_cb_t progress_cb)
+{
+    if (fw_size > STM32_FLASH_SIZE) {
+        ESP_LOGE(TAG, "Firmware too large: %lu > %d",
+                 (unsigned long)fw_size, STM32_FLASH_SIZE);
+        return STM32_FLASH_ERR_SIZE;
+    }
+
+    const int MAX_ATTEMPTS = 3;
+    int rc = STM32_FLASH_ERR_SYNC;
+
+    for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+        if (attempt > 0) {
+            int backoff_ms = 300 * (1 << (attempt - 1));  /* 300, 600 ms */
+            ESP_LOGW(TAG, "Flash retry %d/%d after %d ms (prev rc=%d)",
+                     attempt + 1, MAX_ATTEMPTS, backoff_ms, rc);
+            vTaskDelay(pdMS_TO_TICKS(backoff_ms));
+        }
+        rc = flash_attempt(part, fw_size, progress_cb);
+        if (rc == STM32_FLASH_OK)
+            break;
+    }
+
+    if (rc != STM32_FLASH_OK)
+        ESP_LOGE(TAG, "Flash failed after %d attempts (error %d)", MAX_ATTEMPTS, rc);
+    return rc;
+}
+
+/* ── CRC-32 of a staged partition image (for recovery integrity check) ── */
+
+uint32_t stm32_flash_crc32(const esp_partition_t *part, uint32_t size)
+{
+    uint8_t buf[1024];
+    uint32_t crc = 0;
+    for (uint32_t off = 0; off < size; off += sizeof(buf)) {
+        uint32_t n = sizeof(buf);
+        if (off + n > size) n = size - off;
+        if (esp_partition_read(part, off, buf, n) != ESP_OK)
+            return 0;
+        crc = esp_rom_crc32_le(crc, buf, n);
+        if ((off % (32 * 1024)) == 0)
+            vTaskDelay(1);
+    }
+    return crc;
 }

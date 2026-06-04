@@ -36,6 +36,7 @@
 #include "spi_bridge.h"
 #include "solar.h"
 #include "schedule.h"
+#include "ota_ab.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -44,11 +45,18 @@
 /* ---- Flash config/health constants (types now in device_state.h) ---- */
 #define CONFIG_MAGIC      0x51544346   /* "QTCF" */
 #define CONFIG_VERSION    10
-#define CONFIG_FLASH_ADDR 0x080FE000   /* Last page of Bank 1 on 2MB (Nucleo ZI), Bank 2 page 63 on 1MB (VGT6) */
+/* Dual-bank A/B + RWW: config/health live in the top two 8 KB pages of the
+ * INACTIVE bank (high window, 0x080F_xxxx). You cannot program a flash bank
+ * while executing from it (read-while-write), so saves MUST target the inactive
+ * bank — and the high window is always the inactive bank regardless of SWAP.
+ * The A/B image (≤ bank-16KB) never reaches these top pages. Config is the
+ * ESP32's to master and is re-synced after a swap, so cross-swap staleness
+ * self-heals; health is diagnostic. (Erase bank is swap-aware below.) */
+#define CONFIG_FLASH_ADDR 0x080FE000   /* last page of the high (inactive) bank window */
 
 #define HEALTH_MAGIC       0x51544853   /* "QTHS" */
 #define HEALTH_VERSION     1
-#define HEALTH_FLASH_ADDR  0x080FC000   /* One page before config page */
+#define HEALTH_FLASH_ADDR  0x080FC000   /* one page below config */
 
 /* ---- OTA firmware update state ---- */
 typedef enum { OTA_IDLE, OTA_RECEIVING, OTA_COMPLETE } ota_state_t;
@@ -2034,8 +2042,9 @@ static void StartBridgeTask(void *argument)
             printf("Stream: auto-stopped (SPI timeout)\r\n");
         }
 
-        /* SPI2 poll — 25ms when streaming, 250ms otherwise */
-        uint32_t spiPollMs = streamActive ? SPI2_POLL_STREAM_MS : SPI2_POLL_MS;
+        /* SPI2 poll — 25ms when streaming or OTA-receiving, 250ms otherwise */
+        uint32_t spiPollMs = (streamActive || ota_ab_active())
+                                 ? SPI2_POLL_STREAM_MS : SPI2_POLL_MS;
         if ((HAL_GetTick() - lastSpiPollTick) >= spiPollMs) {
             lastSpiPollTick = HAL_GetTick();
 
@@ -2054,15 +2063,29 @@ static void StartBridgeTask(void *argument)
                 else                         solar_st = SOLAR_STANDBY;
             }
 
-            spi_frame_build(&spi_tx_frame, &cfg, &dev, &health, solar_st, 0);
+            /* Assert SPI_FLAG_BOOT for the first 8 s so the ESP can detect a
+             * fresh (re)boot deterministically — e.g. to close out an A/B
+             * update after the swap+reset instead of guessing from a silence
+             * gap (a fast U5 reboot slips under any timing threshold). */
+            uint16_t txFlags = (HAL_GetTick() < 8000U) ? SPI_FLAG_BOOT : 0;
+            spi_frame_build(&spi_tx_frame, &cfg, &dev, &health, solar_st, txFlags);
 
-            /* Fill audio streaming payload into reserved region */
+            /* Fill the reserved region: audio while streaming, else OTA status
+             * while an A/B update is in progress (mutually exclusive). */
             if (streamActive) {
                 spi_audio_payload_t *ap = (spi_audio_payload_t *)spi_tx_frame._reserved;
                 ap->channel = streamChannel;
                 ap->num_samples = decimate_8k(ap->samples, 214);
                 ap->audio_active = (ap->num_samples > 0) ? 1 : 0;
                 /* Recompute CRC since we modified the frame */
+                spi_tx_frame.header.crc16 = spi_frame_crc(&spi_tx_frame);
+            } else if (ota_ab_state() != OTA_ST_IDLE) {
+                spi_ota_status_t *os = (spi_ota_status_t *)spi_tx_frame._reserved;
+                os->magic       = SPI_OTA_STATUS_MAGIC;
+                os->state       = ota_ab_state();
+                os->err         = ota_ab_err();
+                os->next_offset = ota_ab_next_offset();
+                os->bytes_ok    = ota_ab_bytes_ok();
                 spi_tx_frame.header.crc16 = spi_frame_crc(&spi_tx_frame);
             }
 
@@ -2078,6 +2101,10 @@ static void StartBridgeTask(void *argument)
                 dev.comms.lastSpiTick = HAL_GetTick();
                 if (streamActive)
                     streamLastSpiTick = HAL_GetTick();
+                /* A successful exchange = the ESP32 is talking to this image.
+                 * If we're a freshly-swapped image on trial, that's our
+                 * confirmation; otherwise this is a no-op. */
+                ota_ab_confirm();
             }
 
             /* Process received frame — binary protocol */
@@ -2233,8 +2260,34 @@ static void StartBridgeTask(void *argument)
                     }
                     break;
                 }
+                case SPI_CMD_OTA_BEGIN: {
+                    qt_spi_ota_begin_t ob;
+                    memcpy(&ob, cmd_payload, sizeof(ob));
+                    if (!isRecording)
+                        ota_ab_begin(ob.image_size, ob.image_crc32);
+                    printf("SPI cmd: ota_begin size=%lu\r\n", (unsigned long)ob.image_size);
+                    break;
+                }
+                case SPI_CMD_OTA_COMMIT:
+                    printf("SPI cmd: ota_commit\r\n");
+                    ota_ab_commit();   /* verifies, carries config, swaps + resets */
+                    break;
+                case SPI_CMD_OTA_ABORT:
+                    ota_ab_abort(0);
+                    printf("SPI cmd: ota_abort\r\n");
+                    break;
                 default:
                     break;
+                }
+
+                /* OTA bulk data rides the ESP32→STM32 reserved region while a
+                 * transfer is active. Lock-step: only the chunk at the expected
+                 * offset is accepted (ota_ab_data ignores others). */
+                if (ota_ab_active()) {
+                    const spi_ota_data_t *od =
+                        (const spi_ota_data_t *)spi_rx_frame._reserved;
+                    if (od->magic == SPI_OTA_DATA_MAGIC && od->len <= SPI_OTA_CHUNK_BYTES)
+                        ota_ab_data(od->offset, od->data, od->len);
                 }
             }
             /* Backward compat: fall back to JSON if ESP32 sends old format */
@@ -2392,63 +2445,68 @@ static void configLoad(void)
     strncpy(deviceStationId, cfg.stationId, sizeof(deviceStationId));
 }
 
+/* Erase one page and program `nQuad` quad-words (16 bytes each) from `src` at
+ * virtual `addr`, then verify the readback. Bank/page are derived swap-aware
+ * from `addr`: the low window (0x08000000) is the active bank, the high window
+ * (0x08080000) the inactive bank, and SWAP_BANK selects which physical bank
+ * each maps to. Programming the *inactive* (high) bank from code running in the
+ * active (low) bank is the only RWW-legal case.
+ *
+ * Retries once: the very first flash op right after a bank swap can glitch
+ * (stale prefetch/mapping settling), so a single retry self-heals it instead
+ * of dropping the write. Only reports failure if the retry also fails. */
+static int flashWritePage(uint32_t addr, const uint8_t *src, int nQuad)
+{
+    uint32_t bank, page;
+    if (addr < FLASH_BASE + FLASH_BANK_SIZE) {
+        bank = ota_swap_enabled() ? FLASH_BANK_2 : FLASH_BANK_1;  /* low window */
+        page = (addr - FLASH_BASE) / FLASH_PAGE_SIZE;
+    } else {
+        bank = ota_swap_enabled() ? FLASH_BANK_1 : FLASH_BANK_2;  /* high window */
+        page = (addr - FLASH_BASE - FLASH_BANK_SIZE) / FLASH_PAGE_SIZE;
+    }
+
+    for (int attempt = 0; attempt < 2; attempt++) {
+        HAL_ICACHE_Disable();
+        HAL_FLASH_Unlock();
+        __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_ALL_ERRORS);
+
+        FLASH_EraseInitTypeDef erase = {0};
+        erase.TypeErase = FLASH_TYPEERASE_PAGES;
+        erase.Banks     = bank;
+        erase.Page      = page;
+        erase.NbPages   = 1;
+        uint32_t pageError = 0;
+
+        int ok = (HAL_FLASHEx_Erase(&erase, &pageError) == HAL_OK);
+        for (int i = 0; i < nQuad && ok; i++) {
+            if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_QUADWORD,
+                                  addr + (uint32_t)(i * 16),
+                                  (uint32_t)(src + i * 16)) != HAL_OK)
+                ok = 0;
+        }
+
+        HAL_FLASH_Lock();
+        HAL_ICACHE_Enable();
+
+        if (ok && memcmp((const void *)addr, src, (size_t)nQuad * 16) == 0)
+            return 1;
+        /* else: transient — fall through and retry once */
+    }
+    return 0;
+}
+
 int configSave(void)
 {
     cfg.cfg_seq++;  /* bump sequence so ESP32 adopts on next SPI exchange */
     cfg.crc32 = configComputeCrc(&cfg);
 
-    /* ICACHE must be disabled during flash erase/program on STM32U5 */
-    HAL_ICACHE_Disable();
-
-    HAL_FLASH_Unlock();
-
-    /* Clear any sticky error flags from previous operations */
-    __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_ALL_ERRORS);
-
-    /* Compute bank and page from address (works on both 1MB VGT6 and 2MB ZIT6Q) */
-    FLASH_EraseInitTypeDef erase = {0};
-    erase.TypeErase = FLASH_TYPEERASE_PAGES;
-    if (CONFIG_FLASH_ADDR < FLASH_BASE + FLASH_BANK_SIZE) {
-        erase.Banks = FLASH_BANK_1;
-        erase.Page = (CONFIG_FLASH_ADDR - FLASH_BASE) / FLASH_PAGE_SIZE;
-    } else {
-        erase.Banks = FLASH_BANK_2;
-        erase.Page = (CONFIG_FLASH_ADDR - FLASH_BASE - FLASH_BANK_SIZE) / FLASH_PAGE_SIZE;
-    }
-    erase.NbPages = 1;
-    uint32_t pageError = 0;
-
-    if (HAL_FLASHEx_Erase(&erase, &pageError) != HAL_OK) {
-        printf("Config: Flash erase FAILED (err=0x%lx)\r\n",
+    /* config = 8 quad-words (128 bytes) in the inactive bank's top page */
+    if (!flashWritePage(CONFIG_FLASH_ADDR, (const uint8_t *)&cfg, 8)) {
+        printf("Config: Flash write FAILED (err=0x%lx)\r\n",
                (unsigned long)HAL_FLASH_GetError());
-        HAL_FLASH_Lock();
-        HAL_ICACHE_Enable();
         return 0;
     }
-
-    /* Program 8 quadwords (128 bytes = 8 × 16 bytes) */
-    const uint8_t *src = (const uint8_t *)&cfg;
-    for (int i = 0; i < 8; i++) {
-        uint32_t addr = CONFIG_FLASH_ADDR + (uint32_t)(i * 16);
-        if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_QUADWORD, addr,
-                              (uint32_t)(src + i * 16)) != HAL_OK) {
-            printf("Config: Flash program FAILED at offset %d (err=0x%lx)\r\n",
-                   i * 16, (unsigned long)HAL_FLASH_GetError());
-            HAL_FLASH_Lock();
-            HAL_ICACHE_Enable();
-            return 0;
-        }
-    }
-
-    HAL_FLASH_Lock();
-    HAL_ICACHE_Enable();
-
-    /* Verify readback */
-    if (memcmp((const void *)CONFIG_FLASH_ADDR, &cfg, sizeof(cfg)) != 0) {
-        printf("Config: Flash verify FAILED\r\n");
-        return 0;
-    }
-
     return 1;
 }
 
@@ -2486,47 +2544,11 @@ int healthSave(void)
 {
     health.crc32 = healthComputeCrc(&health);
 
-    HAL_ICACHE_Disable();
-    HAL_FLASH_Unlock();
-    __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_ALL_ERRORS);
-
-    FLASH_EraseInitTypeDef erase = {0};
-    erase.TypeErase = FLASH_TYPEERASE_PAGES;
-    if (HEALTH_FLASH_ADDR < FLASH_BASE + FLASH_BANK_SIZE) {
-        erase.Banks = FLASH_BANK_1;
-        erase.Page = (HEALTH_FLASH_ADDR - FLASH_BASE) / FLASH_PAGE_SIZE;
-    } else {
-        erase.Banks = FLASH_BANK_2;
-        erase.Page = (HEALTH_FLASH_ADDR - FLASH_BASE - FLASH_BANK_SIZE) / FLASH_PAGE_SIZE;
-    }
-    erase.NbPages = 1;
-    uint32_t pageError = 0;
-
-    if (HAL_FLASHEx_Erase(&erase, &pageError) != HAL_OK) {
-        printf("Health: Flash erase FAILED\r\n");
-        HAL_FLASH_Lock();
-        HAL_ICACHE_Enable();
-        return 0;
-    }
-
-    /* Program 16 quadwords (256 bytes = 16 × 16 bytes) */
-    const uint8_t *src = (const uint8_t *)&health;
-    for (int i = 0; i < 16; i++) {
-        uint32_t addr = HEALTH_FLASH_ADDR + (uint32_t)(i * 16);
-        if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_QUADWORD, addr,
-                              (uint32_t)(src + i * 16)) != HAL_OK) {
-            printf("Health: Flash program FAILED at offset %d\r\n", i * 16);
-            HAL_FLASH_Lock();
-            HAL_ICACHE_Enable();
-            return 0;
-        }
-    }
-
-    HAL_FLASH_Lock();
-    HAL_ICACHE_Enable();
-
-    if (memcmp((const void *)HEALTH_FLASH_ADDR, &health, sizeof(health)) != 0) {
-        printf("Health: Flash verify FAILED\r\n");
+    /* health = 16 quad-words (256 bytes) in the inactive bank, one page below
+     * config. Retries once on the post-swap-boot transient (see flashWritePage). */
+    if (!flashWritePage(HEALTH_FLASH_ADDR, (const uint8_t *)&health, 16)) {
+        printf("Health: Flash write FAILED (err=0x%lx)\r\n",
+               (unsigned long)HAL_FLASH_GetError());
         return 0;
     }
 

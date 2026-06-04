@@ -25,6 +25,8 @@
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include "nvs_flash.h"
+#include "nvs.h"
+#include "esp_timer.h"
 #include "esp_netif.h"
 #include "esp_mac.h"
 #include "esp_sleep.h"
@@ -35,7 +37,7 @@
 #include "spi_protocol.h"
 
 #define TAG "BRIDGE"
-#define ESP_FW_VERSION "0.4.3"
+#define ESP_FW_VERSION "0.4.10"
 
 static bool wifi_started = false;
 
@@ -77,6 +79,54 @@ static spi_state_t     local_state;
 static uint32_t        local_cfg_seq = 0;
 static bool            stm32_synced = false;
 static bool            first_boot = true;
+
+/* Monotonic µs of the last valid SPI frame from the STM32 — drives liveness /
+ * auto-recovery. 0 = never seen since boot. */
+static volatile int64_t last_spi_ok_us = 0;
+
+/* Refuse to start a flash below this battery level so an update can always
+ * finish. 0 = battery unknown (no STM32 telemetry yet) → allowed. */
+#define FLASH_MIN_BATT_MV  3500
+
+/* ── Staged-image metadata (NVS) for self-healing recovery ─────────
+ * The stm32fw partition retains the last staged image; we persist its size +
+ * CRC so the watchdog can confirm integrity before a recovery re-flash. */
+static void staged_meta_save(uint32_t size, uint32_t crc)
+{
+    nvs_handle_t h;
+    if (nvs_open("bridge", NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u32(h, "stmfw_sz", size);
+    nvs_set_u32(h, "stmfw_crc", crc);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+static bool staged_meta_load(uint32_t *size, uint32_t *crc)
+{
+    nvs_handle_t h;
+    if (nvs_open("bridge", NVS_READONLY, &h) != ESP_OK) return false;
+    bool ok = (nvs_get_u32(h, "stmfw_sz", size) == ESP_OK) &&
+              (nvs_get_u32(h, "stmfw_crc", crc) == ESP_OK);
+    nvs_close(h);
+    return ok && *size > 0;
+}
+
+/* ── App-resident dual-bank A/B OTA streaming (ESP32 → STM32 app) ──
+ * The STM32 app writes the inactive bank; we stream the staged image to it over
+ * the normal SPI link (data in our TX _reserved, lock-step by the STM32's
+ * reported next_offset in its TX _reserved). Set up by the web handler; driven
+ * in spi_task. */
+static volatile bool          ota_ab_streaming = false;
+static const esp_partition_t *ota_ab_part = NULL;
+static uint32_t               ota_ab_img_size = 0;
+static uint32_t               ota_ab_send_offset = 0;  /* offset the STM32 wants next */
+static volatile int           ota_ab_pct = -1;
+static volatile bool          ota_ab_awaiting_reboot = false; /* post-commit: wait for swap+reboot */
+static int64_t                ota_ab_commit_us = 0;
+/* Pollable UI state (survives WebSocket drops / page reloads / the STM32 reboot):
+ * 0 idle, 1 receiving, 2 rebooting, 3 done, 4 error. Served by /ab_status. */
+static volatile int           ota_ab_ui_state = 0;
+static char                   ota_ab_done_ver[16] = {0};
 
 /* ── Audio streaming state ────────────────────────────────────── */
 
@@ -680,9 +730,65 @@ static esp_err_t flash_status_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* Pollable A/B OTA status — robust to WebSocket drops and the STM32 reboot.
+ * st: 0 idle, 1 receiving, 2 rebooting, 3 done, 4 error. `esp` lets the UI
+ * confirm which ESP firmware is actually running. */
+static esp_err_t ab_status_handler(httpd_req_t *req)
+{
+    char buf[96];
+    snprintf(buf, sizeof(buf),
+             "{\"st\":%d,\"pct\":%d,\"ver\":\"%.15s\",\"esp\":\"%s\"}",
+             ota_ab_ui_state, ota_ab_pct, ota_ab_done_ver, ESP_FW_VERSION);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, buf);
+    return ESP_OK;
+}
+
+/* Stop the SPI slave task, flash the STM32 from `part`, restart SPI.
+ * Shared by the web OTA handler and the auto-recovery watchdog. */
+static int do_stm32_flash(const esp_partition_t *part, uint32_t size)
+{
+    stm32_flash_pct = 0;
+
+    spi_task_stop = true;
+    for (int i = 0; i < 50 && spi_task_handle != NULL; i++)
+        vTaskDelay(pdMS_TO_TICKS(100));
+    ESP_LOGI(TAG, "SPI task stopped for flash");
+
+    if (spi_initialized) {
+        spi_slave_free(SPI_HOST);
+        spi_initialized = false;
+    }
+
+    int rc = stm32_flash_from_partition(part, size, stm32_flash_progress);
+
+    /* Re-initialize SPI slave and restart task */
+    spi_slave_init();
+    spi_task_stop = false;
+    xTaskCreate(spi_task, "spi_task", 4096, NULL, 3, &spi_task_handle);
+
+    /* Grant the freshly-flashed image a check-in grace window: stamp "now" so
+     * the watchdog waits DEAD_US for it to talk before judging it dead. A good
+     * image checks in within ~seconds (refreshing this); a bad one never does
+     * and goes stale → recovery retry. */
+    last_spi_ok_us = esp_timer_get_time();
+    stm32_flash_pct = (rc == STM32_FLASH_OK) ? 100 : -1;
+    return rc;
+}
+
 static esp_err_t stm32_ota_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "STM32 flash started, content_len=%d", req->content_len);
+
+    /* Battery gate: refuse to start if we know the battery is too low to finish.
+     * env_battMv == 0 means no telemetry yet (e.g. bench) → allow. */
+    if (local_state.env_battMv != 0 && local_state.env_battMv < FLASH_MIN_BATT_MV) {
+        ESP_LOGW(TAG, "Flash refused: battery %u mV < %d mV",
+                 local_state.env_battMv, FLASH_MIN_BATT_MV);
+        ws_broadcast("{\"stm32Err\":\"Battery too low to flash safely\"}");
+        httpd_resp_sendstr(req, "ERR");
+        return ESP_FAIL;
+    }
 
     if (req->content_len <= 0 || req->content_len > 512 * 1024) {
         ws_broadcast("{\"stm32Err\":\"Invalid firmware size\"}");
@@ -784,30 +890,21 @@ static esp_err_t stm32_ota_handler(httpd_req_t *req)
                  (unsigned long)sp, (unsigned long)rv);
     }
 
-    ESP_LOGI(TAG, "Starting STM32 flash");
-    stm32_flash_pct = 0;
-
-    /* Stage 2: Stop SPI task, free SPI slave, flash STM32 from partition */
-    spi_task_stop = true;
-    /* Wait for SPI task to exit (it checks the flag every iteration) */
-    for (int i = 0; i < 50 && spi_task_handle != NULL; i++)
-        vTaskDelay(pdMS_TO_TICKS(100));
-    ESP_LOGI(TAG, "SPI task stopped");
-
-    if (spi_initialized) {
-        spi_slave_free(SPI_HOST);
-        spi_initialized = false;
+    /* Persist staged-image metadata BEFORE flashing, so if this flash is
+     * interrupted (power loss) the watchdog can recover from the retained
+     * partition on next boot. */
+    {
+        uint32_t crc = stm32_flash_crc32(part, (uint32_t)received);
+        staged_meta_save((uint32_t)received, crc);
+        ESP_LOGI(TAG, "Staged image meta saved (size=%d crc=0x%08lx)",
+                 received, (unsigned long)crc);
     }
 
-    int rc = stm32_flash_from_partition(part, (uint32_t)received, stm32_flash_progress);
+    ESP_LOGI(TAG, "Starting STM32 flash");
 
-    /* Re-initialize SPI slave and restart task */
-    spi_slave_init();
-    spi_task_stop = false;
-    xTaskCreate(spi_task, "spi_task", 4096, NULL, 3, &spi_task_handle);
+    int rc = do_stm32_flash(part, (uint32_t)received);
 
     if (rc != STM32_FLASH_OK) {
-        stm32_flash_pct = -1;
         char errmsg[64];
         snprintf(errmsg, sizeof(errmsg), "Flash failed (error %d)", rc);
         ESP_LOGE(TAG, "%s", errmsg);
@@ -817,10 +914,86 @@ static esp_err_t stm32_ota_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    stm32_flash_pct = 100;
     ESP_LOGI(TAG, "STM32 flash complete, device rebooted");
     httpd_resp_sendstr(req, "OK");
     stm32_flash_pct = -1;
+    return ESP_OK;
+}
+
+/* ── App-resident dual-bank A/B OTA: stage image, then stream to STM32 app ──
+ * Unlike /ota_stm32 (ROM bootloader, erases the running image), this streams
+ * the image to the running STM32 app which writes the INACTIVE bank and swaps
+ * atomically with rollback. The ROM path remains the recovery backstop. */
+static esp_err_t stm32_ab_ota_handler(httpd_req_t *req)
+{
+    if (ota_ab_streaming) { httpd_resp_sendstr(req, "ERR busy"); return ESP_FAIL; }
+    if (local_state.env_battMv != 0 && local_state.env_battMv < FLASH_MIN_BATT_MV) {
+        ws_broadcast("{\"abOtaErr\":\"Battery too low to flash safely\"}");
+        httpd_resp_sendstr(req, "ERR batt"); return ESP_FAIL;
+    }
+    if (req->content_len <= 0 || req->content_len > 512 * 1024) {
+        httpd_resp_sendstr(req, "ERR size"); return ESP_FAIL;
+    }
+
+    const esp_partition_t *part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, 0x80, STM32FW_PARTITION_LABEL);
+    if (!part) { httpd_resp_sendstr(req, "ERR part"); return ESP_FAIL; }
+    if (esp_partition_erase_range(part, 0, part->size) != ESP_OK) {
+        httpd_resp_sendstr(req, "ERR erase"); return ESP_FAIL;
+    }
+
+    /* Stage the HTTP body into the partition */
+    char buf[1024];
+    int received = 0, total = req->content_len;
+    while (received < total) {
+        int r = httpd_req_recv(req, buf, sizeof(buf));
+        if (r <= 0) {
+            if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
+            httpd_resp_sendstr(req, "ERR recv"); return ESP_FAIL;
+        }
+        if (esp_partition_write(part, received, buf, r) != ESP_OK) {
+            httpd_resp_sendstr(req, "ERR write"); return ESP_FAIL;
+        }
+        received += r;
+    }
+
+    /* Validate STM32 vector table (initial SP + reset vector) */
+    uint8_t hdr[8];
+    esp_partition_read(part, 0, hdr, 8);
+    uint32_t sp = hdr[0] | (hdr[1] << 8) | (hdr[2] << 16) | ((uint32_t)hdr[3] << 24);
+    uint32_t rv = hdr[4] | (hdr[5] << 8) | (hdr[6] << 16) | ((uint32_t)hdr[7] << 24);
+    if ((sp & 0xFFF00000) != 0x20000000 || (rv & 0xFFF00000) != 0x08000000) {
+        httpd_resp_sendstr(req, "ERR not an STM32 binary"); return ESP_FAIL;
+    }
+
+    /* Image CRC-32 using the SHARED algorithm so the STM32 receiver matches */
+    uint32_t crc = 0;
+    for (uint32_t off = 0; off < (uint32_t)received; ) {
+        uint8_t cbuf[1024];
+        uint32_t n = sizeof(cbuf);
+        if (off + n > (uint32_t)received) n = (uint32_t)received - off;
+        esp_partition_read(part, off, cbuf, n);
+        crc = spi_crc32(crc, cbuf, n);
+        off += n;
+    }
+
+    /* Also persist staged meta for the Stage-0 ROM-bootloader recovery path */
+    staged_meta_save((uint32_t)received, stm32_flash_crc32(part, (uint32_t)received));
+
+    /* Arm the stream and tell the STM32 to begin (erase inactive bank) */
+    ota_ab_part = part;
+    ota_ab_img_size = (uint32_t)received;
+    ota_ab_send_offset = 0;
+    ota_ab_pct = 0;
+    ota_ab_ui_state = 1;            /* receiving */
+    ota_ab_done_ver[0] = '\0';
+    qt_spi_ota_begin_t ob = { .image_size = (uint32_t)received, .image_crc32 = crc };
+    cmd_enqueue(SPI_CMD_OTA_BEGIN, (const uint8_t *)&ob, sizeof(ob));
+    ota_ab_streaming = true;
+
+    ESP_LOGI(TAG, "A/B OTA staged %d bytes crc=0x%08lx — streaming to STM32 app",
+             received, (unsigned long)crc);
+    httpd_resp_sendstr(req, "OK");
     return ESP_OK;
 }
 
@@ -903,6 +1076,20 @@ static httpd_handle_t start_webserver(void)
             .handler = stm32_ota_handler,
         };
         httpd_register_uri_handler(server, &stm32_ota);
+
+        httpd_uri_t stm32_ota_ab = {
+            .uri = "/ota_stm32_ab",
+            .method = HTTP_POST,
+            .handler = stm32_ab_ota_handler,
+        };
+        httpd_register_uri_handler(server, &stm32_ota_ab);
+
+        httpd_uri_t ab_status = {
+            .uri = "/ab_status",
+            .method = HTTP_GET,
+            .handler = ab_status_handler,
+        };
+        httpd_register_uri_handler(server, &ab_status);
 
         httpd_uri_t flash_status = {
             .uri = "/flash_status",
@@ -1302,6 +1489,21 @@ static void spi_task(void *arg)
             pending_ttl--;
         }
 
+        /* A/B OTA: ride the next image chunk in our TX _reserved at the offset
+         * the STM32 last requested (lock-step). The STM32 ignores chunks that
+         * aren't at its expected offset, so resends are harmless. */
+        if (ota_ab_streaming && ota_ab_part && ota_ab_send_offset < ota_ab_img_size) {
+            spi_ota_data_t *od = (spi_ota_data_t *)tx->_reserved;
+            uint16_t n = SPI_OTA_CHUNK_BYTES;
+            if (ota_ab_send_offset + n > ota_ab_img_size)
+                n = (uint16_t)(ota_ab_img_size - ota_ab_send_offset);
+            od->magic = SPI_OTA_DATA_MAGIC;
+            od->offset = ota_ab_send_offset;
+            od->len = n;
+            memset(od->data, 0xFF, SPI_OTA_CHUNK_BYTES);
+            esp_partition_read(ota_ab_part, ota_ab_send_offset, od->data, n);
+        }
+
         tx->header.flags = flags;
         tx->header.crc16 = spi_frame_crc(tx);
 
@@ -1327,6 +1529,63 @@ static void spi_task(void *arg)
                 if (expected_crc != rx->header.crc16) {
                     ESP_LOGW(TAG, "SPI CRC mismatch");
                     continue;
+                }
+
+                /* Valid frame → STM32 is alive and running its app */
+                int64_t _now_us = esp_timer_get_time();
+                int64_t _prev_ok = last_spi_ok_us;
+                last_spi_ok_us = _now_us;
+
+                /* A/B update closure: after we send COMMIT the STM32 swaps banks
+                 * and resets. The freshly-swapped image asserts SPI_FLAG_BOOT on
+                 * its first frames — a deterministic "I just rebooted" signal we
+                 * use to report completion, regardless of how fast it boots.
+                 * Fallback: a >0.7s silence gap (for old images that predate the
+                 * boot flag). Either way require >0.8s since commit so a failed
+                 * commit (no reset, no gap, no boot flag) can't false-fire. */
+                bool stm_rebooted = (rx->header.flags & SPI_FLAG_BOOT) != 0;
+                if (ota_ab_awaiting_reboot && (_now_us - ota_ab_commit_us) > 800000 &&
+                    (stm_rebooted ||
+                     (_prev_ok != 0 && (_now_us - _prev_ok) > 700000))) {
+                    ota_ab_awaiting_reboot = false;
+                    snprintf(ota_ab_done_ver, sizeof(ota_ab_done_ver), "%.15s",
+                             rx->state.comms_stm32FwVersion);
+                    ota_ab_ui_state = 3;   /* done — picked up by /ab_status poll */
+                    ESP_LOGI(TAG, "A/B update complete — STM32 running %s", ota_ab_done_ver);
+                }
+
+                /* A/B OTA progress: STM32 reports next wanted offset + state in
+                 * its TX _reserved. Advance our send pointer; finish on READY. */
+                if (ota_ab_streaming) {
+                    const spi_ota_status_t *os = (const spi_ota_status_t *)rx->_reserved;
+                    if (os->magic == SPI_OTA_STATUS_MAGIC) {
+                        static int last_ab_bcast = -1;
+                        ota_ab_send_offset = os->next_offset;
+                        ota_ab_pct = ota_ab_img_size
+                            ? (int)((uint64_t)os->bytes_ok * 100 / ota_ab_img_size) : 0;
+                        if (ota_ab_pct != last_ab_bcast) {
+                            last_ab_bcast = ota_ab_pct;
+                            char j[32];
+                            snprintf(j, sizeof(j), "{\"abFlash\":%d}", ota_ab_pct);
+                            ws_broadcast(j);
+                        }
+                        if (os->state == OTA_ST_READY) {
+                            cmd_enqueue(SPI_CMD_OTA_COMMIT, NULL, 0);
+                            ota_ab_streaming = false;
+                            ota_ab_pct = 100;
+                            last_ab_bcast = -1;
+                            ota_ab_ui_state = 2;             /* rebooting */
+                            ota_ab_awaiting_reboot = true;   /* watch for the swap+reboot */
+                            ota_ab_commit_us = esp_timer_get_time();
+                            ESP_LOGI(TAG, "A/B OTA: image received, commit sent");
+                        } else if (os->state == OTA_ST_ERROR) {
+                            ota_ab_streaming = false;
+                            ota_ab_pct = -1;
+                            last_ab_bcast = -1;
+                            ota_ab_ui_state = 4;             /* error */
+                            ESP_LOGE(TAG, "A/B OTA: STM32 reported error %u", os->err);
+                        }
+                    }
                 }
 
                 /* Config sync: adopt if STM32 seq is higher */
@@ -1727,6 +1986,60 @@ static void laser_wake_check(void)
 }
 
 
+/* ── STM32 self-heal watchdog ──────────────────────────────────────
+ * If the STM32 stops producing valid SPI frames (e.g. an interrupted flash
+ * left it without a runnable image), and a known-good staged image exists,
+ * auto-reflash it from the retained partition. Bounded attempts + backoff so
+ * a genuinely unrecoverable unit doesn't loop forever (flash wear / battery). */
+#define STM32_WD_BOOT_GRACE_MS  30000      /* let STM32 boot + start SPI before judging */
+#define STM32_WD_DEAD_US        15000000LL /* no valid frame for 15s = dead */
+#define STM32_WD_MAX_ATTEMPTS   5
+
+static void stm32_watchdog_task(void *arg)
+{
+    vTaskDelay(pdMS_TO_TICKS(STM32_WD_BOOT_GRACE_MS));
+    int attempts = 0;
+
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(5000));
+
+        /* Don't interfere while a flash (web OTA or recovery) is in progress */
+        if (stm32_flash_pct >= 0) continue;
+
+        int64_t now = esp_timer_get_time();
+        bool alive = (last_spi_ok_us != 0) && ((now - last_spi_ok_us) < STM32_WD_DEAD_US);
+        if (alive) { attempts = 0; continue; }
+
+        if (attempts >= STM32_WD_MAX_ATTEMPTS)
+            continue;  /* gave up — manual intervention needed */
+
+        uint32_t sz = 0, crc = 0;
+        if (!staged_meta_load(&sz, &crc))
+            continue;  /* nothing staged to recover with */
+
+        const esp_partition_t *part = esp_partition_find_first(
+            ESP_PARTITION_TYPE_DATA, 0x80, STM32FW_PARTITION_LABEL);
+        if (!part) continue;
+
+        /* Trust the staged image only if it's still intact */
+        if (stm32_flash_crc32(part, sz) != crc) {
+            ESP_LOGE(TAG, "Recovery aborted: staged image CRC mismatch");
+            attempts = STM32_WD_MAX_ATTEMPTS;  /* don't retry a corrupt image */
+            continue;
+        }
+
+        attempts++;
+        ESP_LOGW(TAG, "STM32 unresponsive — auto-recovery flash %d/%d (%lu bytes)",
+                 attempts, STM32_WD_MAX_ATTEMPTS, (unsigned long)sz);
+        ws_broadcast("{\"stm32Recover\":1}");
+
+        do_stm32_flash(part, sz);
+
+        /* Back off (grows with attempts) to let it boot + check in before re-judging */
+        vTaskDelay(pdMS_TO_TICKS(STM32_WD_BOOT_GRACE_MS * attempts));
+    }
+}
+
 /* ── Main ──────────────────────────────────────────────────────── */
 
 void app_main(void)
@@ -1776,6 +2089,7 @@ void app_main(void)
     xTaskCreate(audio_push_task, "audio_push", 3072, NULL, 4, NULL);
     xTaskCreate(power_mgmt_task, "pwr_mgmt", 4096, NULL, 2, NULL);
     xTaskCreate(dns_task, "dns", 4096, NULL, 2, NULL);
+    xTaskCreate(stm32_watchdog_task, "stm32_wd", 4096, NULL, 2, NULL);
 
     ESP_LOGI(TAG, "Bridge ready — WiFi AP + SPI + WebSocket");
 }

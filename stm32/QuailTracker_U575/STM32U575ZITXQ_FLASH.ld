@@ -41,12 +41,22 @@ _estack = ORIGIN(RAM) + LENGTH(RAM);	/* end of "RAM" Ram type memory */
 _Min_Heap_Size = 0x1000;	/* 4KB C heap (FreeRTOS heap is separate) */
 _Min_Stack_Size = 0x800;	/* 2KB MSP/ISR stack (task stacks are separate) */
 
-/* Memories definition */
+/* Memories definition
+ *
+ * Dual-bank A/B OTA: the application is confined to ONE 512 KB bank so the
+ * other bank can hold the alternate (A/B) image. The active bank is always
+ * mapped at 0x08000000 (hardware SWAP_BANK remaps the physical bank), so the
+ * top two 8 KB pages of the bank window are reserved for config + health and
+ * stay correctly addressed regardless of which physical bank is live:
+ *   0x0807C000  health (1 page)
+ *   0x0807E000  config (1 page)
+ * The code/data region is therefore 512K - 16K = 496K.
+ */
 MEMORY
 {
   RAM	(xrw)	: ORIGIN = 0x20000000,	LENGTH = 768K
   SRAM4	(xrw)	: ORIGIN = 0x28000000,	LENGTH = 16K
-  FLASH	(rx)	: ORIGIN = 0x08000000,	LENGTH = 1024K
+  FLASH	(rx)	: ORIGIN = 0x08000000,	LENGTH = 496K
 }
 
 /* Sections */
