@@ -37,7 +37,7 @@
 #include "spi_protocol.h"
 
 #define TAG "BRIDGE"
-#define ESP_FW_VERSION "0.4.11"
+#define ESP_FW_VERSION "0.4.12"
 
 static bool wifi_started = false;
 
@@ -1989,29 +1989,63 @@ static void laser_wake_check(void)
 /* ── STM32 self-heal watchdog ──────────────────────────────────────
  * If the STM32 stops producing valid SPI frames (e.g. an interrupted flash
  * left it without a runnable image), and a known-good staged image exists,
- * auto-reflash it from the retained partition. Bounded attempts + backoff so
- * a genuinely unrecoverable unit doesn't loop forever (flash wear / battery). */
-#define STM32_WD_BOOT_GRACE_MS  30000      /* let STM32 boot + start SPI before judging */
-#define STM32_WD_DEAD_US        15000000LL /* no valid frame for 15s = dead */
-#define STM32_WD_MAX_ATTEMPTS   5
+ * auto-reflash it from the retained partition.
+ *
+ * Redesigned (v0.4.12) to fix the loop that clobbered bench flashes:
+ *  - Recovery is DISARMED (attempts reset) only after the STM32 has been
+ *    CONTINUOUSLY alive for STABLE_US — not on a momentary blip. The old code
+ *    reset on any single alive read, so a crash-looping image that flashed SPI
+ *    once per boot never hit the cap → infinite re-flash.
+ *  - DEAD_US is generous (30s) so a normal flash/boot or a brief debugger halt
+ *    doesn't trip it.
+ *  - Hard cap: after MAX_ATTEMPTS unrecovered, give up permanently (logged
+ *    once) until the STM32 proves stable or the ESP reboots. Bench tip: for
+ *    heavy J-Link/debug work, flash an ESP build with this task disabled. */
+#define STM32_WD_BOOT_GRACE_MS  30000       /* let STM32 boot + start SPI before judging */
+#define STM32_WD_DEAD_US        30000000LL  /* no valid frame for 30s = dead */
+#define STM32_WD_STABLE_US      120000000LL /* continuously alive 120s => image good, re-arm */
+#define STM32_WD_MAX_ATTEMPTS   3
 
 static void stm32_watchdog_task(void *arg)
 {
     vTaskDelay(pdMS_TO_TICKS(STM32_WD_BOOT_GRACE_MS));
-    int attempts = 0;
+    int     attempts    = 0;
+    int64_t alive_since = 0;      /* esp_timer time the STM became continuously alive */
+    bool    gave_up     = false;
 
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(5000));
 
         /* Don't interfere while a flash (web OTA or recovery) is in progress */
-        if (stm32_flash_pct >= 0) continue;
+        if (stm32_flash_pct >= 0) { alive_since = 0; continue; }
 
         int64_t now = esp_timer_get_time();
         bool alive = (last_spi_ok_us != 0) && ((now - last_spi_ok_us) < STM32_WD_DEAD_US);
-        if (alive) { attempts = 0; continue; }
 
-        if (attempts >= STM32_WD_MAX_ATTEMPTS)
-            continue;  /* gave up — manual intervention needed */
+        if (alive) {
+            if (alive_since == 0) alive_since = now;
+            /* Re-arm only after SUSTAINED liveness — a crash-looper that blips
+             * SPI each boot stays below STABLE_US and must not reset attempts. */
+            if (attempts > 0 && (now - alive_since) >= STM32_WD_STABLE_US) {
+                ESP_LOGI(TAG, "STM32 stable %ds — recovery re-armed",
+                         (int)(STM32_WD_STABLE_US / 1000000));
+                attempts = 0;
+                gave_up  = false;
+            }
+            continue;
+        }
+
+        /* STM32 has been silent past DEAD_US */
+        alive_since = 0;
+
+        if (attempts >= STM32_WD_MAX_ATTEMPTS) {
+            if (!gave_up) {
+                ESP_LOGE(TAG, "STM32 unrecoverable after %d attempts — giving up "
+                              "(needs manual flash)", STM32_WD_MAX_ATTEMPTS);
+                gave_up = true;
+            }
+            continue;
+        }
 
         uint32_t sz = 0, crc = 0;
         if (!staged_meta_load(&sz, &crc))
@@ -2029,14 +2063,15 @@ static void stm32_watchdog_task(void *arg)
         }
 
         attempts++;
-        ESP_LOGW(TAG, "STM32 unresponsive — auto-recovery flash %d/%d (%lu bytes)",
-                 attempts, STM32_WD_MAX_ATTEMPTS, (unsigned long)sz);
+        ESP_LOGW(TAG, "STM32 unresponsive %ds — recovery flash %d/%d (%lu bytes)",
+                 (int)(STM32_WD_DEAD_US / 1000000), attempts, STM32_WD_MAX_ATTEMPTS,
+                 (unsigned long)sz);
         ws_broadcast("{\"stm32Recover\":1}");
 
         do_stm32_flash(part, sz);
 
-        /* Back off (grows with attempts) to let it boot + check in before re-judging */
-        vTaskDelay(pdMS_TO_TICKS(STM32_WD_BOOT_GRACE_MS * attempts));
+        /* Let it boot + check in before judging again */
+        vTaskDelay(pdMS_TO_TICKS(STM32_WD_BOOT_GRACE_MS));
     }
 }
 
@@ -2089,15 +2124,10 @@ void app_main(void)
     xTaskCreate(audio_push_task, "audio_push", 3072, NULL, 4, NULL);
     xTaskCreate(power_mgmt_task, "pwr_mgmt", 4096, NULL, 2, NULL);
     xTaskCreate(dns_task, "dns", 4096, NULL, 2, NULL);
-    /* STM32 self-heal watchdog DISABLED for now. It re-flashes the staged image
-     * whenever the STM goes silent on SPI — but with a faulting staged image it
-     * loops (attempts reset each time the bad image briefly talks before
-     * crashing), and it clobbers debugger flashes during bench work. Needs a
-     * redesign before re-enabling: cap retries hard (don't reset on a brief
-     * blip), never fight an active debugger, and don't re-flash a staged image
-     * that itself fails to confirm.
-     * xTaskCreate(stm32_watchdog_task, "stm32_wd", 4096, NULL, 2, NULL); */
-    (void)stm32_watchdog_task;  /* keep referenced to avoid unused warning */
+    /* STM32 self-heal watchdog — redesigned: re-arms only after sustained
+     * liveness, generous 30s dead-timeout, hard 3-attempt cap (no infinite
+     * re-flash loop, tolerant of normal flash/boot). */
+    xTaskCreate(stm32_watchdog_task, "stm32_wd", 4096, NULL, 2, NULL);
 
     ESP_LOGI(TAG, "Bridge ready — WiFi AP + SPI + WebSocket");
 }
