@@ -1787,6 +1787,35 @@ static void printGpsStatus(void)
     printf("==================\r\n");
 }
 
+/* Configure the GPS-facing USART1 pins (PA9 TX -> GPS RXD, PA10 RX <- GPS TXD).
+ * Powered: PA9/PA10 as USART1 AF7. Unpowered: PA9 driven LOW (so we never push
+ * 3.3V into the GPS RX clamp = back-power) and PA10 as input-pull-up (so the
+ * floating RX line doesn't generate spurious UART interrupts). */
+static void gpsUartPins(uint8_t powered)
+{
+    GPIO_InitTypeDef g = {0};
+    if (powered) {
+        g.Pin       = GPIO_PIN_9 | GPIO_PIN_10;
+        g.Mode      = GPIO_MODE_AF_PP;
+        g.Pull      = GPIO_NOPULL;
+        g.Speed     = GPIO_SPEED_FREQ_VERY_HIGH;
+        g.Alternate = GPIO_AF7_USART1;
+        HAL_GPIO_Init(GPIOA, &g);
+    } else {
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9, GPIO_PIN_RESET); /* preset TX low */
+        g.Pin   = GPIO_PIN_9;
+        g.Mode  = GPIO_MODE_OUTPUT_PP;
+        g.Pull  = GPIO_NOPULL;
+        g.Speed = GPIO_SPEED_FREQ_LOW;
+        HAL_GPIO_Init(GPIOA, &g);
+        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_9, GPIO_PIN_RESET);
+        g.Pin  = GPIO_PIN_10;
+        g.Mode = GPIO_MODE_INPUT;
+        g.Pull = GPIO_PULLUP;
+        HAL_GPIO_Init(GPIOA, &g);
+    }
+}
+
 static void gpsSetPower(uint8_t on)
 {
     if (on) {
@@ -1797,15 +1826,24 @@ static void gpsSetPower(uint8_t on)
          * whatever timestamp the first fix-of-the-day delivered. */
         gpsData.valid = 0;
         gpsData.fix = 0;
-        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_SET);   /* GPS_EN high */
+        /* Rail up first, let it settle, THEN release the GPS-facing signals —
+         * never drive an unpowered input. */
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_SET);   /* GPS_VCC EN high */
         osDelay(10);
-        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_SET);   /* WAKE high */
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_SET);   /* release nRESET */
+        gpsUartPins(1);                                        /* PA9/PA10 -> USART1 AF */
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_SET);   /* WAKE/ON-OFF high */
         gpsPowered = 1;
         printf("GPS: Power ON\r\n");
     } else {
-        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_RESET); /* WAKE low */
+        /* Safe EVERY GPS-facing signal to 0 BEFORE cutting VCC. Otherwise the
+         * idle-high UART TX (PA9) and nRESET (PD15) back-power the GPS through
+         * its IO clamps — measured as a ~+87mA *increase* when "off". */
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_14, GPIO_PIN_RESET); /* WAKE/ON-OFF low */
+        gpsUartPins(0);                                        /* PA9 low, PA10 pull-up */
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_15, GPIO_PIN_RESET); /* hold nRESET low */
         osDelay(10);
-        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_RESET); /* GPS_EN low */
+        HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_RESET); /* cut GPS_VCC */
         gpsPowered = 0;
         printf("GPS: Power OFF\r\n");
     }
