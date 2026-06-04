@@ -118,13 +118,18 @@ public partial class ImportViewModel : ObservableObject
                             Latitude = audioFile.Latitude ?? 0,
                             Longitude = audioFile.Longitude ?? 0,
                             Elevation = audioFile.Altitude,
+                            MicHeadingDeg = audioFile.MicHeadingDeg,
                         });
                     }
-                    else if (!existing.HasValidLocation && audioFile.Latitude.HasValue)
+                    else
                     {
-                        existing.Latitude = audioFile.Latitude.Value;
-                        existing.Longitude = audioFile.Longitude ?? 0;
-                        existing.Elevation = audioFile.Altitude;
+                        if (!existing.HasValidLocation && audioFile.Latitude.HasValue)
+                        {
+                            existing.Latitude = audioFile.Latitude.Value;
+                            existing.Longitude = audioFile.Longitude ?? 0;
+                            existing.Elevation = audioFile.Altitude;
+                        }
+                        existing.MicHeadingDeg ??= audioFile.MicHeadingDeg;
                     }
                 }
 
@@ -186,13 +191,18 @@ public partial class ImportViewModel : ObservableObject
                             Latitude = file.Latitude ?? 0,
                             Longitude = file.Longitude ?? 0,
                             Elevation = file.Altitude,
+                            MicHeadingDeg = file.MicHeadingDeg,
                         });
                     }
-                    else if (!existing.HasValidLocation && file.Latitude.HasValue)
+                    else
                     {
-                        existing.Latitude = file.Latitude.Value;
-                        existing.Longitude = file.Longitude ?? 0;
-                        existing.Elevation = file.Altitude;
+                        if (!existing.HasValidLocation && file.Latitude.HasValue)
+                        {
+                            existing.Latitude = file.Latitude.Value;
+                            existing.Longitude = file.Longitude ?? 0;
+                            existing.Elevation = file.Altitude;
+                        }
+                        existing.MicHeadingDeg ??= file.MicHeadingDeg;
                     }
                 }
             }

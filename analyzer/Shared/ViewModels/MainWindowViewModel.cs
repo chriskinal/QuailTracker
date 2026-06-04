@@ -25,6 +25,9 @@ namespace QuailTracker.Analyzer.Shared.ViewModels;
 
 public partial class MainWindowViewModel : ObservableObject
 {
+    /// <summary>Window title including the app version, e.g. "QuailTracker Analyzer v26.0.0".</summary>
+    public string WindowTitle => AppInfo.Title;
+
     public ConfigService ConfigService { get; }
 
     /// <summary>

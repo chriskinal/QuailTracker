@@ -48,6 +48,14 @@ public partial class AudioFile
     public double? TemperatureCelsius { get; set; }
     public double? HumidityPercent { get; set; }
 
+    /// <summary>
+    /// Mic-array orientation in true-north degrees (0-359), from the MIC_HEADING
+    /// metadata tag (installer points the device arrow with a compass). Null when
+    /// absent or unset. Used to convert the relative stereo bearing into an
+    /// absolute geographic bearing for two-station localization.
+    /// </summary>
+    public double? MicHeadingDeg { get; set; }
+
     [GeneratedRegex(@"^(\d{8})_(\d{6})_(.+)\.(wav|flac)$", RegexOptions.IgnoreCase)]
     private static partial Regex FileNamePattern();
 

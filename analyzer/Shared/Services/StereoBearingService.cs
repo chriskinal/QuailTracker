@@ -33,8 +33,8 @@ public class StereoBearingService
 {
     private readonly IAudioFileService _audioService;
 
-    /// <summary>Mic spacing in meters (default 0.12m = 12cm).</summary>
-    public double MicSpacingMeters { get; set; } = 0.12;
+    /// <summary>Mic spacing in meters (measured: 0.130m = 130mm between the L/R breakouts).</summary>
+    public double MicSpacingMeters { get; set; } = 0.130;
 
     /// <summary>Temperature in Celsius for speed of sound calculation.</summary>
     public double TemperatureCelsius { get; set; } = 20.0;

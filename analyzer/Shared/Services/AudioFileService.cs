@@ -117,6 +117,42 @@ public class AudioFileService : IAudioFileService
                     {
                         audioFile.HumidityPercent = humPct;
                     }
+                    if (tags.TryGetValue("MIC_HEADING", out var hdgStr) &&
+                        double.TryParse(hdgStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var hdg) &&
+                        hdg >= 0 && hdg < 360) // rejects the 65535 "unset" sentinel and junk
+                    {
+                        audioFile.MicHeadingDeg = hdg;
+                    }
+                }
+                // Parse WAV GUANO metadata chunk (firmware writes a "guan" chunk).
+                else if (filePath.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
+                {
+                    var guano = ReadWavGuano(filePath);
+                    if (guano.TryGetValue("Loc Position", out var locStr))
+                    {
+                        var parts = locStr.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                        if (parts.Length >= 2 &&
+                            double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var lat) &&
+                            double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var lon))
+                        {
+                            audioFile.Latitude = lat;
+                            audioFile.Longitude = lon;
+                        }
+                    }
+                    if (guano.TryGetValue("Loc Elevation", out var elevStr) &&
+                        double.TryParse(elevStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var elev))
+                    {
+                        audioFile.Altitude = elev;
+                    }
+                    if (guano.TryGetValue("QuailTracker|Station ID", out var sid) && !string.IsNullOrEmpty(sid))
+                        audioFile.StationId = sid;
+
+                    if (guano.TryGetValue("QuailTracker|Mic Heading", out var hdgStr) &&
+                        double.TryParse(hdgStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var hdg) &&
+                        hdg >= 0 && hdg < 360) // rejects the 65535 "unset" sentinel and junk
+                    {
+                        audioFile.MicHeadingDeg = hdg;
+                    }
                 }
 
                 audioFile.IsValid = true;
@@ -571,6 +607,69 @@ public class AudioFileService : IAudioFileService
             var eq = comment.IndexOf('=');
             if (eq > 0)
                 tags[comment[..eq]] = comment[(eq + 1)..];
+        }
+    }
+
+    /// <summary>
+    /// Reads the GUANO metadata chunk ("guan" FOURCC) from a WAV file and returns
+    /// its newline-separated "Key: Value" fields. Keys retain their full namespace
+    /// (e.g. "QuailTracker|Mic Heading"); GUANO is UTF-8.
+    /// </summary>
+    private static Dictionary<string, string> ReadWavGuano(string filePath)
+    {
+        var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            using var fs = File.OpenRead(filePath);
+            if (fs.Length < 12) return fields;
+
+            var hdr = new byte[12];
+            if (fs.Read(hdr, 0, 12) < 12) return fields;
+            // Expect "RIFF"...."WAVE"
+            if (hdr[0] != 'R' || hdr[1] != 'I' || hdr[2] != 'F' || hdr[3] != 'F' ||
+                hdr[8] != 'W' || hdr[9] != 'A' || hdr[10] != 'V' || hdr[11] != 'E')
+                return fields;
+
+            // Walk chunks: 4-byte id + 4-byte little-endian size + data (padded to even).
+            var chunk = new byte[8];
+            while (fs.Position + 8 <= fs.Length)
+            {
+                if (fs.Read(chunk, 0, 8) < 8) break;
+                var id = Encoding.ASCII.GetString(chunk, 0, 4);
+                var size = BitConverter.ToUInt32(chunk, 4);
+
+                if (id == "guan")
+                {
+                    var len = (int)Math.Min(size, (uint)(fs.Length - fs.Position));
+                    var data = new byte[len];
+                    if (fs.Read(data, 0, len) < len) break;
+                    ParseGuanoText(Encoding.UTF8.GetString(data), fields);
+                    break;
+                }
+
+                var advance = size + (size & 1); // chunks are word-aligned
+                fs.Position += advance;
+            }
+        }
+        catch
+        {
+            // Non-fatal — file metadata is optional
+        }
+        return fields;
+    }
+
+    private static void ParseGuanoText(string text, Dictionary<string, string> fields)
+    {
+        foreach (var raw in text.Split('\n'))
+        {
+            var line = raw.TrimStart('﻿').Trim('\r', '\n').Trim();
+            if (line.Length == 0) continue;
+            // Split on the FIRST colon; values (e.g. ISO timestamps) may contain colons.
+            var colon = line.IndexOf(':');
+            if (colon <= 0) continue;
+            var key = line[..colon].Trim();
+            var value = line[(colon + 1)..].Trim();
+            fields[key] = value;
         }
     }
 

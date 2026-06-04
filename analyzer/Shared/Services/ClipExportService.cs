@@ -225,6 +225,8 @@ public class ClipExportService
         coding.Append(string.Create(inv, $"CONFIDENCE={d.Confidence:F4}\r\n"));
         if (!double.IsNaN(d.BearingDeg))
             coding.Append(string.Create(inv, $"BEARING_DEG={d.BearingDeg:F2}\r\n"));
+        if (audioFile?.MicHeadingDeg is { } micHeading)
+            coding.Append(string.Create(inv, $"MIC_HEADING_DEG={micHeading:F0}\r\n"));
         if (audioFile?.Latitude is { } lat)
             coding.Append(string.Create(inv, $"LATITUDE={lat:F6}\r\n"));
         if (audioFile?.Longitude is { } lon)

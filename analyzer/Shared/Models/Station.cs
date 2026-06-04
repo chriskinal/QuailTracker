@@ -34,6 +34,16 @@ public class Station
     public DateTime? LastRecordingTime { get; set; }
     public int RecordingCount { get; set; }
 
+    /// <summary>
+    /// Mic-array orientation in true-north degrees (0-359). The direction the
+    /// device's "forward" axis points, read from the MIC_HEADING recording
+    /// metadata. Null when unknown. Required to convert a detection's relative
+    /// stereo bearing into an absolute bearing for bearing-intersection localization.
+    /// </summary>
+    public double? MicHeadingDeg { get; set; }
+
+    public bool HasHeading => MicHeadingDeg is >= 0 and < 360;
+
     public bool HasValidLocation =>
         Latitude >= -90 && Latitude <= 90 &&
         Longitude >= -180 && Longitude <= 180 &&
