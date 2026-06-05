@@ -67,6 +67,16 @@ public class Localization
     /// <summary>Quality indicator (0-1) based on geometry and signal quality.</summary>
     public double QualityScore { get; set; }
 
+    /// <summary>
+    /// True when the time differences were measured by PPS-anchored waveform
+    /// cross-correlation (sub-sample). False = coarse detection-timestamp fallback
+    /// (one or more recordings lacked a PPS anchor).
+    /// </summary>
+    public bool PpsRefined { get; set; }
+
+    /// <summary>Compact timing-source label for the UI ("PPS" vs "Coarse").</summary>
+    public string TimingSource => PpsRefined ? "PPS" : "Coarse";
+
     public string QualityLabel => QualityScore switch
     {
         >= 0.8 => "Excellent",

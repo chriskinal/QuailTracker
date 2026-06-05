@@ -126,6 +126,7 @@
                         <DataGridTextColumn Header="Longitude" Binding="{Binding Longitude, StringFormat='{}{0:F6}'}" Width="90" />
                         <DataGridTextColumn Header="Quality" Binding="{Binding QualityLabel}" Width="70" />
                         <DataGridTextColumn Header="Stations" Binding="{Binding StationIds.Count}" Width="60" />
+                        <DataGridTextColumn Header="Timing" Binding="{Binding TimingSource}" Width="64" />
                     </DataGrid.Columns>
                 </DataGrid>
             </Grid>
@@ -144,6 +145,7 @@
                         <TextBlock Text="{Binding SelectedLocalization.QualityScore, StringFormat='Quality: {0:P0}'}" />
                         <TextBlock Text="{Binding SelectedLocalization.ErrorEllipseMajor, StringFormat='Error (major): {0:F1}m'}" />
                         <TextBlock Text="{Binding SelectedLocalization.ErrorEllipseMinor, StringFormat='Error (minor): {0:F1}m'}" />
+                        <TextBlock Text="{Binding SelectedLocalization.TimingSource, StringFormat='Timing: {0}'}" />
                     </StackPanel>
                 </StackPanel>
                 <Button Grid.Column="1"

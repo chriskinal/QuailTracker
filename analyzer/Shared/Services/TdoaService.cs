@@ -37,6 +37,19 @@ public class TdoaService : ITdoaService
     public double SpeedOfSound { get; set; } = 343.0; // m/s at ~20°C
     public double MaxTimeDifferenceMs { get; set; } = 3000; // 3 seconds
 
+    private readonly IAudioFileService? _audio;
+    private readonly CrossStationTdoaService? _xtdoa;
+
+    /// <param name="audio">
+    /// Audio service used for PPS-anchored cross-correlation refinement. When null,
+    /// localization falls back to coarse detection-timestamp differences.
+    /// </param>
+    public TdoaService(IAudioFileService? audio = null)
+    {
+        _audio = audio;
+        _xtdoa = audio != null ? new CrossStationTdoaService(audio) : null;
+    }
+
     public IReadOnlyList<DetectionMatch> MatchDetections(
         IReadOnlyList<Detection> detections,
         IReadOnlyList<Station> stations)
@@ -110,13 +123,28 @@ public class TdoaService : ITdoaService
         if (!match.IsValidForLocalization)
             return null;
 
+        var cache = await BuildFileCacheAsync(
+            match.Detections.Select(d => d.Detection.AudioFilePath), ct);
+        return await LocalizeInternalAsync(match, cache, ct);
+    }
+
+    private async Task<Localization?> LocalizeInternalAsync(
+        DetectionMatch match, Dictionary<string, AudioFile> cache, CancellationToken ct)
+    {
+        if (!match.IsValidForLocalization)
+            return null;
+
+        // Observed time differences relative to the FIRST detection (= the
+        // multilateration reference, station index 0). PPS-anchored cross-correlation
+        // when available, else coarse detection timestamps.
+        var (timeDiffs, refined) = await ComputeTimeDiffsAsync(match, cache, ct);
+
         return await Task.Run(() =>
         {
             ct.ThrowIfCancellationRequested();
 
             // Use least squares hyperbolic multilateration
-            var stations = match.Detections.Select(d => d.Station).ToList();
-            var timeDiffs = match.Detections.Select(d => d.TimeDifferenceMs / 1000.0).ToList();
+            var stations = match.Detections.Select(d => d.Station).ToArray();
 
             // Initial guess: centroid of stations
             var centerLat = stations.Average(s => s.Latitude);
@@ -124,17 +152,14 @@ public class TdoaService : ITdoaService
 
             // Iterative least squares optimization
             var (lat, lon, residual) = OptimizeLocation(
-                centerLat, centerLon,
-                stations.ToArray(),
-                timeDiffs.ToArray());
+                centerLat, centerLon, stations, timeDiffs);
 
             // Calculate confidence ellipse
             var (majorAxis, minorAxis, rotation) = CalculateErrorEllipse(
-                lat, lon, stations.ToArray(), timeDiffs.ToArray());
+                lat, lon, stations, timeDiffs);
 
             // Quality score based on geometry and residual
-            var qualityScore = CalculateQualityScore(
-                stations.ToArray(), lat, lon, residual);
+            var qualityScore = CalculateQualityScore(stations, lat, lon, residual);
 
             return new Localization
             {
@@ -149,7 +174,8 @@ public class TdoaService : ITdoaService
                 ErrorEllipseMinor = minorAxis,
                 ErrorEllipseRotation = rotation,
                 ResidualError = residual,
-                QualityScore = qualityScore
+                QualityScore = qualityScore,
+                PpsRefined = refined
             };
         }, ct);
     }
@@ -161,12 +187,17 @@ public class TdoaService : ITdoaService
     {
         var results = new List<Localization>();
 
+        // Load each contributing recording once (PPS metadata + header rate) and
+        // share across all matches.
+        var cache = await BuildFileCacheAsync(
+            matches.SelectMany(m => m.Detections.Select(d => d.Detection.AudioFilePath)), ct);
+
         for (var i = 0; i < matches.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
             progress?.Report((i + 1, matches.Count));
 
-            var localization = await LocalizeAsync(matches[i], ct);
+            var localization = await LocalizeInternalAsync(matches[i], cache, ct);
             if (localization != null)
             {
                 results.Add(localization);
@@ -174,6 +205,72 @@ public class TdoaService : ITdoaService
         }
 
         return results;
+    }
+
+    private async Task<Dictionary<string, AudioFile>> BuildFileCacheAsync(
+        IEnumerable<string> paths, CancellationToken ct)
+    {
+        var cache = new Dictionary<string, AudioFile>();
+        if (_audio == null) return cache;
+
+        foreach (var path in paths.Distinct())
+        {
+            ct.ThrowIfCancellationRequested();
+            if (cache.ContainsKey(path)) continue;
+            try { cache[path] = await _audio.LoadFileAsync(path, ct); }
+            catch { /* unreadable file — falls back to timestamp timing */ }
+        }
+        return cache;
+    }
+
+    /// <summary>
+    /// Returns observed inter-station time differences (seconds, relative to the
+    /// first detection) and whether they were PPS-refined. Refinement requires the
+    /// reference and every other recording to carry a PPS anchor and a successful
+    /// GCC-PHAT correlation; otherwise the whole match falls back to detection
+    /// timestamps so the result stays self-consistent.
+    /// </summary>
+    private async Task<(double[] timeDiffs, bool refined)> ComputeTimeDiffsAsync(
+        DetectionMatch match, Dictionary<string, AudioFile> cache, CancellationToken ct)
+    {
+        var dets = match.Detections;
+        var n = dets.Count;
+        var refDet = dets[0];
+
+        // Fallback baseline: coarse detection-timestamp differences.
+        var fallback = new double[n];
+        for (var i = 0; i < n; i++)
+            fallback[i] = (dets[i].Detection.Timestamp - refDet.Detection.Timestamp).TotalSeconds;
+
+        if (_xtdoa == null ||
+            !cache.TryGetValue(refDet.Detection.AudioFilePath, out var refFile) ||
+            !refFile.HasPpsTiming)
+        {
+            return (fallback, false);
+        }
+
+        var refined = new double[n]; // [0] = 0 (reference)
+        for (var i = 1; i < n; i++)
+        {
+            if (!cache.TryGetValue(dets[i].Detection.AudioFilePath, out var otherFile) ||
+                !otherFile.HasPpsTiming)
+                return (fallback, false);
+
+            var baseline = CalculateDistance(
+                refDet.Station.Latitude, refDet.Station.Longitude,
+                dets[i].Station.Latitude, dets[i].Station.Longitude);
+
+            var result = await _xtdoa.EstimateAsync(
+                refFile, refDet.Detection.OffsetSeconds, refDet.Detection.DurationSeconds,
+                otherFile, baseline, SpeedOfSound, ct);
+
+            if (result == null)
+                return (fallback, false);
+
+            refined[i] = result.TdoaSeconds;
+        }
+
+        return (refined, true);
     }
 
     public double CalculateDistance(double lat1, double lon1, double lat2, double lon2)

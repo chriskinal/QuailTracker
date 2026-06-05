@@ -56,6 +56,54 @@ public partial class AudioFile
     /// </summary>
     public double? MicHeadingDeg { get; set; }
 
+    // --- PPS / GPS timing (for cross-station TDOA) ----------------------------
+    // The firmware latches a GPS 1PPS edge against the audio sample counter and
+    // writes the anchor into the recording metadata (FLAC Vorbis comments:
+    // PPS_SYNC_UTC / PPS_SYNC_SAMPLE / PPS_EDGES / PPS_SAMPLE_RATE). The PPS
+    // sample rate is the *measured* rate — the header's nominal ~48 kHz is wrong
+    // by ~1% (MSI clock), so all timing MUST use PpsSampleRate, never SampleRate.
+
+    /// <summary>UTC instant of the GPS 1PPS edge latched during recording (PPS_SYNC_UTC). Null if absent.</summary>
+    public DateTime? PpsSyncUtc { get; set; }
+
+    /// <summary>Native sample index (from recording start) at which <see cref="PpsSyncUtc"/> was latched (PPS_SYNC_SAMPLE).</summary>
+    public long? PpsSyncSample { get; set; }
+
+    /// <summary>Number of PPS edges captured during the recording (PPS_EDGES).</summary>
+    public int? PpsEdges { get; set; }
+
+    /// <summary>Audio sample rate measured against PPS in Hz (PPS_SAMPLE_RATE) — the true rate, e.g. 48050.166.</summary>
+    public double? PpsSampleRate { get; set; }
+
+    /// <summary>True when this file carries a usable absolute time anchor (UTC + sample + measured rate).</summary>
+    public bool HasPpsTiming => PpsSyncUtc.HasValue && PpsSyncSample.HasValue && PpsSampleRate is > 0;
+
+    /// <summary>
+    /// Effective (true) sample rate: the PPS-measured rate when available, else the
+    /// nominal header rate. Native sample indices advance at this rate in real time.
+    /// </summary>
+    public double EffectiveSampleRate => PpsSampleRate is > 0 ? PpsSampleRate.Value : SampleRate;
+
+    /// <summary>UTC of native sample 0 (recording start), back-derived from the PPS anchor. Requires <see cref="HasPpsTiming"/>.</summary>
+    public DateTime RecordingStartUtc =>
+        PpsSyncUtc!.Value - TimeSpan.FromSeconds(PpsSyncSample!.Value / PpsSampleRate!.Value);
+
+    /// <summary>Maps a native sample index to its absolute UTC instant via the PPS anchor + measured rate. Requires <see cref="HasPpsTiming"/>.</summary>
+    public DateTime NativeSampleToUtc(double nativeSample) =>
+        PpsSyncUtc!.Value + TimeSpan.FromSeconds((nativeSample - PpsSyncSample!.Value) / PpsSampleRate!.Value);
+
+    /// <summary>Maps an absolute UTC instant to a (fractional) native sample index. Requires <see cref="HasPpsTiming"/>.</summary>
+    public double UtcToNativeSample(DateTime utc) =>
+        PpsSyncSample!.Value + (utc - PpsSyncUtc!.Value).TotalSeconds * PpsSampleRate!.Value;
+
+    /// <summary>
+    /// Compact PPS-timing indicator for the UI: a check + measured rate when a full
+    /// anchor is present (TDOA-grade), a "~rate" when only the rate is known, else "—".
+    /// </summary>
+    public string PpsStatus => HasPpsTiming
+        ? $"✓ {PpsSampleRate!.Value:F1} Hz"
+        : (PpsSampleRate is > 0 ? $"~ {PpsSampleRate.Value:F1} Hz" : "—");
+
     [GeneratedRegex(@"^(\d{8})_(\d{6})_(.+)\.(wav|flac)$", RegexOptions.IgnoreCase)]
     private static partial Regex FileNamePattern();
 

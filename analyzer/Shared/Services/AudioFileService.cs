@@ -123,6 +123,30 @@ public class AudioFileService : IAudioFileService
                     {
                         audioFile.MicHeadingDeg = hdg;
                     }
+
+                    // PPS timing anchor for cross-station TDOA (FLAC = primary format).
+                    if (tags.TryGetValue("PPS_SYNC_UTC", out var ppsUtcStr) &&
+                        DateTime.TryParse(ppsUtcStr, CultureInfo.InvariantCulture,
+                            DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var ppsUtc))
+                    {
+                        audioFile.PpsSyncUtc = ppsUtc;
+                    }
+                    if (tags.TryGetValue("PPS_SYNC_SAMPLE", out var ppsSampStr) &&
+                        long.TryParse(ppsSampStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out var ppsSamp))
+                    {
+                        audioFile.PpsSyncSample = ppsSamp;
+                    }
+                    if (tags.TryGetValue("PPS_EDGES", out var ppsEdgesStr) &&
+                        int.TryParse(ppsEdgesStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out var ppsEdges))
+                    {
+                        audioFile.PpsEdges = ppsEdges;
+                    }
+                    if (tags.TryGetValue("PPS_SAMPLE_RATE", out var ppsRateStr) &&
+                        double.TryParse(ppsRateStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var ppsRate) &&
+                        ppsRate > 0)
+                    {
+                        audioFile.PpsSampleRate = ppsRate;
+                    }
                 }
                 // Parse WAV GUANO metadata chunk (firmware writes a "guan" chunk).
                 else if (filePath.EndsWith(".wav", StringComparison.OrdinalIgnoreCase))
@@ -152,6 +176,40 @@ public class AudioFileService : IAudioFileService
                         hdg >= 0 && hdg < 360) // rejects the 65535 "unset" sentinel and junk
                     {
                         audioFile.MicHeadingDeg = hdg;
+                    }
+
+                    // PPS timing (WAV is the secondary format). GUANO carries the
+                    // measured rate + PPS sample but NOT the edge's UTC, so we
+                    // reconstruct it: a 1PPS edge fires on an exact integer UTC
+                    // second, so round (recordingStart + sample/rate) to the
+                    // nearest second. Accurate as long as the "Timestamp" field
+                    // (recording start, from the GPS-synced RTC) is within ±0.5 s.
+                    if (guano.TryGetValue("QuailTracker|PPS Sample Rate", out var gRateStr) &&
+                        double.TryParse(gRateStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var gRate) &&
+                        gRate > 0)
+                    {
+                        audioFile.PpsSampleRate = gRate;
+                    }
+                    if (guano.TryGetValue("QuailTracker|PPS Edges", out var gEdgesStr) &&
+                        int.TryParse(gEdgesStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out var gEdges))
+                    {
+                        audioFile.PpsEdges = gEdges;
+                    }
+                    if (guano.TryGetValue("QuailTracker|PPS Sync Sample", out var gSampStr) &&
+                        long.TryParse(gSampStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out var gSamp))
+                    {
+                        audioFile.PpsSyncSample = gSamp;
+                    }
+                    if (audioFile.PpsSyncSample is { } ppsSampleW && audioFile.PpsSampleRate is { } ppsRateW &&
+                        guano.TryGetValue("Timestamp", out var tsStr) &&
+                        DateTime.TryParse(tsStr, CultureInfo.InvariantCulture,
+                            DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var recStart))
+                    {
+                        var edgeApprox = recStart + TimeSpan.FromSeconds(ppsSampleW / ppsRateW);
+                        var edgeRounded = new DateTime(
+                            (long)Math.Round(edgeApprox.Ticks / (double)TimeSpan.TicksPerSecond) * TimeSpan.TicksPerSecond,
+                            DateTimeKind.Utc);
+                        audioFile.PpsSyncUtc = edgeRounded;
                     }
                 }
 
@@ -301,6 +359,99 @@ public class AudioFileService : IAudioFileService
             }
 
             return buffer;
+        }, ct);
+    }
+
+    /// <summary>
+    /// Extracts a mono window of <paramref name="count"/> samples starting at native
+    /// sample <paramref name="startSample"/> (which may be negative), at the file's
+    /// NATIVE sample rate — no resampling. The result is always exactly
+    /// <paramref name="count"/> samples: sample <c>k</c> maps to native sample
+    /// <c>startSample + k</c>, zero-padded before the start and past the end. This
+    /// keeps two stations' windows on a common index→time grid for cross-station TDOA.
+    /// Returns the samples and the native (header) sample rate.
+    /// </summary>
+    public async Task<(float[] samples, int nativeRate)> ExtractMonoNativeAsync(
+        string filePath,
+        long startSample,
+        int count,
+        CancellationToken ct = default)
+    {
+        return await Task.Run<(float[], int)>(() =>
+        {
+            ct.ThrowIfCancellationRequested();
+
+            using var reader = OpenAudioReader(filePath);
+            var fmt = reader.WaveFormat;
+            if (count <= 0) return (Array.Empty<float>(), fmt.SampleRate);
+
+            var outBuf = new float[count]; // zero-filled padding by default
+
+            var totalSamples = reader.Length / fmt.BlockAlign;
+            if (totalSamples <= 0 && reader is FlacReader flacReader)
+            {
+                var streamInfo = flacReader.Metadata?
+                    .OfType<FlacMetadataStreamInfo>()
+                    .FirstOrDefault();
+                if (streamInfo != null && streamInfo.TotalSamples > 0)
+                    totalSamples = streamInfo.TotalSamples;
+            }
+
+            // Clamp the read range; front padding for negative start.
+            var readStart = startSample;
+            var destOffset = 0;
+            if (readStart < 0) { destOffset = (int)Math.Min(-readStart, count); readStart = 0; }
+            var toExtract = count - destOffset;
+            if (toExtract <= 0 || (totalSamples > 0 && readStart >= totalSamples))
+                return (outBuf, fmt.SampleRate);
+            if (totalSamples > 0)
+                toExtract = (int)Math.Min(toExtract, totalSamples - readStart);
+
+            ISampleProvider provider;
+            if (reader is FlacReader)
+            {
+                // Never use the Position setter on FLAC (NAudio can throw
+                // AccessViolation on files without a seek table). Skip forward.
+                provider = reader.ToSampleProvider();
+                var skip = readStart * fmt.Channels;
+                if (skip > 0)
+                {
+                    var skipBuf = new float[(int)Math.Min(8192, skip)];
+                    while (skip > 0)
+                    {
+                        var toRead = (int)Math.Min(skipBuf.Length, skip);
+                        var skipped = provider.Read(skipBuf, 0, toRead);
+                        if (skipped == 0) break;
+                        skip -= skipped;
+                    }
+                }
+            }
+            else
+            {
+                reader.Position = readStart * fmt.BlockAlign;
+                provider = reader.ToSampleProvider();
+            }
+
+            var interleaved = new float[toExtract * fmt.Channels];
+            var samplesRead = provider.Read(interleaved, 0, interleaved.Length);
+            var framesRead = samplesRead / fmt.Channels;
+
+            if (fmt.Channels == 1)
+            {
+                Array.Copy(interleaved, 0, outBuf, destOffset, framesRead);
+            }
+            else
+            {
+                for (var f = 0; f < framesRead; f++)
+                {
+                    var sum = 0f;
+                    for (var c = 0; c < fmt.Channels; c++)
+                        sum += interleaved[f * fmt.Channels + c];
+                    outBuf[destOffset + f] = sum / fmt.Channels;
+                }
+            }
+
+            return (outBuf, fmt.SampleRate);
         }, ct);
     }
 

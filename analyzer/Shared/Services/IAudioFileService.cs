@@ -62,6 +62,19 @@ public interface IAudioFileService
         CancellationToken ct = default);
 
     /// <summary>
+    /// Extracts a mono window of <paramref name="count"/> samples starting at native
+    /// sample <paramref name="startSample"/> (may be negative) at the file's NATIVE
+    /// rate — no resampling. Always returns exactly <paramref name="count"/> samples
+    /// (zero-padded before start / past end) so sample <c>k</c> maps to native sample
+    /// <c>startSample + k</c>. For PPS-aligned cross-station TDOA windows.
+    /// </summary>
+    Task<(float[] samples, int nativeRate)> ExtractMonoNativeAsync(
+        string filePath,
+        long startSample,
+        int count,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Gets the total number of segments in an audio file, accounting for overlap.
     /// </summary>
     int GetSegmentCount(AudioFile audioFile, double segmentDuration = 3.0, double overlapSeconds = 0.0);

@@ -22,10 +22,10 @@ var ci = CultureInfo.InvariantCulture;
 double centerLat = 32.591700, centerLon = -87.180000; // QT001/QT002 site
 double areaRadius = 800;      // survey-area radius, metres (~1 mile diameter)
 double targetErr = 50;        // acceptable 1σ position error, metres
-double sigmaTms = 5.0;        // arrival-time std, milliseconds (call-matching limited; PPS clock is sub-ms)
+double sigmaTms = 1.0;        // arrival-time std, ms (GCC-PHAT cross-correlation limited — SNR/reverb; was 5 ms for naive timestamp matching). GPS station-position error (~2-3 m) is a separate unmodeled floor.
 double sigmaDeg = 10.0;       // stereo bearing std, degrees (≈ your 0.46 confidence)
 double speedOfSound = 343.0;  // m/s
-double detectRadius = 1609;   // call audibility radius, metres (~1 mile)
+double detectRadius = 500;    // call audibility radius, metres (open-range bobwhite ≈ 500 m; NOT the ~1-mile foraging range)
 int gridRes = 41;             // heatmap resolution
 int nMin = 3, nMax = 8;       // station-count sweep
 double? arrayRadiusOverride = null; // ring radius; default = areaRadius (perimeter)

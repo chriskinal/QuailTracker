@@ -57,6 +57,7 @@
                             <DataGridTextColumn Header="Timestamp" Binding="{Binding Timestamp, StringFormat='{}{0:yyyy-MM-dd HH:mm}'}" Width="120" />
                             <DataGridTextColumn Header="Duration" Binding="{Binding DurationText}" Width="70" />
                             <DataGridTextColumn Header="Sample Rate" Binding="{Binding SampleRate, StringFormat='{}{0} Hz'}" Width="90" />
+                            <DataGridTextColumn Header="PPS Timing" Binding="{Binding PpsStatus}" Width="110" />
                             <DataGridTextColumn Header="Status" Binding="{Binding ErrorMessage}" Width="120" />
                         </DataGrid.Columns>
                     </DataGrid>

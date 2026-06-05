@@ -114,7 +114,7 @@ public partial class MainWindowViewModel : ObservableObject
         : this(
             new AudioFileService(),
             new BirdNetService(),
-            new TdoaService(),
+            new TdoaService(new AudioFileService()),
             new MapService(),
             new KmlExportService(),
             new PopulationService(),
