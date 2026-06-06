@@ -37,7 +37,7 @@
 #include "spi_protocol.h"
 
 #define TAG "BRIDGE"
-#define ESP_FW_VERSION "0.4.12"
+#define ESP_FW_VERSION "0.4.13"
 
 static bool wifi_started = false;
 
@@ -1306,31 +1306,26 @@ void save_laser_wake(void)
     ESP_LOGI(TAG, "Saved laser wake to NVS: %s", laser_wake_enabled ? "ON" : "OFF");
 }
 
-/* Update WiFi SSID to match station ID */
+/* Sync the saved device name (WiFi SSID) to the station ID.
+ *
+ * The new name is persisted to NVS and applied to the AP on the NEXT boot — the
+ * boot path reads it via load_device_name(). We deliberately do NOT reconfigure
+ * the live SoftAP here: esp_wifi_set_config() on a running AP deauths every
+ * connected client, which produced the "drops ~1 min after connecting" bug — the
+ * STM32's first SPI config frame (≈30-60 s post-boot) carries its stationId, and
+ * renaming the live AP kicked the web-UI client mid-session (e.g. mid STM flash).
+ * Deferring to reboot keeps the provisioning session stable. */
 static void update_device_name(const char *name)
 {
-    if (strcmp(device_name, name) == 0) return;  /* no change */
+    if (name == NULL || name[0] == '\0') return;     /* ignore unset/blank */
+    if (strcmp(device_name, name) == 0) return;      /* no change */
 
     strncpy(device_name, name, sizeof(device_name) - 1);
     device_name[sizeof(device_name) - 1] = '\0';
 
-    /* Persist to NVS so next boot uses this name immediately */
+    /* Persist so the next reboot brings the AP up with this SSID. */
     save_device_name();
-
-    /* Restart WiFi AP with new SSID */
-    if (wifi_started) {
-        wifi_config_t wifi_config = {
-            .ap = {
-                .channel = wifi_pick_channel(),
-                .authmode = WIFI_AUTH_OPEN,
-                .max_connection = MAX_CONNECTIONS,
-            },
-        };
-        strncpy((char *)wifi_config.ap.ssid, device_name, sizeof(wifi_config.ap.ssid));
-        wifi_config.ap.ssid_len = strlen(device_name);
-        esp_wifi_set_config(WIFI_IF_AP, &wifi_config);
-        ESP_LOGI(TAG, "WiFi SSID updated: %s", device_name);
-    }
+    ESP_LOGI(TAG, "Device name set to '%s' — WiFi SSID applies on next reboot", device_name);
 }
 
 /* ── STM32 Wake (pull CS pin low for 10ms) ─────────────────────── */
