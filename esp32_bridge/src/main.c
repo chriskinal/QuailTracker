@@ -37,7 +37,7 @@
 #include "spi_protocol.h"
 
 #define TAG "BRIDGE"
-#define ESP_FW_VERSION "0.4.13"
+#define ESP_FW_VERSION "0.4.14"
 
 static bool wifi_started = false;
 
@@ -83,6 +83,12 @@ static bool            first_boot = true;
 /* Monotonic µs of the last valid SPI frame from the STM32 — drives liveness /
  * auto-recovery. 0 = never seen since boot. */
 static volatile int64_t last_spi_ok_us = 0;
+
+/* Monotonic µs until which the STM32's SPI silence is EXPECTED because it told us
+ * (pwr_sleepSecs) it is in scheduled Stop 2 sleep. While now < this, the self-heal
+ * watchdog must NOT treat silence as a dead STM. 0 = STM is awake / no notice. */
+static volatile int64_t stm32_sleep_until_us = 0;
+#define STM32_WD_SLEEP_MARGIN_S 120  /* grace past a scheduled-sleep window for the STM to wake + re-report */
 
 /* Refuse to start a flash below this battery level so an update can always
  * finish. 0 = battery unknown (no STM32 telemetry yet) → allowed. */
@@ -1531,6 +1537,16 @@ static void spi_task(void *arg)
                 int64_t _prev_ok = last_spi_ok_us;
                 last_spi_ok_us = _now_us;
 
+                /* Scheduled-sleep notice: if the STM says it's about to Stop 2 for
+                 * N seconds, the ensuing silence is EXPECTED — gate the watchdog
+                 * until N + margin elapses (margin covers wake + the first frame
+                 * after the window, e.g. powering up to record). 0 = awake. */
+                if (rx->state.pwr_sleepSecs > 0)
+                    stm32_sleep_until_us = _now_us +
+                        ((int64_t)rx->state.pwr_sleepSecs + STM32_WD_SLEEP_MARGIN_S) * 1000000LL;
+                else
+                    stm32_sleep_until_us = 0;
+
                 /* A/B update closure: after we send COMMIT the STM32 swaps banks
                  * and resets. The freshly-swapped image asserts SPI_FLAG_BOOT on
                  * its first frames — a deterministic "I just rebooted" signal we
@@ -2000,6 +2016,7 @@ static void laser_wake_check(void)
 #define STM32_WD_DEAD_US        30000000LL  /* no valid frame for 30s = dead */
 #define STM32_WD_STABLE_US      120000000LL /* continuously alive 120s => image good, re-arm */
 #define STM32_WD_MAX_ATTEMPTS   3
+/* STM32_WD_SLEEP_MARGIN_S defined near stm32_sleep_until_us (used earlier in spi_task) */
 
 static void stm32_watchdog_task(void *arg)
 {
@@ -2015,6 +2032,17 @@ static void stm32_watchdog_task(void *arg)
         if (stm32_flash_pct >= 0) { alive_since = 0; continue; }
 
         int64_t now = esp_timer_get_time();
+
+        /* Scheduled sleep: the STM told us it's in Stop 2 until ~stm32_sleep_until_us.
+         * Its silence is EXPECTED — do NOT treat it as dead or reflash it (this was
+         * the bug that wiped config + killed dawn-chorus recording on all units).
+         * Once overdue, the gate opens and normal dead-detection resumes so a unit
+         * that genuinely failed to wake is still recovered. */
+        if (stm32_sleep_until_us != 0 && now < stm32_sleep_until_us) {
+            alive_since = 0;  /* not counting toward the post-sleep stability window */
+            continue;
+        }
+
         bool alive = (last_spi_ok_us != 0) && ((now - last_spi_ok_us) < STM32_WD_DEAD_US);
 
         if (alive) {

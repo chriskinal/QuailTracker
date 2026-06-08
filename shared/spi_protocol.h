@@ -224,8 +224,15 @@ typedef struct __attribute__((packed)) {
     uint32_t comms_spiTransactions;
     char     comms_stm32FwVersion[16];
 
+    /* Power management — scheduled-sleep notice (2 bytes).
+     * >0: the STM is about to enter (or is in) Stop 2 for ~this many seconds.
+     * The ESP MUST treat the ensuing SPI silence as EXPECTED — not a dead STM —
+     * until roughly this elapses, so the self-heal watchdog doesn't reflash a
+     * unit that is merely sleeping between recording windows. 0 = awake/normal. */
+    uint16_t pwr_sleepSecs;
+
     /* Reserved — pad to 384 bytes */
-    uint8_t  _reserved[384 - 220];
+    uint8_t  _reserved[384 - 222];
 } spi_state_t;
 
 _Static_assert(sizeof(spi_state_t) == 384, "spi_state_t must be 384 bytes");

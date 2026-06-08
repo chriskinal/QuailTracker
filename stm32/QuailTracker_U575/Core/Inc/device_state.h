@@ -181,6 +181,7 @@ typedef struct {
         uint32_t lastGpsSyncTick;       /* HAL tick of last GPS→RTC sync */
         uint32_t gpsDutyCycleSec;       /* GPS wake interval during recording (0=off) */
         uint32_t userConnectedTick;     /* HAL tick of last user activity (SPI cmd / ESP wake) */
+        uint16_t sleepIntentSecs;       /* >0 = about to Stop 2 for ~this long; reported to ESP as pwr_sleepSecs to gate its watchdog */
     } pwr;
 
     struct {

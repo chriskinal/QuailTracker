@@ -61,6 +61,7 @@ void spi_state_fill(spi_state_t *s, const device_state_t *dev,
     s->pwr_schedActive = (!dev->pwr.devMode
                           && dev->pwr.rtcSynced
                           && schedule_has_windows(cfg)) ? 1 : 0;
+    s->pwr_sleepSecs   = dev->pwr.sleepIntentSecs;  /* gates the ESP self-heal watchdog during scheduled sleep */
 
     /* Detection */
     s->det_modelLoaded       = dev->det.modelLoaded;

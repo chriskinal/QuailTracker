@@ -49,14 +49,23 @@
  * INACTIVE bank (high window, 0x080F_xxxx). You cannot program a flash bank
  * while executing from it (read-while-write), so saves MUST target the inactive
  * bank — and the high window is always the inactive bank regardless of SWAP.
- * The A/B image (≤ bank-16KB) never reaches these top pages. Config is the
- * ESP32's to master and is re-synced after a swap, so cross-swap staleness
- * self-heals; health is diagnostic. (Erase bank is swap-aware below.) */
+ * The A/B image (≤ bank-16KB) never reaches these top pages. After a SWAP the
+ * bank holding config becomes the ACTIVE (low) bank, so the latest copy then sits
+ * at the *_ALT address; configLoad/healthLoad read both bank tops and adopt the
+ * newest (see below). (Erase bank is swap-aware below.) */
 #define CONFIG_FLASH_ADDR 0x080FE000   /* last page of the high (inactive) bank window */
 
 #define HEALTH_MAGIC       0x51544853   /* "QTHS" */
 #define HEALTH_VERSION     1
 #define HEALTH_FLASH_ADDR  0x080FC000   /* one page below config */
+
+/* Config/health physically live in whichever bank was inactive when last written
+ * (the high window). After an A/B SWAP that bank becomes the ACTIVE (low) bank, so
+ * the latest copy then sits one bank lower. These ALT addresses are the same top
+ * pages viewed through the low window; configLoad/healthLoad read BOTH and adopt
+ * the newest, so settings survive a bank swap (was previously lost). */
+#define CONFIG_FLASH_ADDR_ALT (CONFIG_FLASH_ADDR - FLASH_BANK_SIZE)
+#define HEALTH_FLASH_ADDR_ALT (HEALTH_FLASH_ADDR - FLASH_BANK_SIZE)
 
 /* ---- OTA firmware update state ---- */
 typedef enum { OTA_IDLE, OTA_RECEIVING, OTA_COMPLETE } ota_state_t;
@@ -233,6 +242,12 @@ static void powerEnterNonRecord(void);
 static void powerEnterRecord(void);
 static void powerScheduleCheck(void);
 static void gpsDutyCycle(void);
+
+/* Sleep-notice window: how long to stay awake after announcing a scheduled
+ * sleep over SPI, so StartBridgeTask pushes a frame carrying pwr_sleepSecs to
+ * the ESP before the CPU halts. ~250 ms covers several bridge poll cycles. */
+#define SLEEP_NOTICE_MS 250
+static wake_source_t enterScheduledSleep(uint32_t seconds);
 
 /* Forward declarations for health functions */
 static void healthLoad(void);
@@ -1104,7 +1119,7 @@ void StartCliTask(void *argument)
             fflush(stdout);
             osDelay(50);
             {
-              wake_source_t ws = enterStop2(sleepSec);
+              wake_source_t ws = enterScheduledSleep(sleepSec);
               printf("\r\nWoke from Stop 2 (%s, %lu sec)\r\n",
                      ws == WAKE_ESP32 ? "ESP32" : "RTC",
                      (unsigned long)sleepSec);
@@ -2474,21 +2489,40 @@ static uint32_t configComputeCrc(const device_config_t *c)
     return crc32_compute((const uint8_t *)c, sizeof(device_config_t) - 4);
 }
 
+/* True if `c` is a valid persisted config (magic + version + CRC). */
+static int configValid(const device_config_t *c)
+{
+    return c->magic == CONFIG_MAGIC &&
+           c->version == CONFIG_VERSION &&
+           c->crc32 == configComputeCrc(c);
+}
+
 static void configLoad(void)
 {
-    const device_config_t *flash = (const device_config_t *)CONFIG_FLASH_ADDR;
+    /* Config normally lives in the high-window top page, but follows the bank
+     * across an A/B swap (then it's in the low/active bank's top page). Check
+     * BOTH bank-top addresses and adopt the valid copy with the highest cfg_seq,
+     * so settings survive a bank swap instead of reading the stale other bank. */
+    const device_config_t *pri = (const device_config_t *)CONFIG_FLASH_ADDR;
+    const device_config_t *alt = (const device_config_t *)CONFIG_FLASH_ADDR_ALT;
+    const device_config_t *best = NULL;
+    uint32_t bestSeq = 0;
 
-    memcpy(&cfg, flash, sizeof(cfg));
+    if (configValid(pri)) { best = pri; bestSeq = pri->cfg_seq; }
+    if (configValid(alt) && (best == NULL || alt->cfg_seq > bestSeq)) {
+        best = alt; bestSeq = alt->cfg_seq;
+    }
 
-    if (cfg.magic == CONFIG_MAGIC &&
-        cfg.version == CONFIG_VERSION &&
-        cfg.crc32 == configComputeCrc(&cfg)) {
-        printf("Config: Loaded from flash (station=%s)\r\n", cfg.stationId);
+    if (best) {
+        memcpy(&cfg, best, sizeof(cfg));
+        printf("Config: Loaded from flash (station=%s, seq=%lu, %s)\r\n",
+               cfg.stationId, (unsigned long)cfg.cfg_seq,
+               best == pri ? "primary" : "alt-bank(post-swap)");
         strncpy(deviceStationId, cfg.stationId, sizeof(deviceStationId));
         return;
     }
 
-    printf("Config: Invalid/empty -writing defaults\r\n");
+    printf("Config: Invalid/empty - writing defaults\r\n");
     configSetDefaults(&cfg);
     cfg.crc32 = configComputeCrc(&cfg);
     configSave();
@@ -2567,17 +2601,33 @@ static uint32_t healthComputeCrc(const health_stats_t *h)
     return crc32_compute((const uint8_t *)h, sizeof(health_stats_t) - 4);
 }
 
+static int healthValid(const health_stats_t *h)
+{
+    return h->magic == HEALTH_MAGIC &&
+           h->version == HEALTH_VERSION &&
+           h->crc32 == healthComputeCrc(h);
+}
+
 static void healthLoad(void)
 {
-    const health_stats_t *flash = (const health_stats_t *)HEALTH_FLASH_ADDR;
+    /* Same bank-follows-swap handling as configLoad: read both bank-top copies
+     * and adopt the valid one with the highest bootCount so stats (and the boot
+     * counter we use as a health signal) survive an A/B swap. */
+    const health_stats_t *pri = (const health_stats_t *)HEALTH_FLASH_ADDR;
+    const health_stats_t *alt = (const health_stats_t *)HEALTH_FLASH_ADDR_ALT;
+    const health_stats_t *best = NULL;
+    uint32_t bestBoots = 0;
 
-    memcpy(&health, flash, sizeof(health));
+    if (healthValid(pri)) { best = pri; bestBoots = pri->bootCount; }
+    if (healthValid(alt) && (best == NULL || alt->bootCount > bestBoots)) {
+        best = alt; bestBoots = alt->bootCount;
+    }
 
-    if (health.magic == HEALTH_MAGIC &&
-        health.version == HEALTH_VERSION &&
-        health.crc32 == healthComputeCrc(&health)) {
-        printf("Health: Loaded from flash (boots=%lu, files=%lu)\r\n",
-               (unsigned long)health.bootCount, (unsigned long)health.filesWritten);
+    if (best) {
+        memcpy(&health, best, sizeof(health));
+        printf("Health: Loaded from flash (boots=%lu, files=%lu, %s)\r\n",
+               (unsigned long)health.bootCount, (unsigned long)health.filesWritten,
+               best == pri ? "primary" : "alt-bank");
         return;
     }
 
@@ -2794,6 +2844,19 @@ static void gpsDutyCycle(void)
     }
 }
 
+/* Announce an imminent scheduled sleep to the ESP, give StartBridgeTask a moment
+ * to transmit the notice (pwr_sleepSecs), then enter Stop 2. Without this the ESP
+ * self-heal watchdog reads the sleep silence as a dead STM and ROM-reflashes the
+ * unit — wiping config and breaking the schedule (the dawn-chorus field failure). */
+static wake_source_t enterScheduledSleep(uint32_t seconds)
+{
+    dev.pwr.sleepIntentSecs = (seconds > 65535U) ? 65535U : (uint16_t)seconds;
+    osDelay(SLEEP_NOTICE_MS);            /* let the bridge task push the notice frame */
+    wake_source_t ws = enterStop2(seconds);
+    dev.pwr.sleepIntentSecs = 0;         /* awake again — resume normal liveness reporting */
+    return ws;
+}
+
 /* Schedule is "armed" when the user hasn't overridden via dev mode AND we have
  * the inputs needed to evaluate it (RTC clock + at least one window). */
 static uint8_t scheduleArmed(void)
@@ -2906,7 +2969,7 @@ static void powerScheduleCheck(void)
                    (unsigned long)sleepSec,
                    (unsigned long)sched.secsUntilNext);
 
-            wake_source_t ws = enterStop2(sleepSec);
+            wake_source_t ws = enterScheduledSleep(sleepSec);
             printf("\r\nPWR: Woke from Stop 2 (%s)\r\n",
                    ws == WAKE_ESP32 ? "ESP32" : "RTC");
 
