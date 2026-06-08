@@ -89,9 +89,10 @@ void spi_state_fill(spi_state_t *s, const device_state_t *dev,
     s->solar_state = solar_st;
 
     /* Survey */
-    s->survey_lat5  = (int32_t)(cfg->surveyLat * 100000.0f);
-    s->survey_lon5  = (int32_t)(cfg->surveyLon * 100000.0f);
-    s->survey_count = cfg->surveyCount;
+    s->survey_lat5   = (int32_t)(cfg->surveyLat * 100000.0f);
+    s->survey_lon5   = (int32_t)(cfg->surveyLon * 100000.0f);
+    s->survey_count  = cfg->surveyCount;
+    s->survey_active = dev->gps.surveyActive ? 1 : 0;
 
     /* Comms */
     s->comms_spiTransactions = dev->comms.spiTransactions;

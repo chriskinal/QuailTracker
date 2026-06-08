@@ -192,8 +192,14 @@ typedef struct __attribute__((packed)) {
      * unit that is merely sleeping between recording windows. 0 = awake/normal. */
     uint16_t pwr_sleepSecs;
 
+    /* Survey: 1 while a location survey is actively accumulating GPS fixes, 0 once
+     * it finishes (hit SURVEY_MAX_READINGS or the duration timeout) or is cleared.
+     * Lets the UI show a true "survey complete" instead of guessing from the count
+     * (which would falsely read "done" if the GPS fix drops mid-survey). */
+    uint8_t  survey_active;
+
     /* Reserved — pad to 384 bytes */
-    uint8_t  _reserved[384 - 222];
+    uint8_t  _reserved[384 - 223];
 } spi_state_t;
 
 _Static_assert(sizeof(spi_state_t) == 384, "spi_state_t must be 384 bytes");

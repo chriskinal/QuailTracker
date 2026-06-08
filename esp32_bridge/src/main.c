@@ -37,7 +37,7 @@
 #include "spi_protocol.h"
 
 #define TAG "BRIDGE"
-#define ESP_FW_VERSION "0.5.4"
+#define ESP_FW_VERSION "0.5.5"
 
 static bool wifi_started = false;
 
@@ -1532,7 +1532,7 @@ static void ws_push_task(void *arg)
                 "\"sdFree\":%lu,\"sdTotal\":%lu,"
                 "\"solar\":\"%s\","
                 "\"recBytes\":%lu,\"ovf\":%lu,\"clip\":%lu,"
-                "\"svLat5\":%ld,\"svLon5\":%ld,\"svCnt\":%lu,"
+                "\"svLat5\":%ld,\"svLon5\":%ld,\"svCnt\":%lu,\"svActive\":%d,"
                 "\"hFiles\":%lu,\"hSecs\":%lu,\"hDet\":%lu,"
                 "\"hBatMin\":%lu,\"hBatMax\":%lu,"
                 "\"hTmpMin\":%ld,\"hTmpMax\":%ld,"
@@ -1568,7 +1568,7 @@ static void ws_push_task(void *arg)
                 (unsigned long)s->rec_overruns,
                 (unsigned long)s->audio_clipCount,
                 (long)s->survey_lat5, (long)s->survey_lon5,
-                (unsigned long)s->survey_count,
+                (unsigned long)s->survey_count, (int)s->survey_active,
                 (unsigned long)s->health_filesWritten,
                 (unsigned long)s->health_recordingSecs,
                 (unsigned long)s->health_detections,

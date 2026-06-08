@@ -108,6 +108,18 @@
         .btn-gray { background: #34495e; }
         .btn-blue { background: #2196F3; }
 
+        /* Tap feedback (#1): every tappable control visibly responds to a press */
+        .btn, .preset, .tabs button {
+            transition: transform .06s ease, filter .06s ease;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .btn:active, .preset:active { transform: scale(0.96); filter: brightness(0.82); }
+        .tabs button:active { transform: scale(0.90); filter: brightness(1.4); }
+
+        /* Operation-complete status text (#4): bold + a couple pts larger + green.
+         * !important so it overrides the .val-sm size and the inline color:#888. */
+        .done { font-weight: 700 !important; font-size: 13px !important; color: #4CAF50 !important; }
+
         /* Form controls */
         .sel {
             width: 100%; padding: 8px 10px; border-radius: 6px;
@@ -341,6 +353,7 @@
                     <button class="btn btn-green" style="flex:1" onclick="sendCmd('survey_start')">Start Survey</button>
                     <button class="btn btn-red" style="flex:1" onclick="sendCmd('survey_clear')">Clear</button>
                 </div>
+                <div class="val-sm" style="text-align:center;margin-top:6px;color:#888" id="surveyStatus"></div>
             </div>
         </div>
 
@@ -821,13 +834,28 @@
             };
             if (ws && ws.readyState === 1) {
                 ws.send(JSON.stringify(obj));
-                document.getElementById('schStatus').textContent = 'Schedule saved';
+                showDone('schStatus', 'Schedule saved');
             }
+        }
+
+        /* Operation-complete feedback (#4): bold + larger + green. clearDone()
+         * reverts to the normal muted style when a new operation starts. */
+        function showDone(id, msg) {
+            var el = document.getElementById(id);
+            if (!el) return;
+            el.textContent = msg;
+            el.classList.add('done');
+        }
+        function clearDone(id, msg) {
+            var el = document.getElementById(id);
+            if (!el) return;
+            if (msg !== undefined) el.textContent = msg;
+            el.classList.remove('done');
         }
 
         function loadSchedule() {
             sendCmd('get_schedule');
-            document.getElementById('schStatus').textContent = 'Schedule loaded';
+            clearDone('schStatus', 'Schedule loaded');
         }
 
         function toggleDevMode(el) {
@@ -862,7 +890,7 @@
             };
             if (ws && ws.readyState === 1) {
                 ws.send(JSON.stringify(obj));
-                document.getElementById('cfgStatus').textContent = 'Configuration saved';
+                showDone('cfgStatus', 'Configuration saved');
             }
         }
 
@@ -870,7 +898,7 @@
             window._cfgLoaded = false;
             window._detCfgLoaded = false;
             window._schLoaded = false;
-            document.getElementById('cfgStatus').textContent = 'Loading from device...';
+            clearDone('cfgStatus', 'Loading from device...');
         }
 
         function doOta() {
@@ -933,13 +961,13 @@
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify(obj)
             }).then(function() {
-                document.getElementById('espCfgStatus').textContent = 'Saved';
-                setTimeout(function() { document.getElementById('espCfgStatus').textContent = ''; }, 2000);
+                showDone('espCfgStatus', 'Saved');
+                setTimeout(function() { clearDone('espCfgStatus', ''); }, 2000);
             });
         }
 
         /* STM32 Firmware Update. Single-bank STM, flashed via the ESP ROM
-         * bootloader (mass erase + write — resets config). The ESP runs the flash
+         * bootloader (page-erase + write — config preserved). The ESP runs the flash
          * in a BACKGROUND task and we POLL /flash_status for live progress, so the
          * UI shows real status (and never a false "disconnected") even though the
          * flash briefly stops the SPI task that feeds the WebSocket. */
@@ -1266,18 +1294,30 @@
                 /* Survey */
                 if (d.svLat5 !== undefined && d.svLon5 !== undefined) {
                     var svb = document.getElementById('surveyBadge');
+                    var svSt = document.getElementById('surveyStatus');
                     if (d.svCnt > 0) {
                         var svLat = (d.svLat5 / 100000).toFixed(5);
                         var svLon = (d.svLon5 / 100000).toFixed(5);
                         document.getElementById('surveyPos').textContent = svLat + ', ' + svLon;
                         document.getElementById('surveyCount').textContent = '-- ' + d.svCnt;
-                        svb.textContent = d.svCnt + ' fixes';
-                        svb.className = 'badge bg';
+                        if (d.svActive) {
+                            /* Actively accumulating fixes — show live progress. */
+                            svb.textContent = 'Surveying ' + d.svCnt;
+                            svb.className = 'badge bb';
+                            if (svSt) clearDone('surveyStatus', 'Surveying… ' + d.svCnt + ' fixes — keep GPS in view');
+                        } else {
+                            /* svActive=0 with fixes accumulated = survey finished. */
+                            svb.textContent = 'Complete ✓';
+                            svb.className = 'badge bg';
+                            if (svSt) showDone('surveyStatus', '✓ Survey complete — ' + d.svCnt + ' fixes, position locked');
+                        }
                     } else {
                         document.getElementById('surveyPos').textContent = '---, ---';
                         document.getElementById('surveyCount').textContent = '-- 0';
-                        svb.textContent = 'No data';
-                        svb.className = 'badge bb';
+                        svb.textContent = d.svActive ? 'Surveying…' : 'No data';
+                        svb.className = d.svActive ? 'badge bb' : 'badge bb';
+                        if (svSt) clearDone('surveyStatus',
+                            d.svActive ? 'Surveying… waiting for first GPS fix' : '');
                     }
                 }
 
