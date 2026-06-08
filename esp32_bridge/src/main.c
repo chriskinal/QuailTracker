@@ -37,7 +37,7 @@
 #include "spi_protocol.h"
 
 #define TAG "BRIDGE"
-#define ESP_FW_VERSION "0.4.14"
+#define ESP_FW_VERSION "0.5.0"
 
 static bool wifi_started = false;
 
@@ -116,23 +116,6 @@ static bool staged_meta_load(uint32_t *size, uint32_t *crc)
     nvs_close(h);
     return ok && *size > 0;
 }
-
-/* ── App-resident dual-bank A/B OTA streaming (ESP32 → STM32 app) ──
- * The STM32 app writes the inactive bank; we stream the staged image to it over
- * the normal SPI link (data in our TX _reserved, lock-step by the STM32's
- * reported next_offset in its TX _reserved). Set up by the web handler; driven
- * in spi_task. */
-static volatile bool          ota_ab_streaming = false;
-static const esp_partition_t *ota_ab_part = NULL;
-static uint32_t               ota_ab_img_size = 0;
-static uint32_t               ota_ab_send_offset = 0;  /* offset the STM32 wants next */
-static volatile int           ota_ab_pct = -1;
-static volatile bool          ota_ab_awaiting_reboot = false; /* post-commit: wait for swap+reboot */
-static int64_t                ota_ab_commit_us = 0;
-/* Pollable UI state (survives WebSocket drops / page reloads / the STM32 reboot):
- * 0 idle, 1 receiving, 2 rebooting, 3 done, 4 error. Served by /ab_status. */
-static volatile int           ota_ab_ui_state = 0;
-static char                   ota_ab_done_ver[16] = {0};
 
 /* ── Audio streaming state ────────────────────────────────────── */
 
@@ -736,20 +719,6 @@ static esp_err_t flash_status_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-/* Pollable A/B OTA status — robust to WebSocket drops and the STM32 reboot.
- * st: 0 idle, 1 receiving, 2 rebooting, 3 done, 4 error. `esp` lets the UI
- * confirm which ESP firmware is actually running. */
-static esp_err_t ab_status_handler(httpd_req_t *req)
-{
-    char buf[96];
-    snprintf(buf, sizeof(buf),
-             "{\"st\":%d,\"pct\":%d,\"ver\":\"%.15s\",\"esp\":\"%s\"}",
-             ota_ab_ui_state, ota_ab_pct, ota_ab_done_ver, ESP_FW_VERSION);
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, buf);
-    return ESP_OK;
-}
-
 /* Stop the SPI slave task, flash the STM32 from `part`, restart SPI.
  * Shared by the web OTA handler and the auto-recovery watchdog. */
 static int do_stm32_flash(const esp_partition_t *part, uint32_t size)
@@ -926,82 +895,6 @@ static esp_err_t stm32_ota_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-/* ── App-resident dual-bank A/B OTA: stage image, then stream to STM32 app ──
- * Unlike /ota_stm32 (ROM bootloader, erases the running image), this streams
- * the image to the running STM32 app which writes the INACTIVE bank and swaps
- * atomically with rollback. The ROM path remains the recovery backstop. */
-static esp_err_t stm32_ab_ota_handler(httpd_req_t *req)
-{
-    if (ota_ab_streaming) { httpd_resp_sendstr(req, "ERR busy"); return ESP_FAIL; }
-    if (local_state.env_battMv != 0 && local_state.env_battMv < FLASH_MIN_BATT_MV) {
-        ws_broadcast("{\"abOtaErr\":\"Battery too low to flash safely\"}");
-        httpd_resp_sendstr(req, "ERR batt"); return ESP_FAIL;
-    }
-    if (req->content_len <= 0 || req->content_len > 512 * 1024) {
-        httpd_resp_sendstr(req, "ERR size"); return ESP_FAIL;
-    }
-
-    const esp_partition_t *part = esp_partition_find_first(
-        ESP_PARTITION_TYPE_DATA, 0x80, STM32FW_PARTITION_LABEL);
-    if (!part) { httpd_resp_sendstr(req, "ERR part"); return ESP_FAIL; }
-    if (esp_partition_erase_range(part, 0, part->size) != ESP_OK) {
-        httpd_resp_sendstr(req, "ERR erase"); return ESP_FAIL;
-    }
-
-    /* Stage the HTTP body into the partition */
-    char buf[1024];
-    int received = 0, total = req->content_len;
-    while (received < total) {
-        int r = httpd_req_recv(req, buf, sizeof(buf));
-        if (r <= 0) {
-            if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
-            httpd_resp_sendstr(req, "ERR recv"); return ESP_FAIL;
-        }
-        if (esp_partition_write(part, received, buf, r) != ESP_OK) {
-            httpd_resp_sendstr(req, "ERR write"); return ESP_FAIL;
-        }
-        received += r;
-    }
-
-    /* Validate STM32 vector table (initial SP + reset vector) */
-    uint8_t hdr[8];
-    esp_partition_read(part, 0, hdr, 8);
-    uint32_t sp = hdr[0] | (hdr[1] << 8) | (hdr[2] << 16) | ((uint32_t)hdr[3] << 24);
-    uint32_t rv = hdr[4] | (hdr[5] << 8) | (hdr[6] << 16) | ((uint32_t)hdr[7] << 24);
-    if ((sp & 0xFFF00000) != 0x20000000 || (rv & 0xFFF00000) != 0x08000000) {
-        httpd_resp_sendstr(req, "ERR not an STM32 binary"); return ESP_FAIL;
-    }
-
-    /* Image CRC-32 using the SHARED algorithm so the STM32 receiver matches */
-    uint32_t crc = 0;
-    for (uint32_t off = 0; off < (uint32_t)received; ) {
-        uint8_t cbuf[1024];
-        uint32_t n = sizeof(cbuf);
-        if (off + n > (uint32_t)received) n = (uint32_t)received - off;
-        esp_partition_read(part, off, cbuf, n);
-        crc = spi_crc32(crc, cbuf, n);
-        off += n;
-    }
-
-    /* Also persist staged meta for the Stage-0 ROM-bootloader recovery path */
-    staged_meta_save((uint32_t)received, stm32_flash_crc32(part, (uint32_t)received));
-
-    /* Arm the stream and tell the STM32 to begin (erase inactive bank) */
-    ota_ab_part = part;
-    ota_ab_img_size = (uint32_t)received;
-    ota_ab_send_offset = 0;
-    ota_ab_pct = 0;
-    ota_ab_ui_state = 1;            /* receiving */
-    ota_ab_done_ver[0] = '\0';
-    qt_spi_ota_begin_t ob = { .image_size = (uint32_t)received, .image_crc32 = crc };
-    cmd_enqueue(SPI_CMD_OTA_BEGIN, (const uint8_t *)&ob, sizeof(ob));
-    ota_ab_streaming = true;
-
-    ESP_LOGI(TAG, "A/B OTA staged %d bytes crc=0x%08lx — streaming to STM32 app",
-             received, (unsigned long)crc);
-    httpd_resp_sendstr(req, "OK");
-    return ESP_OK;
-}
 
 /* ── Audio WebSocket Handler ────────────────────────────────────── */
 
@@ -1082,20 +975,6 @@ static httpd_handle_t start_webserver(void)
             .handler = stm32_ota_handler,
         };
         httpd_register_uri_handler(server, &stm32_ota);
-
-        httpd_uri_t stm32_ota_ab = {
-            .uri = "/ota_stm32_ab",
-            .method = HTTP_POST,
-            .handler = stm32_ab_ota_handler,
-        };
-        httpd_register_uri_handler(server, &stm32_ota_ab);
-
-        httpd_uri_t ab_status = {
-            .uri = "/ab_status",
-            .method = HTTP_GET,
-            .handler = ab_status_handler,
-        };
-        httpd_register_uri_handler(server, &ab_status);
 
         httpd_uri_t flash_status = {
             .uri = "/flash_status",
@@ -1490,21 +1369,6 @@ static void spi_task(void *arg)
             pending_ttl--;
         }
 
-        /* A/B OTA: ride the next image chunk in our TX _reserved at the offset
-         * the STM32 last requested (lock-step). The STM32 ignores chunks that
-         * aren't at its expected offset, so resends are harmless. */
-        if (ota_ab_streaming && ota_ab_part && ota_ab_send_offset < ota_ab_img_size) {
-            spi_ota_data_t *od = (spi_ota_data_t *)tx->_reserved;
-            uint16_t n = SPI_OTA_CHUNK_BYTES;
-            if (ota_ab_send_offset + n > ota_ab_img_size)
-                n = (uint16_t)(ota_ab_img_size - ota_ab_send_offset);
-            od->magic = SPI_OTA_DATA_MAGIC;
-            od->offset = ota_ab_send_offset;
-            od->len = n;
-            memset(od->data, 0xFF, SPI_OTA_CHUNK_BYTES);
-            esp_partition_read(ota_ab_part, ota_ab_send_offset, od->data, n);
-        }
-
         tx->header.flags = flags;
         tx->header.crc16 = spi_frame_crc(tx);
 
@@ -1534,7 +1398,6 @@ static void spi_task(void *arg)
 
                 /* Valid frame → STM32 is alive and running its app */
                 int64_t _now_us = esp_timer_get_time();
-                int64_t _prev_ok = last_spi_ok_us;
                 last_spi_ok_us = _now_us;
 
                 /* Scheduled-sleep notice: if the STM says it's about to Stop 2 for
@@ -1546,58 +1409,6 @@ static void spi_task(void *arg)
                         ((int64_t)rx->state.pwr_sleepSecs + STM32_WD_SLEEP_MARGIN_S) * 1000000LL;
                 else
                     stm32_sleep_until_us = 0;
-
-                /* A/B update closure: after we send COMMIT the STM32 swaps banks
-                 * and resets. The freshly-swapped image asserts SPI_FLAG_BOOT on
-                 * its first frames — a deterministic "I just rebooted" signal we
-                 * use to report completion, regardless of how fast it boots.
-                 * Fallback: a >0.7s silence gap (for old images that predate the
-                 * boot flag). Either way require >0.8s since commit so a failed
-                 * commit (no reset, no gap, no boot flag) can't false-fire. */
-                bool stm_rebooted = (rx->header.flags & SPI_FLAG_BOOT) != 0;
-                if (ota_ab_awaiting_reboot && (_now_us - ota_ab_commit_us) > 800000 &&
-                    (stm_rebooted ||
-                     (_prev_ok != 0 && (_now_us - _prev_ok) > 700000))) {
-                    ota_ab_awaiting_reboot = false;
-                    snprintf(ota_ab_done_ver, sizeof(ota_ab_done_ver), "%.15s",
-                             rx->state.comms_stm32FwVersion);
-                    ota_ab_ui_state = 3;   /* done — picked up by /ab_status poll */
-                    ESP_LOGI(TAG, "A/B update complete — STM32 running %s", ota_ab_done_ver);
-                }
-
-                /* A/B OTA progress: STM32 reports next wanted offset + state in
-                 * its TX _reserved. Advance our send pointer; finish on READY. */
-                if (ota_ab_streaming) {
-                    const spi_ota_status_t *os = (const spi_ota_status_t *)rx->_reserved;
-                    if (os->magic == SPI_OTA_STATUS_MAGIC) {
-                        static int last_ab_bcast = -1;
-                        ota_ab_send_offset = os->next_offset;
-                        ota_ab_pct = ota_ab_img_size
-                            ? (int)((uint64_t)os->bytes_ok * 100 / ota_ab_img_size) : 0;
-                        if (ota_ab_pct != last_ab_bcast) {
-                            last_ab_bcast = ota_ab_pct;
-                            char j[32];
-                            snprintf(j, sizeof(j), "{\"abFlash\":%d}", ota_ab_pct);
-                            ws_broadcast(j);
-                        }
-                        if (os->state == OTA_ST_READY) {
-                            cmd_enqueue(SPI_CMD_OTA_COMMIT, NULL, 0);
-                            ota_ab_streaming = false;
-                            ota_ab_pct = 100;
-                            last_ab_bcast = -1;
-                            ota_ab_ui_state = 2;             /* rebooting */
-                            ota_ab_awaiting_reboot = true;   /* watch for the swap+reboot */
-                            ota_ab_commit_us = esp_timer_get_time();
-                            ESP_LOGI(TAG, "A/B OTA: image received, commit sent");
-                        } else if (os->state == OTA_ST_ERROR) {
-                            ota_ab_streaming = false;
-                            ota_ab_pct = -1;
-                            last_ab_bcast = -1;
-                            ota_ab_ui_state = 4;             /* error */
-                            ESP_LOGE(TAG, "A/B OTA: STM32 reported error %u", os->err);
-                        }
-                    }
-                }
 
                 /* Config sync: adopt if STM32 seq is higher */
                 if (rx->header.cfg_seq > local_cfg_seq) {

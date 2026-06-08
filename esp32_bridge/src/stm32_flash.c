@@ -470,9 +470,9 @@ static int flash_attempt(const esp_partition_t *part, uint32_t fw_size,
      * bootloader's per-chunk Write Memory XOR checksum (a corrupted chunk NACKs,
      * fails the write, and triggers a retry). The SPI bootloader Read Memory data
      * phase proved unreliable on this part (false verify mismatch at offset 0) and
-     * a full read-back doubles flash time. The A/B path keeps a reliable app-side
-     * CRC verify (memory-mapped read) before its bank swap, which is where a
-     * post-write check actually matters. */
+     * a full read-back doubles flash time. The per-chunk XOR + the staged-image
+     * CRC-32 (checked before a recovery flash) are where post-write integrity is
+     * actually enforced. */
 
     /* Step 6: Go — jump to flash start */
     if (!bl_go(STM32_FLASH_BASE)) {

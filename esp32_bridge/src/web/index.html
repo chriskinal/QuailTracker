@@ -607,17 +607,14 @@
                 <div class="val-sm" style="text-align:center;margin-top:6px;color:#888" id="otaStatus"></div>
             </div>
 
-            <!-- STM32 Firmware Update (one card; auto-picks the safe A/B update
-                 when the STM is running, or the ROM bootloader when it's blank) -->
+            <!-- STM32 Firmware Update — single-bank STM, flashed via the ESP ROM
+                 bootloader (page-erase + write; config/health preserved) -->
             <div class="card" style="margin-top:12px">
                 <div class="lbl" style="margin-bottom:6px">STM32 Firmware Update</div>
                 <input type="file" id="stm32OtaFile" accept=".bin" style="font-size:12px;margin-bottom:8px">
                 <div style="display:flex;gap:8px;align-items:center">
                     <button class="btn btn-blue" style="flex:1" onclick="doStm32Update()">Upload &amp; Flash STM32</button>
                 </div>
-                <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:12px;color:#888">
-                    <input type="checkbox" id="stm32ForceRom"> Force full re-flash (recovery)
-                </label>
                 <div class="val-sm" style="text-align:center;margin-top:6px;color:#888" id="stm32OtaStatus"></div>
             </div>
         </div>
@@ -941,11 +938,9 @@
             });
         }
 
-        /* Single entry point for the STM32 Firmware Update card. Auto-selects the
-         * method: a running STM (known version) gets the safe dual-bank A/B update
-         * with rollback; a blank/unresponsive STM has no app to receive the stream,
-         * so it's flashed via the ROM bootloader. "Force full re-flash" overrides to
-         * the ROM path for recovery (e.g. a corrupted bank / option-byte state). */
+        /* STM32 Firmware Update. The STM is single-bank and is always flashed via
+         * the ESP ROM bootloader (BOOT0/NRST, page-erase + write — config/health
+         * are preserved). Works whether the STM is running or blank. */
         function doStm32Update() {
             var fileInput = document.getElementById('stm32OtaFile');
             var status = document.getElementById('stm32OtaStatus');
@@ -960,20 +955,7 @@
                 status.style.color = '#f44336';
                 return;
             }
-            var forceRom = document.getElementById('stm32ForceRom').checked;
-            var stmAlive = !!(window._stmFw && window._stmFw !== '--');
-            if (stmAlive && !forceRom) {
-                _stm32AbFlash(file, status);
-            } else {
-                _stm32RomFlash(file, status, forceRom && stmAlive);
-            }
-        }
-
-        /* ROM-bootloader flash (BOOT0/NRST, mass-erase + write). Works on a blank
-         * STM; destructive, no rollback. Bootstrap + forced-recovery path. */
-        function _stm32RomFlash(file, status, isRecovery) {
-            status.textContent = (isRecovery ? 'Forcing full re-flash — uploading '
-                                             : 'Uploading ') + (file.size / 1024).toFixed(0) + ' KB...';
+            status.textContent = 'Uploading ' + (file.size / 1024).toFixed(0) + ' KB...';
             status.style.color = '#888';
 
             /* Listen for flash progress on WebSocket */
@@ -1015,77 +997,6 @@
             xhr.send(file);
         }
 
-        /* Dual-bank A/B flash: streams to the running STM app, which writes its
-         * spare bank, verifies, swaps and reboots — with auto-rollback. Requires a
-         * running STM. file + status are supplied by the dispatcher. */
-        function _stm32AbFlash(file, status) {
-            status.textContent = 'Uploading ' + (file.size / 1024).toFixed(0) + ' KB...';
-            status.style.color = '#888';
-
-            var xhr = new XMLHttpRequest();
-            xhr.open('POST', '/ota_stm32_ab', true);
-            xhr.setRequestHeader('Content-Type', 'application/octet-stream');
-            xhr.timeout = 120000;
-            xhr.upload.onprogress = function(e) {
-                if (e.lengthComputable) {
-                    var pct = Math.round(e.loaded * 100 / e.total);
-                    status.textContent = 'Uploading... ' + pct + '%';
-                    if (pct >= 100) status.textContent = 'Staged — STM32 receiving into spare bank...';
-                }
-            };
-            /* The POST returns once the image is staged + streaming has begun.
-             * The STM32 then writes the inactive bank in the background, swaps and
-             * reboots. We POLL /ab_status (robust to ws drops + the reboot) for the
-             * real state instead of relying on transient WebSocket messages. */
-            xhr.onload = function() {
-                if (xhr.status === 200 && xhr.responseText.indexOf('OK') === 0) {
-                    startAbPoll();
-                } else {
-                    status.textContent = 'A/B update rejected: ' + xhr.responseText;
-                    status.style.color = '#f44336';
-                }
-            };
-            xhr.onerror = function() {
-                status.textContent = 'Upload failed (connection lost)';
-                status.style.color = '#f44336';
-            };
-            xhr.ontimeout = function() {
-                status.textContent = 'Upload timeout';
-                status.style.color = '#FF9800';
-            };
-            xhr.send(file);
-        }
-
-        function startAbPoll() {
-            var status = document.getElementById('stm32OtaStatus');
-            if (window._abPoll) clearInterval(window._abPoll);
-            var started = Date.now();
-            function poll() {
-                fetch('/ab_status').then(function(r){ return r.json(); }).then(function(d){
-                    if (!status) return;
-                    if (d.st === 1) {
-                        status.textContent = 'Writing spare bank... ' + d.pct + '%';
-                        status.style.color = '#2196F3';
-                    } else if (d.st === 2) {
-                        status.textContent = 'Swapping banks & rebooting...';
-                        status.style.color = '#2196F3';
-                    } else if (d.st === 3) {
-                        status.textContent = '✓ A/B update complete — STM32 running ' + d.ver;
-                        status.style.color = '#4CAF50';
-                        clearInterval(window._abPoll); window._abPoll = null;
-                    } else if (d.st === 4) {
-                        status.textContent = 'A/B update failed (STM32 reported an error)';
-                        status.style.color = '#f44336';
-                        clearInterval(window._abPoll); window._abPoll = null;
-                    }
-                }).catch(function(){ /* ws/AP hiccup — keep polling */ });
-                if (Date.now() - started > 150000) {  /* safety stop */
-                    clearInterval(window._abPoll); window._abPoll = null;
-                }
-            }
-            poll();
-            window._abPoll = setInterval(poll, 1000);
-        }
 
         var _connectTimer = null;
         var _retries = 0;
@@ -1177,41 +1088,6 @@
                     var el = document.getElementById('stm32OtaStatus');
                     if (el) { el.textContent = d.stm32Err; el.style.color = '#f44336'; }
                     window._stm32flashing = false;
-                    return;
-                }
-
-                /* STM32 A/B update progress */
-                if (d.abFlash !== undefined && window._abflashing) {
-                    var el = document.getElementById('stm32OtaStatus');
-                    if (el) {
-                        if (d.abFlash >= 100) {
-                            el.textContent = 'A/B image received — swapping banks & rebooting...';
-                            el.style.color = '#4CAF50';
-                            window._abflashing = false;
-                        } else {
-                            el.textContent = 'Writing spare bank... ' + d.abFlash + '%';
-                            el.style.color = '#2196F3';
-                        }
-                    }
-                    return;
-                }
-
-                /* STM32 A/B update complete (new image swapped in & checked back in) */
-                if (d.abDone !== undefined) {
-                    var el = document.getElementById('stm32OtaStatus');
-                    if (el) {
-                        el.textContent = '✓ A/B update complete — STM32 running ' + d.abDone;
-                        el.style.color = '#4CAF50';
-                    }
-                    window._abflashing = false;
-                    return;
-                }
-
-                /* STM32 A/B update error */
-                if (d.abOtaErr !== undefined) {
-                    var el = document.getElementById('stm32OtaStatus');
-                    if (el) { el.textContent = d.abOtaErr; el.style.color = '#f44336'; }
-                    window._abflashing = false;
                     return;
                 }
 
@@ -1381,9 +1257,6 @@
                     var esp = d.espFw || '--';
                     document.getElementById('fwVer').textContent = 'STM32: ' + stm + ' | ESP32: ' + esp;
                 }
-                /* Latest known STM32 version — drives the firmware-update method
-                 * (A/B when running, ROM bootloader when blank). */
-                if (d.fw !== undefined) window._stmFw = (d.fw || '').trim();
 
                 /* Since Last Visit (health report) */
                 if (d.hFiles !== undefined) {

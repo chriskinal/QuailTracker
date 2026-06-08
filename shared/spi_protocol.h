@@ -69,48 +69,9 @@ typedef enum {
     SPI_CMD_MODEL_RELOAD   = 14,
     SPI_CMD_AUDIO_STREAM   = 15,
     SPI_CMD_SET_TZ         = 16,  /* RAM-only TZ refresh — see qt_spi_tz_payload_t */
-    /* App-resident dual-bank A/B OTA (ESP32 → STM32). Control rides the command
-     * slot; bulk image data rides the ESP32→STM32 _reserved region (see
-     * spi_ota_data_t), with STM32→ESP32 progress in spi_ota_status_t. */
-    SPI_CMD_OTA_BEGIN      = 17,  /* payload: qt_spi_ota_begin_t (size + crc32) */
-    SPI_CMD_OTA_COMMIT     = 18,  /* image fully received + CRC-ok → swap banks & reset */
-    SPI_CMD_OTA_ABORT      = 19,  /* cancel an in-progress OTA */
+    /* (17-19 were the dual-bank A/B OTA opcodes — removed; STM32 is single-bank,
+     *  updated only via the ESP ROM-bootloader flash.) */
 } spi_cmd_type_t;
-
-/* SPI_CMD_OTA_BEGIN payload (fits qt_spi_cmd_t.payload[56]) */
-typedef struct __attribute__((packed)) {
-    uint32_t image_size;   /* total bytes of the new STM32 image */
-    uint32_t image_crc32;  /* CRC-32 (esp_rom_crc32_le convention) over the image */
-} qt_spi_ota_begin_t;
-
-/* OTA bulk-data chunk — rides the ESP32→STM32 _reserved region (432 B).
- * Lock-step: STM32 reports next_offset in spi_ota_status_t; ESP32 sends the
- * chunk at that offset. 256-byte (16-aligned) data keeps flash quad-word
- * programming clean. */
-#define SPI_OTA_CHUNK_BYTES 256
-typedef struct __attribute__((packed)) {
-    uint32_t magic;        /* SPI_OTA_DATA_MAGIC when this region carries OTA data */
-    uint32_t offset;       /* byte offset of this chunk within the image */
-    uint16_t len;          /* valid bytes in data[] (≤ SPI_OTA_CHUNK_BYTES) */
-    uint16_t _pad;
-    uint8_t  data[SPI_OTA_CHUNK_BYTES];
-} spi_ota_data_t;          /* 268 bytes ≤ 432 */
-#define SPI_OTA_DATA_MAGIC 0x4F544144u  /* "OTAD" */
-
-/* OTA progress/status — rides the STM32→ESP32 _reserved region (432 B).
- * (Mutually exclusive with audio streaming, which uses the same region.) */
-typedef enum {
-    OTA_ST_IDLE = 0, OTA_ST_RECEIVING = 1, OTA_ST_READY = 2, OTA_ST_ERROR = 3
-} spi_ota_state_t;
-typedef struct __attribute__((packed)) {
-    uint32_t magic;        /* SPI_OTA_STATUS_MAGIC when valid */
-    uint8_t  state;        /* spi_ota_state_t */
-    uint8_t  err;          /* nonzero = failure code */
-    uint16_t _pad;
-    uint32_t next_offset;  /* byte offset the STM32 wants next (lock-step request) */
-    uint32_t bytes_ok;     /* bytes accepted+programmed so far */
-} spi_ota_status_t;
-#define SPI_OTA_STATUS_MAGIC 0x4F544153u  /* "OTAS" */
 
 /* Payload for SPI_CMD_SET_TZ. Sent by ESP32 (browser-driven) so the device
  * can apply the user's local timezone without persisting to flash on every
