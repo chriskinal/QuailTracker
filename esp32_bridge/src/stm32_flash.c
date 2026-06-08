@@ -154,41 +154,57 @@ static bool bl_erase(uint32_t num_pages)
         return false;
     }
 
-    /* AN4286 Section 2.8: Extended Erase (0x44)
-     * Send: number_of_pages-1 (2 bytes) + page_numbers (2 bytes each) + checksum
-     * Or: 0xFFFF + 0x00 for mass erase
-     * Checksum = XOR of all bytes sent after the command ACK */
+    /* AN4286 §2.8 Erase Memory (0x44), two-byte addressing. */
 
     if (num_pages == 0xFFFF) {
-        /* Mass erase */
+        /* Mass erase: ONE data frame — 0xFFFF (special code) + checksum(=0xFF^0xFF). */
         spi_xfer_byte(0xFF);
         spi_xfer_byte(0xFF);
-        spi_xfer_byte(0x00);  /* checksum: 0xFF ^ 0xFF = 0x00 */
-    } else {
-        uint16_t n_minus_1 = (uint16_t)(num_pages - 1);
-        uint8_t xor_check = (uint8_t)(n_minus_1 >> 8) ^ (uint8_t)(n_minus_1 & 0xFF);
-
-        spi_xfer_byte((uint8_t)(n_minus_1 >> 8));
-        spi_xfer_byte((uint8_t)(n_minus_1 & 0xFF));
-
-        for (uint16_t page = 0; page < num_pages; page++) {
-            spi_xfer_byte((uint8_t)(page >> 8));
-            spi_xfer_byte((uint8_t)(page & 0xFF));
-            xor_check ^= (uint8_t)(page >> 8);
-            xor_check ^= (uint8_t)(page & 0xFF);
+        spi_xfer_byte(0x00);
+        if (!bl_get_ack(60000)) {
+            ESP_LOGE(TAG, "Mass erase ACK timeout");
+            return false;
         }
-        spi_xfer_byte(xor_check);
-
-        ESP_LOGI(TAG, "Erase data sent (N-1=%u, pages=0..%lu, xor=0x%02x), waiting for ACK...",
-                 n_minus_1, (unsigned long)(num_pages - 1), xor_check);
+        ESP_LOGI(TAG, "Mass erase complete");
+        return true;
     }
 
-    /* Erase can take 10-40 seconds depending on page count */
+    /* Page erase — the SPI protocol uses TWO data frames with an ACK between
+     * (Figure 18), unlike the single-frame USART variant:
+     *   Frame A: N = (num_pages - 1), 2 bytes MSB-first, + checksum of those 2 bytes
+     *            -> wait for ACK
+     *   Frame B: each page number (2 bytes MSB-first) + 1-byte checksum of the
+     *            page bytes -> wait for ACK
+     * (Omitting Frame A's checksum + its ACK was the bug that caused the 60s
+     * timeout: the bootloader read a page byte where it expected the checksum.) */
+    uint16_t n_minus_1 = (uint16_t)(num_pages - 1);
+    uint8_t  nhi = (uint8_t)(n_minus_1 >> 8), nlo = (uint8_t)(n_minus_1 & 0xFF);
+
+    /* Frame A: page count + its checksum */
+    spi_xfer_byte(nhi);
+    spi_xfer_byte(nlo);
+    spi_xfer_byte(nhi ^ nlo);
+    if (!bl_get_ack(2000)) {
+        ESP_LOGE(TAG, "Erase page-count ACK timeout/NACK (N-1=%u)", n_minus_1);
+        return false;
+    }
+
+    /* Frame B: the page numbers + checksum over those page bytes */
+    uint8_t xor_check = 0;
+    for (uint16_t page = 0; page < num_pages; page++) {
+        uint8_t phi = (uint8_t)(page >> 8), plo = (uint8_t)(page & 0xFF);
+        spi_xfer_byte(phi);
+        spi_xfer_byte(plo);
+        xor_check ^= phi ^ plo;
+    }
+    spi_xfer_byte(xor_check);
+    ESP_LOGI(TAG, "Erase: %lu pages (0..%lu), frame-B xor=0x%02x, waiting for ACK...",
+             (unsigned long)num_pages, (unsigned long)(num_pages - 1), xor_check);
+
     if (!bl_get_ack(60000)) {
         ESP_LOGE(TAG, "Erase ACK timeout");
         return false;
     }
-
     ESP_LOGI(TAG, "Erase complete");
     return true;
 }
@@ -411,6 +427,12 @@ void stm32_reset(void)
     ESP_LOGW(TAG, "STM32 NRST reset (soft recovery, boot from flash)");
 }
 
+/* STM32U575 flash page = 8 KB. The image lives from page 0 (0x08000000); the
+ * STM32 keeps config + health in the TOP two pages. Page-erasing only the image's
+ * pages leaves config intact across a reflash. (Requires SWAP_BANK=0 so page 0 =
+ * 0x08000000 = where the image is written; the single-bank firmware uses SWAP=0.) */
+#define STM32_FLASH_PAGE_SIZE 8192u
+
 /* ── Single flash attempt (enter BL → erase → write → verify → go) ── */
 
 static int flash_attempt(const esp_partition_t *part, uint32_t fw_size,
@@ -434,14 +456,14 @@ static int flash_attempt(const esp_partition_t *part, uint32_t fw_size,
         goto cleanup;
     }
 
-    /* Step 4: Mass erase. The U5 SPI ROM bootloader does NOT accept the page-list
-     * extended-erase (it never ACKs it — 60s timeout), so mass erase is the only
-     * reliable path here. Trade-off: it wipes the STM32 config/health pages too;
-     * the STM re-defaults them on boot and the operator reconfigures after a
-     * firmware update. (Spurious recovery reflashes are prevented upstream by the
-     * sleep-gated, reset-first watchdog — not by trying to preserve config here.) */
+    /* Step 4: Page-erase only the firmware's pages (two-frame SPI protocol, see
+     * bl_erase) so the STM32 config/health pages survive the reflash. */
     {
-        if (!bl_erase(0xFFFF)) {
+        uint32_t pages = (fw_size + STM32_FLASH_PAGE_SIZE - 1u) / STM32_FLASH_PAGE_SIZE;
+        if (pages == 0) pages = 1;
+        ESP_LOGI(TAG, "Page-erasing %lu firmware pages (preserving config/health)",
+                 (unsigned long)pages);
+        if (!bl_erase(pages)) {
             rc = STM32_FLASH_ERR_ERASE;
             goto cleanup;
         }

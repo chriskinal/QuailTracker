@@ -7,10 +7,9 @@ Applies to new units and to re-provisioning existing dual-bank units.
 ## What changed (why this procedure exists)
 - The STM is now **single-bank**: one firmware image, config/health at fixed top
   pages (`0x080FC000`/`0x080FE000`) that never move. No SWAP, no A/B, no rollback.
-- The STM is updated **only** via the ESP ROM-bootloader flash (mass erase + write;
-  the U5 SPI bootloader won't accept a page-list erase). A flash therefore **resets
-  config — reconfigure after a firmware update.** The web UI has **one** "STM32
-  Firmware Update" card.
+- The STM is updated **only** via the ESP ROM-bootloader flash (page-erase + write;
+  config/health preserved — requires `SWAP_BANK=0`, see Step 0). The web UI has
+  **one** "STM32 Firmware Update" card.
 - The self-heal watchdog escalates: **NRST reset ×2 → ROM reflash → give up**
   (sleep-gated, so a scheduled Stop-2 is never disturbed).
 
@@ -75,9 +74,10 @@ a real A/B swap can be left on `SWAP_BANK=1`, which would corrupt config.
 3. **`boots` increments and persists** across a power-cycle (it no longer sticks at
    1) — read it from the boot banner / health card. This is the at-a-glance signal
    that nothing is wiping flash.
-4. **Config survives a power-cycle** (settings intact across reboots). Note: it does
-   **NOT** survive a firmware re-flash — the ROM mass-erase wipes it, so a STM update
-   resets station ID / schedule / gain (reconfigure after).
+4. **Config survives a power-cycle** AND a firmware re-flash — re-upload the STM
+   image; station ID / schedule / gain are still there afterward (the page-erase
+   preserves the top config/health pages). If config is lost after a re-flash, check
+   `SWAP_BANK=0` (Step 0) — page-erase targets the wrong bank if the banks are swapped.
 5. *(Optional)* Confirm the watchdog escalation: make the STM go silent when it
    shouldn't (e.g. hold it in reset / a crashing test build) → the ESP log shows
    `NRST reset 1/2`, `2/2`, then `recovery flash`, then "giving up".
