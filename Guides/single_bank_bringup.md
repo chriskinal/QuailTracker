@@ -7,8 +7,10 @@ Applies to new units and to re-provisioning existing dual-bank units.
 ## What changed (why this procedure exists)
 - The STM is now **single-bank**: one firmware image, config/health at fixed top
   pages (`0x080FC000`/`0x080FE000`) that never move. No SWAP, no A/B, no rollback.
-- The STM is updated **only** via the ESP ROM-bootloader flash (page-erase + write,
-  config preserved). The web UI has **one** "STM32 Firmware Update" card.
+- The STM is updated **only** via the ESP ROM-bootloader flash (mass erase + write;
+  the U5 SPI bootloader won't accept a page-list erase). A flash therefore **resets
+  config — reconfigure after a firmware update.** The web UI has **one** "STM32
+  Firmware Update" card.
 - The self-heal watchdog escalates: **NRST reset ×2 → ROM reflash → give up**
   (sleep-gated, so a scheduled Stop-2 is never disturbed).
 
@@ -51,8 +53,11 @@ a real A/B swap can be left on `SWAP_BANK=1`, which would corrupt config.
    - The Wi-Fi should stay connected (the AP-drop bug is fixed in this firmware).
 2. STM32 version reads `--` (blank/old). In the **STM32 Firmware Update** card,
    choose **`qt_stm_v0.10.0.bin`** → **Upload & Flash STM32**.
-3. The ESP drives the ROM bootloader over SPI (BOOT0/NRST, page-erase + write,
+3. The ESP drives the ROM bootloader over SPI (BOOT0/NRST, mass erase + write,
    ~10–15 s). On success the STM32 version flips to **`0.10.0`**.
+   > The web page may show "disconnected" partway through — the flash stops the
+   > SPI task, which feeds the WebSocket, so the UI goes blind for ~10–15 s. The
+   > flash still completes; reconnect afterward and confirm `0.10.0` + heartbeat.
 
 ## Step 3 — Configure
 1. Set the **Station ID** (becomes the AP SSID on next reboot).
@@ -70,8 +75,9 @@ a real A/B swap can be left on `SWAP_BANK=1`, which would corrupt config.
 3. **`boots` increments and persists** across a power-cycle (it no longer sticks at
    1) — read it from the boot banner / health card. This is the at-a-glance signal
    that nothing is wiping flash.
-4. **Config survives** a power-cycle (settings intact) **and** a re-flash (re-upload
-   the STM image; station ID / schedule / gain are still there afterward).
+4. **Config survives a power-cycle** (settings intact across reboots). Note: it does
+   **NOT** survive a firmware re-flash — the ROM mass-erase wipes it, so a STM update
+   resets station ID / schedule / gain (reconfigure after).
 5. *(Optional)* Confirm the watchdog escalation: make the STM go silent when it
    shouldn't (e.g. hold it in reset / a crashing test build) → the ESP log shows
    `NRST reset 1/2`, `2/2`, then `recovery flash`, then "giving up".
