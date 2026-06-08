@@ -411,12 +411,6 @@ void stm32_reset(void)
     ESP_LOGW(TAG, "STM32 NRST reset (soft recovery, boot from flash)");
 }
 
-/* STM32U575 flash page = 8 KB. The image lives from page 0 (0x08000000); the
- * STM32 keeps config + health in the TOP two pages (0x080FC000 / 0x080FE000).
- * Erasing only the image's pages — not a mass erase — leaves those intact, so a
- * recovery flash no longer wipes the unit's settings. */
-#define STM32_FLASH_PAGE_SIZE 8192u
-
 /* ── Single flash attempt (enter BL → erase → write → verify → go) ── */
 
 static int flash_attempt(const esp_partition_t *part, uint32_t fw_size,
@@ -440,14 +434,14 @@ static int flash_attempt(const esp_partition_t *part, uint32_t fw_size,
         goto cleanup;
     }
 
-    /* Step 4: Page-erase only the firmware's pages (NOT a mass erase) so the
-     * STM32's config + health pages at the top of flash survive a recovery flash. */
+    /* Step 4: Mass erase. The U5 SPI ROM bootloader does NOT accept the page-list
+     * extended-erase (it never ACKs it — 60s timeout), so mass erase is the only
+     * reliable path here. Trade-off: it wipes the STM32 config/health pages too;
+     * the STM re-defaults them on boot and the operator reconfigures after a
+     * firmware update. (Spurious recovery reflashes are prevented upstream by the
+     * sleep-gated, reset-first watchdog — not by trying to preserve config here.) */
     {
-        uint32_t pages = (fw_size + STM32_FLASH_PAGE_SIZE - 1u) / STM32_FLASH_PAGE_SIZE;
-        if (pages == 0) pages = 1;
-        ESP_LOGI(TAG, "Page-erasing %lu firmware pages (preserving config/health)",
-                 (unsigned long)pages);
-        if (!bl_erase(pages)) {
+        if (!bl_erase(0xFFFF)) {
             rc = STM32_FLASH_ERR_ERASE;
             goto cleanup;
         }

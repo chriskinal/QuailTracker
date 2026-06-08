@@ -45,8 +45,10 @@
 #define CONFIG_MAGIC      0x51544346   /* "QTCF" */
 #define CONFIG_VERSION    10
 /* Single-bank: config + health live in the top two 8 KB pages of the 1 MB part,
- * at fixed addresses that never move (no A/B swap). The ESP recovery flash
- * page-erases only the firmware pages, so these survive a reflash. */
+ * at fixed addresses that never move (no A/B swap). NOTE: a full STM firmware
+ * update via the ESP ROM bootloader mass-erases the chip (the U5 SPI bootloader
+ * won't accept a page-list erase), so these pages are wiped on a reflash and the
+ * config re-defaults — reconfigure after a firmware update. */
 #define CONFIG_FLASH_ADDR 0x080FE000   /* last 8 KB page of the 1 MB part */
 
 #define HEALTH_MAGIC       0x51544853   /* "QTHS" */

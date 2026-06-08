@@ -608,7 +608,7 @@
             </div>
 
             <!-- STM32 Firmware Update — single-bank STM, flashed via the ESP ROM
-                 bootloader (page-erase + write; config/health preserved) -->
+                 bootloader (mass erase + write; resets config — reconfigure after) -->
             <div class="card" style="margin-top:12px">
                 <div class="lbl" style="margin-bottom:6px">STM32 Firmware Update</div>
                 <input type="file" id="stm32OtaFile" accept=".bin" style="font-size:12px;margin-bottom:8px">
