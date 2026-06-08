@@ -53,11 +53,11 @@ a real A/B swap can be left on `SWAP_BANK=1`, which would corrupt config.
    - The Wi-Fi should stay connected (the AP-drop bug is fixed in this firmware).
 2. STM32 version reads `--` (blank/old). In the **STM32 Firmware Update** card,
    choose **`qt_stm_v0.10.0.bin`** → **Upload & Flash STM32**.
-3. The ESP drives the ROM bootloader over SPI (BOOT0/NRST, mass erase + write,
-   ~10–15 s). On success the STM32 version flips to **`0.10.0`**.
-   > The web page may show "disconnected" partway through — the flash stops the
-   > SPI task, which feeds the WebSocket, so the UI goes blind for ~10–15 s. The
-   > flash still completes; reconnect afterward and confirm `0.10.0` + heartbeat.
+3. The ESP runs the flash in the background and the card shows live progress —
+   **"Flashing STM32 N% — keep powered, do NOT disconnect"** (~10–15 s) → on
+   success **"✓ STM32 flashed — running 0.10.0"** and the heartbeat starts. The Wi‑Fi
+   session stays up throughout (the flash no longer blanks the UI). If it ever shows
+   a failure, leave the unit powered and re-flash — don't power-cycle mid-write.
 
 ## Step 3 — Configure
 1. Set the **Station ID** (becomes the AP SSID on next reboot).
