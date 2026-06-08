@@ -378,6 +378,39 @@ static void exit_bootloader(void)
     ESP_LOGI(TAG, "STM32 reset to normal boot (BOOT0=hi-Z)");
 }
 
+/* Non-destructive reset: pulse NRST with BOOT0 LOW so the STM32 reboots its app
+ * from flash (NOT the ROM bootloader). Touches no flash — used by the watchdog to
+ * try a soft recovery of a hung STM before resorting to a reflash. Self-contained
+ * (configures the pins, then returns them to high-Z). */
+void stm32_reset(void)
+{
+    gpio_config_t out = {
+        .pin_bit_mask = (1ULL << PIN_BOOT0) | (1ULL << PIN_NRST),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&out);
+
+    gpio_set_level(PIN_BOOT0, 0);   /* boot from flash, not the ROM bootloader */
+    vTaskDelay(pdMS_TO_TICKS(5));
+    gpio_set_level(PIN_NRST, 0);    /* assert reset */
+    vTaskDelay(pdMS_TO_TICKS(20));
+    gpio_set_level(PIN_NRST, 1);    /* release */
+
+    gpio_config_t hiz = {
+        .pin_bit_mask = (1ULL << PIN_BOOT0) | (1ULL << PIN_NRST),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&hiz);
+
+    ESP_LOGW(TAG, "STM32 NRST reset (soft recovery, boot from flash)");
+}
+
 /* STM32U575 flash page = 8 KB. The image lives from page 0 (0x08000000); the
  * STM32 keeps config + health in the TOP two pages (0x080FC000 / 0x080FE000).
  * Erasing only the image's pages — not a mass erase — leaves those intact, so a

@@ -37,7 +37,7 @@
 #include "spi_protocol.h"
 
 #define TAG "BRIDGE"
-#define ESP_FW_VERSION "0.5.0"
+#define ESP_FW_VERSION "0.5.1"
 
 static bool wifi_started = false;
 
@@ -1826,7 +1826,8 @@ static void laser_wake_check(void)
 #define STM32_WD_BOOT_GRACE_MS  30000       /* let STM32 boot + start SPI before judging */
 #define STM32_WD_DEAD_US        30000000LL  /* no valid frame for 30s = dead */
 #define STM32_WD_STABLE_US      120000000LL /* continuously alive 120s => image good, re-arm */
-#define STM32_WD_MAX_ATTEMPTS   3
+#define STM32_WD_RESET_ATTEMPTS 2           /* try this many non-destructive NRST resets first */
+#define STM32_WD_MAX_ATTEMPTS   3           /* total: RESET_ATTEMPTS soft resets, then 1 reflash, then give up */
 /* STM32_WD_SLEEP_MARGIN_S defined near stm32_sleep_until_us (used earlier in spi_task) */
 
 static void stm32_watchdog_task(void *arg)
@@ -1875,37 +1876,46 @@ static void stm32_watchdog_task(void *arg)
         if (attempts >= STM32_WD_MAX_ATTEMPTS) {
             if (!gave_up) {
                 ESP_LOGE(TAG, "STM32 unrecoverable after %d attempts — giving up "
-                              "(needs manual flash)", STM32_WD_MAX_ATTEMPTS);
+                              "(unit needs service / replacement)", STM32_WD_MAX_ATTEMPTS);
                 gave_up = true;
             }
             continue;
         }
 
-        uint32_t sz = 0, crc = 0;
-        if (!staged_meta_load(&sz, &crc))
-            continue;  /* nothing staged to recover with */
+        /* Escalation ladder: try non-destructive NRST resets first (a hung STM
+         * often recovers from a clean reset with config + image untouched), and
+         * only reflash from the staged image if resets don't bring it back. */
+        attempts++;
+        ws_broadcast("{\"stm32Recover\":1}");
 
-        const esp_partition_t *part = esp_partition_find_first(
-            ESP_PARTITION_TYPE_DATA, 0x80, STM32FW_PARTITION_LABEL);
-        if (!part) continue;
-
-        /* Trust the staged image only if it's still intact */
-        if (stm32_flash_crc32(part, sz) != crc) {
-            ESP_LOGE(TAG, "Recovery aborted: staged image CRC mismatch");
-            attempts = STM32_WD_MAX_ATTEMPTS;  /* don't retry a corrupt image */
+        if (attempts <= STM32_WD_RESET_ATTEMPTS) {
+            ESP_LOGW(TAG, "STM32 unresponsive %ds — NRST reset %d/%d (soft recovery)",
+                     (int)(STM32_WD_DEAD_US / 1000000), attempts, STM32_WD_RESET_ATTEMPTS);
+            stm32_reset();
+            vTaskDelay(pdMS_TO_TICKS(STM32_WD_BOOT_GRACE_MS));  /* let it boot + check in */
             continue;
         }
 
-        attempts++;
-        ESP_LOGW(TAG, "STM32 unresponsive %ds — recovery flash %d/%d (%lu bytes)",
-                 (int)(STM32_WD_DEAD_US / 1000000), attempts, STM32_WD_MAX_ATTEMPTS,
-                 (unsigned long)sz);
-        ws_broadcast("{\"stm32Recover\":1}");
+        /* Resets didn't recover it — reflash from the staged image (if intact). */
+        uint32_t sz = 0, crc = 0;
+        if (!staged_meta_load(&sz, &crc)) {
+            ESP_LOGE(TAG, "STM32 still dead, no staged image to reflash — giving up");
+            attempts = STM32_WD_MAX_ATTEMPTS;
+            continue;
+        }
+        const esp_partition_t *part = esp_partition_find_first(
+            ESP_PARTITION_TYPE_DATA, 0x80, STM32FW_PARTITION_LABEL);
+        if (!part) { attempts = STM32_WD_MAX_ATTEMPTS; continue; }
+        if (stm32_flash_crc32(part, sz) != crc) {
+            ESP_LOGE(TAG, "Recovery aborted: staged image CRC mismatch — giving up");
+            attempts = STM32_WD_MAX_ATTEMPTS;  /* don't reflash a corrupt image */
+            continue;
+        }
 
+        ESP_LOGW(TAG, "STM32 still dead after %d resets — recovery flash (%lu bytes)",
+                 STM32_WD_RESET_ATTEMPTS, (unsigned long)sz);
         do_stm32_flash(part, sz);
-
-        /* Let it boot + check in before judging again */
-        vTaskDelay(pdMS_TO_TICKS(STM32_WD_BOOT_GRACE_MS));
+        vTaskDelay(pdMS_TO_TICKS(STM32_WD_BOOT_GRACE_MS));  /* let it boot + check in */
     }
 }
 

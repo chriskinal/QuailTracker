@@ -30,6 +30,10 @@ int stm32_flash_from_partition(const esp_partition_t *part, uint32_t fw_size,
  * Chaining convention is self-consistent — compare values produced by this fn only. */
 uint32_t stm32_flash_crc32(const esp_partition_t *part, uint32_t size);
 
+/* Non-destructive NRST reset (BOOT0 low → STM32 boots its app from flash).
+ * Touches no flash. Used by the watchdog for soft recovery before a reflash. */
+void stm32_reset(void);
+
 /* Error codes */
 #define STM32_FLASH_OK           0
 #define STM32_FLASH_ERR_SYNC    -1
