@@ -37,7 +37,7 @@
 #include "spi_protocol.h"
 
 #define TAG "BRIDGE"
-#define ESP_FW_VERSION "0.5.2"
+#define ESP_FW_VERSION "0.5.3"
 
 static bool wifi_started = false;
 
@@ -712,8 +712,12 @@ static void stm32_flash_progress(int pct)
 
 static esp_err_t flash_status_handler(httpd_req_t *req)
 {
-    char buf[32];
-    snprintf(buf, sizeof(buf), "{\"pct\":%d}", stm32_flash_pct);
+    /* pct: -1 idle/failed, 0-100 progress (100 = flashed). ver = the STM32 version
+     * currently reported over SPI (populates once the freshly-flashed STM checks
+     * in), so the UI can confirm the new image is actually running. */
+    char buf[64];
+    snprintf(buf, sizeof(buf), "{\"pct\":%d,\"ver\":\"%.15s\"}",
+             stm32_flash_pct, local_state.comms_stm32FwVersion);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_sendstr(req, buf);
     return ESP_OK;
@@ -751,9 +755,28 @@ static int do_stm32_flash(const esp_partition_t *part, uint32_t size)
     return rc;
 }
 
+/* Background STM32 flash. The web handler stages the image then spawns this so it
+ * can return the HTTP request immediately — otherwise the synchronous ~10-15 s
+ * flash blocks the (single) httpd worker, the WebSocket + /flash_status polls go
+ * unserved, and the browser shows a false "disconnected". Run in the background,
+ * the httpd stays responsive and the UI tracks progress via /flash_status. */
+static const esp_partition_t *flash_bg_part = NULL;
+static uint32_t               flash_bg_size = 0;
+static void stm32_flash_bg_task(void *arg)
+{
+    (void)arg;
+    do_stm32_flash(flash_bg_part, flash_bg_size);   /* sets stm32_flash_pct 100 / -1 */
+    vTaskDelete(NULL);
+}
+
 static esp_err_t stm32_ota_handler(httpd_req_t *req)
 {
     ESP_LOGI(TAG, "STM32 flash started, content_len=%d", req->content_len);
+
+    if (stm32_flash_pct >= 0) {   /* a flash is already running */
+        httpd_resp_sendstr(req, "ERR busy");
+        return ESP_FAIL;
+    }
 
     /* Battery gate: refuse to start if we know the battery is too low to finish.
      * env_battMv == 0 means no telemetry yet (e.g. bench) → allow. */
@@ -875,23 +898,21 @@ static esp_err_t stm32_ota_handler(httpd_req_t *req)
                  received, (unsigned long)crc);
     }
 
-    ESP_LOGI(TAG, "Starting STM32 flash");
-
-    int rc = do_stm32_flash(part, (uint32_t)received);
-
-    if (rc != STM32_FLASH_OK) {
-        char errmsg[64];
-        snprintf(errmsg, sizeof(errmsg), "Flash failed (error %d)", rc);
-        ESP_LOGE(TAG, "%s", errmsg);
-        httpd_resp_set_status(req, "500 Internal Server Error");
-        httpd_resp_set_type(req, "text/plain");
-        httpd_resp_sendstr(req, errmsg);
+    /* Hand off to a background task and return the request immediately, so the
+     * httpd worker stays free to serve /flash_status polls (and the WebSocket)
+     * during the ~10-15 s flash. The UI polls /flash_status for live progress and
+     * completion instead of blocking on this POST. */
+    ESP_LOGI(TAG, "Image staged — starting background STM32 flash");
+    stm32_flash_pct = 0;            /* mark in-progress before the task starts */
+    flash_bg_part = part;
+    flash_bg_size = (uint32_t)received;
+    if (xTaskCreate(stm32_flash_bg_task, "stmflash", 8192, NULL, 4, NULL) != pdPASS) {
+        stm32_flash_pct = -1;
+        ESP_LOGE(TAG, "Failed to start flash task");
+        httpd_resp_sendstr(req, "ERR task");
         return ESP_FAIL;
     }
-
-    ESP_LOGI(TAG, "STM32 flash complete, device rebooted");
     httpd_resp_sendstr(req, "OK");
-    stm32_flash_pct = -1;
     return ESP_OK;
 }
 

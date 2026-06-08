@@ -938,9 +938,11 @@
             });
         }
 
-        /* STM32 Firmware Update. The STM is single-bank and is always flashed via
-         * the ESP ROM bootloader (BOOT0/NRST, page-erase + write — config/health
-         * are preserved). Works whether the STM is running or blank. */
+        /* STM32 Firmware Update. Single-bank STM, flashed via the ESP ROM
+         * bootloader (mass erase + write — resets config). The ESP runs the flash
+         * in a BACKGROUND task and we POLL /flash_status for live progress, so the
+         * UI shows real status (and never a false "disconnected") even though the
+         * flash briefly stops the SPI task that feeds the WebSocket. */
         function doStm32Update() {
             var fileInput = document.getElementById('stm32OtaFile');
             var status = document.getElementById('stm32OtaStatus');
@@ -957,9 +959,7 @@
             }
             status.textContent = 'Uploading ' + (file.size / 1024).toFixed(0) + ' KB...';
             status.style.color = '#888';
-
-            /* Listen for flash progress on WebSocket */
-            window._stm32flashing = true;
+            window._stm32flashing = true;   /* suppress the WS-disconnect banner */
 
             var xhr = new XMLHttpRequest();
             xhr.open('POST', '/ota_stm32', true);
@@ -967,20 +967,16 @@
             xhr.timeout = 120000;
             xhr.upload.onprogress = function(e) {
                 if (e.lengthComputable) {
-                    var pct = Math.round(e.loaded * 100 / e.total);
-                    status.textContent = 'Uploading... ' + pct + '%';
-                    if (pct >= 100) {
-                        status.textContent = 'Erasing STM32 flash...';
-                    }
+                    status.textContent = 'Uploading... ' + Math.round(e.loaded * 100 / e.total) + '%';
                 }
             };
+            /* POST returns as soon as the image is staged + the flash task starts. */
             xhr.onload = function() {
-                window._stm32flashing = false;
-                if (xhr.status === 200) {
-                    status.textContent = 'STM32 flashed OK — device rebooting';
-                    status.style.color = '#4CAF50';
+                if (xhr.status === 200 && xhr.responseText.indexOf('OK') === 0) {
+                    startFlashPoll();
                 } else {
-                    status.textContent = 'Flash failed: ' + xhr.responseText;
+                    window._stm32flashing = false;
+                    status.textContent = 'Flash rejected: ' + (xhr.responseText || xhr.status);
                     status.style.color = '#f44336';
                 }
             };
@@ -991,10 +987,54 @@
             };
             xhr.ontimeout = function() {
                 window._stm32flashing = false;
-                status.textContent = 'Timeout — flash may still be in progress';
+                status.textContent = 'Upload timeout';
                 status.style.color = '#FF9800';
             };
             xhr.send(file);
+        }
+
+        /* Poll /flash_status during the background flash. HTTP polling is robust to
+         * the WebSocket dropping (the flash stops the SPI task that feeds it). */
+        function stopFlashPoll() {
+            window._stm32flashing = false;
+            if (window._flashPoll) { clearInterval(window._flashPoll); window._flashPoll = null; }
+        }
+        function startFlashPoll() {
+            var status = document.getElementById('stm32OtaStatus');
+            if (window._flashPoll) clearInterval(window._flashPoll);
+            var started = Date.now();
+            var sawProgress = false;
+            function poll() {
+                fetch('/flash_status').then(function(r){ return r.json(); }).then(function(d){
+                    if (!status) return;
+                    if (d.pct >= 0 && d.pct < 100) {
+                        sawProgress = true;
+                        status.textContent = 'Flashing STM32... ' + d.pct +
+                            '% — keep powered, do NOT disconnect';
+                        status.style.color = '#2196F3';
+                    } else if (d.pct === 100) {
+                        if (d.ver && d.ver !== '--' && d.ver !== '') {
+                            status.textContent = '✓ STM32 flashed — running ' + d.ver;
+                            status.style.color = '#4CAF50';
+                            stopFlashPoll();
+                        } else {
+                            status.textContent = 'Flashed — waiting for STM32 to boot...';
+                            status.style.color = '#2196F3';
+                        }
+                    } else if (d.pct < 0 && sawProgress) {
+                        status.textContent = '✗ Flash failed — STM32 not updated (check power/log)';
+                        status.style.color = '#f44336';
+                        stopFlashPoll();
+                    }
+                }).catch(function(){ /* AP hiccup mid-flash — keep polling */ });
+                if (Date.now() - started > 120000) {
+                    status.textContent = 'Flash timed out — reconnect and check the STM32 version';
+                    status.style.color = '#FF9800';
+                    stopFlashPoll();
+                }
+            }
+            poll();
+            window._flashPoll = setInterval(poll, 1000);
         }
 
 
@@ -1006,6 +1046,10 @@
          * If no message received in 5s (server pushes every 500ms),
          * the connection is dead — force reconnect. */
         setInterval(function() {
+            /* During an STM flash the SPI task (which feeds the WS) is paused, so
+             * silence is EXPECTED — don't tear the WS down (that produced the false
+             * "disconnected"). The /flash_status poll drives the UI meanwhile. */
+            if (window._stm32flashing) return;
             if (ws && ws.readyState === WebSocket.OPEN) {
                 if (_lastMsg && (Date.now() - _lastMsg) > 5000) {
                     console.log('WS stale — forcing reconnect');
