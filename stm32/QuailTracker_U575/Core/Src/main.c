@@ -30,7 +30,6 @@
 #include "app_freertos.h"
 #include "flac_encoder.h"
 #include "device_state.h"
-#include "ota_ab.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -1115,12 +1114,6 @@ int main(void)
 
   /* RTC — for Stop 2 wake-up timer */
   MX_RTC_Init();
-
-  /* A/B OTA confirm/rollback: as early as possible after the RTC (backup
-   * registers) is up. If a freshly-swapped image is on trial and has run out
-   * of boot attempts without checking in, this rolls back to the previous bank
-   * (resets — does not return). */
-  ota_ab_boot_check();
 
   /* I2C1 — SHT30 temperature/humidity sensor (PB6/PB7) */
   MX_I2C1_Init();

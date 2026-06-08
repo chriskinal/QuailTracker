@@ -36,7 +36,6 @@
 #include "spi_bridge.h"
 #include "solar.h"
 #include "schedule.h"
-#include "ota_ab.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -45,27 +44,14 @@
 /* ---- Flash config/health constants (types now in device_state.h) ---- */
 #define CONFIG_MAGIC      0x51544346   /* "QTCF" */
 #define CONFIG_VERSION    10
-/* Dual-bank A/B + RWW: config/health live in the top two 8 KB pages of the
- * INACTIVE bank (high window, 0x080F_xxxx). You cannot program a flash bank
- * while executing from it (read-while-write), so saves MUST target the inactive
- * bank — and the high window is always the inactive bank regardless of SWAP.
- * The A/B image (≤ bank-16KB) never reaches these top pages. After a SWAP the
- * bank holding config becomes the ACTIVE (low) bank, so the latest copy then sits
- * at the *_ALT address; configLoad/healthLoad read both bank tops and adopt the
- * newest (see below). (Erase bank is swap-aware below.) */
-#define CONFIG_FLASH_ADDR 0x080FE000   /* last page of the high (inactive) bank window */
+/* Single-bank: config + health live in the top two 8 KB pages of the 1 MB part,
+ * at fixed addresses that never move (no A/B swap). The ESP recovery flash
+ * page-erases only the firmware pages, so these survive a reflash. */
+#define CONFIG_FLASH_ADDR 0x080FE000   /* last 8 KB page of the 1 MB part */
 
 #define HEALTH_MAGIC       0x51544853   /* "QTHS" */
 #define HEALTH_VERSION     1
 #define HEALTH_FLASH_ADDR  0x080FC000   /* one page below config */
-
-/* Config/health physically live in whichever bank was inactive when last written
- * (the high window). After an A/B SWAP that bank becomes the ACTIVE (low) bank, so
- * the latest copy then sits one bank lower. These ALT addresses are the same top
- * pages viewed through the low window; configLoad/healthLoad read BOTH and adopt
- * the newest, so settings survive a bank swap (was previously lost). */
-#define CONFIG_FLASH_ADDR_ALT (CONFIG_FLASH_ADDR - FLASH_BANK_SIZE)
-#define HEALTH_FLASH_ADDR_ALT (HEALTH_FLASH_ADDR - FLASH_BANK_SIZE)
 
 /* ---- OTA firmware update state ---- */
 typedef enum { OTA_IDLE, OTA_RECEIVING, OTA_COMPLETE } ota_state_t;
@@ -85,11 +71,6 @@ typedef struct {
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define OTA_PAGE_SIZE     8192
-#define OTA_BANK2_BASE    0x08080000   /* Bank 2 start for 1MB flash */
-#define OTA_CONFIG_PAGE   63           /* Last page of Bank 2 (1MB: 64 pages/bank) */
-#define OTA_CONFIG_MIRROR 0x0807E000   /* Last page of Bank 1 (config backup during OTA) */
-#define OTA_TIMEOUT_MS    30000
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -2096,9 +2077,8 @@ static void StartBridgeTask(void *argument)
             printf("Stream: auto-stopped (SPI timeout)\r\n");
         }
 
-        /* SPI2 poll — 25ms when streaming or OTA-receiving, 250ms otherwise */
-        uint32_t spiPollMs = (streamActive || ota_ab_active())
-                                 ? SPI2_POLL_STREAM_MS : SPI2_POLL_MS;
+        /* SPI2 poll — 25ms when streaming, 250ms otherwise */
+        uint32_t spiPollMs = streamActive ? SPI2_POLL_STREAM_MS : SPI2_POLL_MS;
         if ((HAL_GetTick() - lastSpiPollTick) >= spiPollMs) {
             lastSpiPollTick = HAL_GetTick();
 
@@ -2133,14 +2113,6 @@ static void StartBridgeTask(void *argument)
                 ap->audio_active = (ap->num_samples > 0) ? 1 : 0;
                 /* Recompute CRC since we modified the frame */
                 spi_tx_frame.header.crc16 = spi_frame_crc(&spi_tx_frame);
-            } else if (ota_ab_state() != OTA_ST_IDLE) {
-                spi_ota_status_t *os = (spi_ota_status_t *)spi_tx_frame._reserved;
-                os->magic       = SPI_OTA_STATUS_MAGIC;
-                os->state       = ota_ab_state();
-                os->err         = ota_ab_err();
-                os->next_offset = ota_ab_next_offset();
-                os->bytes_ok    = ota_ab_bytes_ok();
-                spi_tx_frame.header.crc16 = spi_frame_crc(&spi_tx_frame);
             }
 
             HAL_GPIO_WritePin(SPI2_CS_PORT, SPI2_CS_PIN, GPIO_PIN_RESET);
@@ -2155,22 +2127,7 @@ static void StartBridgeTask(void *argument)
                 dev.comms.lastSpiTick = HAL_GetTick();
                 if (streamActive)
                     streamLastSpiTick = HAL_GetTick();
-                /* A successful exchange = the ESP32 is talking to this image.
-                 * If we're a freshly-swapped image on trial, that's our
-                 * confirmation; otherwise this is a no-op. */
-                ota_ab_confirm();
             }
-
-            /* Uptime self-confirm: an image that has run cleanly for a while is
-             * self-evidently not bricked, so confirm even WITHOUT an SPI frame
-             * from the ESP. Essential because the field ESP sleeps during
-             * recording (laser-wake) and a debugger-flashed image on the bench
-             * has no OTA confirm path — without this, a perfectly good image
-             * gets falsely rolled back after 3 trial boots. A genuinely bricked
-             * (crash-looping) image never reaches this uptime, so real failures
-             * still roll back. No-op once already confirmed. */
-            if (HAL_GetTick() > OTA_SELF_CONFIRM_MS)
-                ota_ab_confirm();
 
             /* Process received frame — binary protocol */
             static uint32_t lastCmdSeq = 0;  /* dedup: skip already-processed commands */
@@ -2325,34 +2282,8 @@ static void StartBridgeTask(void *argument)
                     }
                     break;
                 }
-                case SPI_CMD_OTA_BEGIN: {
-                    qt_spi_ota_begin_t ob;
-                    memcpy(&ob, cmd_payload, sizeof(ob));
-                    if (!isRecording)
-                        ota_ab_begin(ob.image_size, ob.image_crc32);
-                    printf("SPI cmd: ota_begin size=%lu\r\n", (unsigned long)ob.image_size);
-                    break;
-                }
-                case SPI_CMD_OTA_COMMIT:
-                    printf("SPI cmd: ota_commit\r\n");
-                    ota_ab_commit();   /* verifies, carries config, swaps + resets */
-                    break;
-                case SPI_CMD_OTA_ABORT:
-                    ota_ab_abort(0);
-                    printf("SPI cmd: ota_abort\r\n");
-                    break;
                 default:
                     break;
-                }
-
-                /* OTA bulk data rides the ESP32→STM32 reserved region while a
-                 * transfer is active. Lock-step: only the chunk at the expected
-                 * offset is accepted (ota_ab_data ignores others). */
-                if (ota_ab_active()) {
-                    const spi_ota_data_t *od =
-                        (const spi_ota_data_t *)spi_rx_frame._reserved;
-                    if (od->magic == SPI_OTA_DATA_MAGIC && od->len <= SPI_OTA_CHUNK_BYTES)
-                        ota_ab_data(od->offset, od->data, od->len);
                 }
             }
             /* Backward compat: fall back to JSON if ESP32 sends old format */
@@ -2499,25 +2430,12 @@ static int configValid(const device_config_t *c)
 
 static void configLoad(void)
 {
-    /* Config normally lives in the high-window top page, but follows the bank
-     * across an A/B swap (then it's in the low/active bank's top page). Check
-     * BOTH bank-top addresses and adopt the valid copy with the highest cfg_seq,
-     * so settings survive a bank swap instead of reading the stale other bank. */
-    const device_config_t *pri = (const device_config_t *)CONFIG_FLASH_ADDR;
-    const device_config_t *alt = (const device_config_t *)CONFIG_FLASH_ADDR_ALT;
-    const device_config_t *best = NULL;
-    uint32_t bestSeq = 0;
-
-    if (configValid(pri)) { best = pri; bestSeq = pri->cfg_seq; }
-    if (configValid(alt) && (best == NULL || alt->cfg_seq > bestSeq)) {
-        best = alt; bestSeq = alt->cfg_seq;
-    }
-
-    if (best) {
-        memcpy(&cfg, best, sizeof(cfg));
-        printf("Config: Loaded from flash (station=%s, seq=%lu, %s)\r\n",
-               cfg.stationId, (unsigned long)cfg.cfg_seq,
-               best == pri ? "primary" : "alt-bank(post-swap)");
+    /* Single-bank: config lives at one fixed top page that never moves. */
+    const device_config_t *flash = (const device_config_t *)CONFIG_FLASH_ADDR;
+    if (configValid(flash)) {
+        memcpy(&cfg, flash, sizeof(cfg));
+        printf("Config: Loaded from flash (station=%s, seq=%lu)\r\n",
+               cfg.stationId, (unsigned long)cfg.cfg_seq);
         strncpy(deviceStationId, cfg.stationId, sizeof(deviceStationId));
         return;
     }
@@ -2530,23 +2448,18 @@ static void configLoad(void)
 }
 
 /* Erase one page and program `nQuad` quad-words (16 bytes each) from `src` at
- * virtual `addr`, then verify the readback. Bank/page are derived swap-aware
- * from `addr`: the low window (0x08000000) is the active bank, the high window
- * (0x08080000) the inactive bank, and SWAP_BANK selects which physical bank
- * each maps to. Programming the *inactive* (high) bank from code running in the
- * active (low) bank is the only RWW-legal case.
- *
- * Retries once: the very first flash op right after a bank swap can glitch
- * (stale prefetch/mapping settling), so a single retry self-heals it instead
- * of dropping the write. Only reports failure if the retry also fails. */
+ * `addr`, then verify the readback. Single-bank: config/health live at fixed top
+ * pages; the physical bank is derived directly from the address (no SWAP). The
+ * config page is in the high half of the 1 MB part, hence the FLASH_BANK_2 case.
+ * Retries once on a transient flash glitch before reporting failure. */
 static int flashWritePage(uint32_t addr, const uint8_t *src, int nQuad)
 {
     uint32_t bank, page;
     if (addr < FLASH_BASE + FLASH_BANK_SIZE) {
-        bank = ota_swap_enabled() ? FLASH_BANK_2 : FLASH_BANK_1;  /* low window */
+        bank = FLASH_BANK_1;
         page = (addr - FLASH_BASE) / FLASH_PAGE_SIZE;
     } else {
-        bank = ota_swap_enabled() ? FLASH_BANK_1 : FLASH_BANK_2;  /* high window */
+        bank = FLASH_BANK_2;
         page = (addr - FLASH_BASE - FLASH_BANK_SIZE) / FLASH_PAGE_SIZE;
     }
 
@@ -2610,24 +2523,12 @@ static int healthValid(const health_stats_t *h)
 
 static void healthLoad(void)
 {
-    /* Same bank-follows-swap handling as configLoad: read both bank-top copies
-     * and adopt the valid one with the highest bootCount so stats (and the boot
-     * counter we use as a health signal) survive an A/B swap. */
-    const health_stats_t *pri = (const health_stats_t *)HEALTH_FLASH_ADDR;
-    const health_stats_t *alt = (const health_stats_t *)HEALTH_FLASH_ADDR_ALT;
-    const health_stats_t *best = NULL;
-    uint32_t bestBoots = 0;
-
-    if (healthValid(pri)) { best = pri; bestBoots = pri->bootCount; }
-    if (healthValid(alt) && (best == NULL || alt->bootCount > bestBoots)) {
-        best = alt; bestBoots = alt->bootCount;
-    }
-
-    if (best) {
-        memcpy(&health, best, sizeof(health));
-        printf("Health: Loaded from flash (boots=%lu, files=%lu, %s)\r\n",
-               (unsigned long)health.bootCount, (unsigned long)health.filesWritten,
-               best == pri ? "primary" : "alt-bank");
+    /* Single-bank: health lives at one fixed top page that never moves. */
+    const health_stats_t *flash = (const health_stats_t *)HEALTH_FLASH_ADDR;
+    if (healthValid(flash)) {
+        memcpy(&health, flash, sizeof(health));
+        printf("Health: Loaded from flash (boots=%lu, files=%lu)\r\n",
+               (unsigned long)health.bootCount, (unsigned long)health.filesWritten);
         return;
     }
 
