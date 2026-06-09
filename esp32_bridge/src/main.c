@@ -37,7 +37,7 @@
 #include "spi_protocol.h"
 
 #define TAG "BRIDGE"
-#define ESP_FW_VERSION "0.5.8"
+#define ESP_FW_VERSION "0.5.9"
 
 static bool wifi_started = false;
 
@@ -84,10 +84,25 @@ static bool            first_boot = true;
  * auto-recovery. 0 = never seen since boot. */
 static volatile int64_t last_spi_ok_us = 0;
 
-/* Monotonic µs until which the STM32's SPI silence is EXPECTED because it told us
- * (pwr_sleepSecs) it is in scheduled Stop 2 sleep. While now < this, the self-heal
- * watchdog must NOT treat silence as a dead STM. 0 = STM is awake / no notice. */
-static volatile int64_t stm32_sleep_until_us = 0;
+/* Deep-sleep-surviving wall clock (µs). CONFIG_ESP_TIME_FUNCS_USE_RTC_TIMER=y keeps
+ * gettimeofday() running across the WiFi-duty-cycle deep sleeps, so a deadline stored
+ * in RTC memory stays valid across the ESP's reboots (esp_timer restarts at 0 each
+ * boot and can't). Both reset only on a full power loss — which also reboots the STM,
+ * so the gate clearing then is correct. */
+#include <sys/time.h>
+static inline int64_t wall_us(void)
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (int64_t)tv.tv_sec * 1000000LL + tv.tv_usec;
+}
+
+/* wall_us() µs until which the STM32's SPI silence is EXPECTED because it told us
+ * (pwr_sleepSecs) it is in scheduled Stop 2 sleep. While wall_us() < this, the
+ * self-heal watchdog must NOT treat silence as a dead STM. 0 = awake / no notice.
+ * In RTC_DATA so it survives the ESP's duty-cycle deep-sleep reboots — without this
+ * the gate was wiped every cycle and the watchdog reset the sleeping STM. */
+RTC_DATA_ATTR static volatile int64_t stm32_sleep_until_us = 0;
 #define STM32_WD_SLEEP_MARGIN_S 120  /* grace past a scheduled-sleep window for the STM to wake + re-report */
 
 /* Refuse to start a flash below this battery level so an update can always
@@ -1453,7 +1468,7 @@ static void spi_task(void *arg)
                  * until N + margin elapses (margin covers wake + the first frame
                  * after the window, e.g. powering up to record). 0 = awake. */
                 if (rx->state.pwr_sleepSecs > 0)
-                    stm32_sleep_until_us = _now_us +
+                    stm32_sleep_until_us = wall_us() +   /* RTC-backed, survives deep sleep */
                         ((int64_t)rx->state.pwr_sleepSecs + STM32_WD_SLEEP_MARGIN_S) * 1000000LL;
                 else
                     stm32_sleep_until_us = 0;
@@ -1899,7 +1914,7 @@ static void stm32_watchdog_task(void *arg)
          * the bug that wiped config + killed dawn-chorus recording on all units).
          * Once overdue, the gate opens and normal dead-detection resumes so a unit
          * that genuinely failed to wake is still recovered. */
-        if (stm32_sleep_until_us != 0 && now < stm32_sleep_until_us) {
+        if (stm32_sleep_until_us != 0 && wall_us() < stm32_sleep_until_us) {
             alive_since = 0;  /* not counting toward the post-sleep stability window */
             continue;
         }
