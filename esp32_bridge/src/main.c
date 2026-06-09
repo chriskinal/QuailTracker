@@ -37,7 +37,7 @@
 #include "spi_protocol.h"
 
 #define TAG "BRIDGE"
-#define ESP_FW_VERSION "0.5.10"
+#define ESP_FW_VERSION "0.5.11"
 
 static bool wifi_started = false;
 
@@ -748,6 +748,13 @@ static int do_stm32_flash(const esp_partition_t *part, uint32_t size)
     for (int i = 0; i < 50 && spi_task_handle != NULL; i++)
         vTaskDelay(pdMS_TO_TICKS(100));
     ESP_LOGI(TAG, "SPI task stopped for flash");
+
+    /* Drop the cached STM version so /flash_status doesn't report the PRE-flash
+     * version in the success line. It stays blank until the freshly-flashed STM
+     * checks in over SPI — the UI shows "waiting for STM32 to boot..." then the
+     * real new version (previously it briefly showed the old one, e.g. 0.9.49 when
+     * reprovisioning a field unit to 0.10.3). */
+    local_state.comms_stm32FwVersion[0] = '\0';
 
     if (spi_initialized) {
         spi_slave_free(SPI_HOST);
