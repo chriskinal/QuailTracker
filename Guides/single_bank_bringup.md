@@ -1,7 +1,7 @@
 # Single-Bank Firmware Bring-Up & Provisioning
 
 Procedure for provisioning a QuailTracker unit to the **single-bank** firmware
-(STM `v0.10.0`+, ESP `v0.5.1`+) — the architecture that retired dual-bank A/B OTA.
+(STM `v0.10.3`+, ESP `v0.5.9`+) — the architecture that retired dual-bank A/B OTA.
 Applies to new units and to re-provisioning existing dual-bank units.
 
 ## What changed (why this procedure exists)
@@ -14,9 +14,9 @@ Applies to new units and to re-provisioning existing dual-bank units.
   (sleep-gated, so a scheduled Stop-2 is never disturbed).
 
 ## Firmware artifacts (repo root, from `pio run`)
-- `qt_esp_v0.5.1.bin` — merged ESP image, USB flash @ `0x0`
-- `qt_esp_app_v0.5.1.bin` — app-only, for Wi-Fi OTA of an already-running ESP
-- `qt_stm_v0.10.0.bin` — STM image, uploaded via the web UI
+- `qt_esp_v0.5.9.bin` — merged ESP image, USB flash @ `0x0`
+- `qt_esp_app_v0.5.9.bin` — app-only, for Wi-Fi OTA of an already-running ESP
+- `qt_stm_v0.10.3.bin` — STM image, uploaded via the web UI
 
 ---
 
@@ -40,9 +40,9 @@ a real A/B swap can be left on `SWAP_BANK=1`, which would corrupt config.
 
 ## Step 1 — Flash the ESP over USB
 1. Plug a **data** USB-C cable into the ESP32-C3.
-2. Flash `qt_esp_v0.5.1.bin` to offset **`0x0`**:
+2. Flash `qt_esp_v0.5.9.bin` to offset **`0x0`**:
    - Zero-install: <https://espressif.github.io/esptool-js/> (Chrome/Edge) → Connect
-     → address `0x0` → `qt_esp_v0.5.1.bin` → Program.
+     → address `0x0` → `qt_esp_v0.5.9.bin` → Program.
    - Or: `cd esp32_bridge && pio run -t upload`
 3. **Power-cycle** — full unplug (USB **and** battery), reconnect. (esptool's reset
    alone does not run the new ESP firmware.)
@@ -51,10 +51,10 @@ a real A/B swap can be left on `SWAP_BANK=1`, which would corrupt config.
 1. Join the unit's Wi-Fi AP (`QT_XXXX`, open) and open **http://192.168.9.1**.
    - The Wi-Fi should stay connected (the AP-drop bug is fixed in this firmware).
 2. STM32 version reads `--` (blank/old). In the **STM32 Firmware Update** card,
-   choose **`qt_stm_v0.10.0.bin`** → **Upload & Flash STM32**.
+   choose **`qt_stm_v0.10.3.bin`** → **Upload & Flash STM32**.
 3. The ESP runs the flash in the background and the card shows live progress —
    **"Flashing STM32 N% — keep powered, do NOT disconnect"** (~10–15 s) → on
-   success **"✓ STM32 flashed — running 0.10.0"** and the heartbeat starts. The Wi‑Fi
+   success **"✓ STM32 flashed — running 0.10.3"** and the heartbeat starts. The Wi‑Fi
    session stays up throughout (the flash no longer blanks the UI). If it ever shows
    a failure, leave the unit powered and re-flash — don't power-cycle mid-write.
 
