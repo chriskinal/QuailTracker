@@ -214,9 +214,14 @@ static uint32_t streamLastSpiTick = 0;  /* auto-stop timeout */
 #define GPS_FIX_TIMEOUT_MS         15000 /* max wait for GPS fix during duty cycle */
 #define OTA_SELF_CONFIRM_MS        20000 /* uptime after which a trial image self-confirms (not bricked) */
 #define SCHEDULE_CHECK_INTERVAL_MS 1000  /* how often to evaluate schedule */
-#define USER_CONNECTED_IDLE_MS    300000 /* 5 min: STM stays awake after ESP wake until SPI idle */
+#define USER_CONNECTED_IDLE_MS    300000 /* 5 min: backstop only — STM stays awake after an
+                                          * ESP wake until SPI idle IF the live client count
+                                          * is unavailable (ESP silent). Real presence wins. */
 static uint32_t lastScheduleCheckTick = 0;
 static uint32_t lastGpsDutyTick = 0;
+/* Live AP client count as reported by the ESP every SPI frame (command.wifi_clients).
+ * 0 = nobody connected → the USER_CONNECTED hold is dropped immediately. */
+static volatile uint8_t espWifiClients = 0;
 static uint8_t  gpsDutyActive = 0;   /* 1 = GPS is on for duty cycle fix */
 
 /* Forward declarations for power management */
@@ -2133,6 +2138,10 @@ static void StartBridgeTask(void *argument)
             /* Process received frame — binary protocol */
             static uint32_t lastCmdSeq = 0;  /* dedup: skip already-processed commands */
             if (spi_rx_frame.header.magic == SPI_FRAME_MAGIC) {
+                /* ESP reports its live AP client count every frame — track it so the
+                 * USER_CONNECTED hold follows real presence (see powerScheduleCheck). */
+                espWifiClients = spi_rx_frame.command.wifi_clients;
+
                 uint8_t cmd = SPI_CMD_NONE;
                 uint8_t cmd_payload[56];
                 uint32_t cmd_seq = 0;
@@ -2813,11 +2822,26 @@ static void powerScheduleCheck(void)
      * schedule transitions. Resume scheduled mode after USER_CONNECTED_IDLE_MS
      * with no SPI activity. */
     if (curState == PWR_USER_CONNECTED) {
-        uint32_t idle = HAL_GetTick() - dev.pwr.userConnectedTick;
-        if (idle < USER_CONNECTED_IDLE_MS) return;
+        /* A recording window takes priority over the connected-user hold: start
+         * recording even with someone connected — they'd want to see it record, and
+         * a window must never be skipped just because the UI is open. Mirrors the
+         * PWR_DEV_MODE bootstrap below. */
+        if (sched.shouldRecord) {
+            powerEnterRecord();
+            return;
+        }
 
-        printf("PWR: user idle %lus — resuming schedule\r\n",
-               (unsigned long)(idle / 1000));
+        /* Otherwise stay in the hold only while a client is ACTUALLY connected
+         * (ESP-reported live count) and within the idle backstop. The instant the
+         * last client leaves (espWifiClients == 0) — or the ESP goes silent past the
+         * idle window — drop the hold and return to the schedule, rather than
+         * waiting out a blind 5 minutes (which previously swallowed whole windows
+         * when a spurious ESP wake landed the STM here with no real user). */
+        uint32_t idle = HAL_GetTick() - dev.pwr.userConnectedTick;
+        if (espWifiClients > 0 && idle < USER_CONNECTED_IDLE_MS) return;
+
+        printf("PWR: %s — resuming schedule\r\n",
+               espWifiClients == 0 ? "no clients" : "user idle");
         /* Drop into the schedule transition logic. Synthetic SCHEDULED_REC
          * lets the REC→NONREC branch fire if we're outside a window, or the
          * NONREC→REC branch handles us if shouldRecord turned true while we

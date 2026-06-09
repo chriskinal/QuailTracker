@@ -37,7 +37,7 @@
 #include "spi_protocol.h"
 
 #define TAG "BRIDGE"
-#define ESP_FW_VERSION "0.5.7"
+#define ESP_FW_VERSION "0.5.8"
 
 static bool wifi_started = false;
 
@@ -1074,14 +1074,38 @@ static void stm32_wake(void);  /* fwd decl — defined later in file */
 
 /* WiFi AP event handler: wake STM32 whenever a station joins so the
  * user's incoming config commands land on a live STM32. */
+/* Live count of associated AP clients, forwarded to the STM every SPI frame so it
+ * can tie its USER_CONNECTED hold to real presence — dropping the hold the moment
+ * the last client leaves instead of waiting out a blind 5-minute idle timeout. */
+static volatile uint8_t g_wifi_clients = 0;
+
+static void wifi_refresh_client_count(void)
+{
+    wifi_sta_list_t l;
+    g_wifi_clients = (wifi_started && esp_wifi_ap_get_sta_list(&l) == ESP_OK)
+                     ? (uint8_t)l.num : 0;
+}
+
 static void wifi_ap_event_handler(void *arg, esp_event_base_t base,
                                   int32_t id, void *data)
 {
-    if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STACONNECTED) {
+    if (base != WIFI_EVENT) return;
+
+    if (id == WIFI_EVENT_AP_STACONNECTED) {
         wifi_event_ap_staconnected_t *e = (wifi_event_ap_staconnected_t *)data;
-        ESP_LOGI(TAG, "AP STA connected (aid=%d) — queuing STM32 wake", e->aid);
+        wifi_refresh_client_count();
+        ESP_LOGI(TAG, "AP STA connected (aid=%d) — %u client(s); queuing STM32 wake",
+                 e->aid, (unsigned)g_wifi_clients);
         /* Defer to spi_task — same reason as ws_handler. */
         stm32_wake_pending = true;
+    } else if (id == WIFI_EVENT_AP_STADISCONNECTED) {
+        wifi_event_ap_stadisconnected_t *e = (wifi_event_ap_stadisconnected_t *)data;
+        wifi_refresh_client_count();
+        ESP_LOGI(TAG, "AP STA disconnected (aid=%d) — %u client(s) left",
+                 e->aid, (unsigned)g_wifi_clients);
+        /* No wake needed: if the STM is in USER_CONNECTED it's awake and polling, so
+         * it sees g_wifi_clients drop on the next frame and returns to its schedule;
+         * if it's already asleep it's doing the right thing. */
     }
 }
 
@@ -1389,6 +1413,9 @@ static void spi_task(void *arg)
             flags |= SPI_FLAG_CMD_PENDING;
             pending_ttl--;
         }
+        /* Always report live client presence (independent of any command), so the
+         * STM ties USER_CONNECTED to real presence rather than a blind timeout. */
+        tx->command.wifi_clients = g_wifi_clients;
 
         tx->header.flags = flags;
         tx->header.crc16 = spi_frame_crc(tx);
@@ -1756,6 +1783,7 @@ static void power_mgmt_task(void *arg)
         if (wifi_started && esp_wifi_ap_get_sta_list(&sta_list) == ESP_OK) {
             wifi_clients = sta_list.num;
         }
+        g_wifi_clients = (uint8_t)wifi_clients;   /* periodic backstop for the events */
 
         /* Track "last client seen" — used to bridge brief iOS disconnect/reconnect
          * cycles. We treat the AP as "in use" if a client was associated within

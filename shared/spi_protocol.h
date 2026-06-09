@@ -89,7 +89,11 @@ _Static_assert(sizeof(qt_spi_tz_payload_t) == 8, "qt_spi_tz_payload_t must be 8 
 
 typedef struct __attribute__((packed)) {
     uint8_t  cmd;            /* spi_cmd_type_t */
-    uint8_t  _pad[3];
+    uint8_t  wifi_clients;   /* ESP→STM: live count of associated AP clients (0 = nobody
+                              * connected). Sent every frame regardless of cmd, so the STM
+                              * can keep its USER_CONNECTED hold tied to real presence
+                              * instead of a blind idle timeout. */
+    uint8_t  _pad[2];
     uint32_t seq;            /* for ack/dedup */
     uint8_t  payload[56];    /* cmd-specific data */
 } qt_spi_cmd_t;
