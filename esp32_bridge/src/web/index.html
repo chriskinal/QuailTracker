@@ -329,6 +329,7 @@
                     <button class="btn btn-gray" style="flex:1" onclick="sendCmd('sd_eject')">Eject</button>
                     <button class="btn btn-red" style="flex:1" onclick="if(confirm('Format SD card? All data will be lost.'))sendCmd('sd_format')">Format</button>
                 </div>
+                <div id="sdFmtOps" style="display:none;margin-top:8px;text-align:center;font-size:13px;font-weight:600"></div>
             </div>
             <!-- Location Survey -->
             <div class="card">
@@ -1293,24 +1294,52 @@
                 if (d.clip !== undefined)
                     document.getElementById('recClip').textContent = d.clip;
 
-                /* SD Card */
-                if (d.sdTotal !== undefined && d.sdFree !== undefined && d.sd) {
-                    var usedPct = d.sdTotal > 0 ? Math.round((1 - d.sdFree / d.sdTotal) * 100) : 0;
+                /* SD Card — an in-progress/failed format takes precedence over the
+                 * capacity display. sdFmt: 1=formatting, 3=error (2=done/0=idle fall
+                 * through to the normal display, which then shows the fresh card). */
+                var sdb = document.getElementById('sdBadge');
+                var sfo = document.getElementById('sdFmtOps');   /* Ops-tab progress line */
+                if (d.sdFmt === 1) {
+                    var pct = d.sdFmtPct || 0;
                     var sb = document.getElementById('sdBar');
-                    sb.style.width = usedPct + '%';
-                    sb.style.background = usedPct < 80 ? '#4CAF50' : usedPct < 95 ? '#FF9800' : '#F44336';
-                    document.getElementById('sdPct').textContent = usedPct + '% used';
-                    var freeGB = (d.sdFree / 1048576).toFixed(1);
-                    document.getElementById('sdFree').textContent = freeGB + ' GB free';
-                } else if (d.sd !== undefined && !d.sd) {
+                    sb.style.width = pct + '%';
+                    sb.style.background = '#FF9800';
+                    document.getElementById('sdPct').textContent = pct + '%';
+                    document.getElementById('sdFree').textContent = 'Formatting…';
+                    if (sdb) { sdb.textContent = 'Formatting'; sdb.className = 'badge bb'; }
+                    if (sfo) {
+                        sfo.style.display = 'block';
+                        sfo.style.color = '#FF9800';
+                        sfo.textContent = 'Formatting SD card… ' + pct + '% · ' + (d.sdFmtS || 0) + 's';
+                    }
+                } else if (d.sdFmt === 3) {
                     document.getElementById('sdBar').style.width = '0%';
-                    document.getElementById('sdPct').textContent = 'No SD';
+                    document.getElementById('sdPct').textContent = 'Format failed';
                     document.getElementById('sdFree').textContent = '';
-                }
-                if (d.sd !== undefined) {
-                    var sdb = document.getElementById('sdBadge');
-                    sdb.textContent = d.sd ? 'Mounted' : 'Unmounted';
-                    sdb.className = 'badge ' + (d.sd ? 'bg' : 'bb');
+                    if (sdb) { sdb.textContent = 'Error'; sdb.className = 'badge bb'; }
+                    if (sfo) { sfo.style.display = 'block'; sfo.style.color = '#F44336'; sfo.textContent = 'Format failed'; }
+                } else {
+                    if (sfo) {
+                        if (d.sdFmt === 2) { sfo.style.display = 'block'; sfo.style.color = '#4CAF50'; sfo.textContent = 'Format complete'; }
+                        else { sfo.style.display = 'none'; }
+                    }
+                    if (d.sdTotal !== undefined && d.sdFree !== undefined && d.sd) {
+                        var usedPct = d.sdTotal > 0 ? Math.round((1 - d.sdFree / d.sdTotal) * 100) : 0;
+                        var sb = document.getElementById('sdBar');
+                        sb.style.width = usedPct + '%';
+                        sb.style.background = usedPct < 80 ? '#4CAF50' : usedPct < 95 ? '#FF9800' : '#F44336';
+                        document.getElementById('sdPct').textContent = usedPct + '% used';
+                        var freeGB = (d.sdFree / 1048576).toFixed(1);
+                        document.getElementById('sdFree').textContent = freeGB + ' GB free';
+                    } else if (d.sd !== undefined && !d.sd) {
+                        document.getElementById('sdBar').style.width = '0%';
+                        document.getElementById('sdPct').textContent = 'No SD';
+                        document.getElementById('sdFree').textContent = '';
+                    }
+                    if (d.sd !== undefined && sdb) {
+                        sdb.textContent = d.sd ? 'Mounted' : 'Unmounted';
+                        sdb.className = 'badge ' + (d.sd ? 'bg' : 'bb');
+                    }
                 }
 
                 /* Survey */

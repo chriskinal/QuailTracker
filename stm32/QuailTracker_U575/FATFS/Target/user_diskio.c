@@ -468,10 +468,17 @@ DRESULT USER_write (
 )
 {
   /* USER CODE BEGIN WRITE */
+    /* Published format progress: while f_mkfs runs on the format thread, tally
+     * the bytes it writes so the web UI can show a live "N MB written" figure. */
+    extern volatile uint8_t  sdFormatState;
+    extern volatile uint32_t sdFormatBytes;
+
     if (pdrv || !count) return RES_PARERR;
     if (Stat & STA_NOINIT) return RES_NOTRDY;
 
     if (!(CardType & CT_BLOCK)) sector *= 512;
+
+    UINT reqCount = count;
 
     if (count == 1) {
         if (SD_SendCmd(CMD24, sector) == 0) {
@@ -490,6 +497,8 @@ DRESULT USER_write (
         }
     }
     SD_Deselect();
+    if (sdFormatState == 1 && count == 0)
+        sdFormatBytes += (uint32_t)reqCount * 512U;
     return count ? RES_ERROR : RES_OK;
   /* USER CODE END WRITE */
 }

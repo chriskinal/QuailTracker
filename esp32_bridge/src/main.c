@@ -37,7 +37,7 @@
 #include "spi_protocol.h"
 
 #define TAG "BRIDGE"
-#define ESP_FW_VERSION "0.5.11"
+#define ESP_FW_VERSION "0.5.14"
 
 static bool wifi_started = false;
 
@@ -83,6 +83,12 @@ static bool            first_boot = true;
 /* Monotonic µs of the last valid SPI frame from the STM32 — drives liveness /
  * auto-recovery. 0 = never seen since boot. */
 static volatile int64_t last_spi_ok_us = 0;
+
+/* True while the STM reports an SD format in progress (sdFormat_state==1). A
+ * large-card f_mkfs holds the STM busy; even though the bridge keeps answering
+ * SPI, gate the self-heal watchdog as defense-in-depth so a busy STM is never
+ * mistaken for a dead one and reflashed mid-format. */
+static volatile bool stm32_formatting = false;
 
 /* Deep-sleep-surviving wall clock (µs). CONFIG_ESP_TIME_FUNCS_USE_RTC_TIMER=y keeps
  * gettimeofday() running across the WiFi-duty-cycle deep sleeps, so a deadline stored
@@ -1480,6 +1486,9 @@ static void spi_task(void *arg)
                 else
                     stm32_sleep_until_us = 0;
 
+                /* SD format in progress: gate the self-heal watchdog (busy ≠ dead). */
+                stm32_formatting = (rx->state.sdFormat_state == 1);
+
                 /* Config sync: adopt if STM32 seq is higher */
                 if (rx->header.cfg_seq > local_cfg_seq) {
                     memcpy(&local_cfg, &rx->config, sizeof(device_config_t));
@@ -1579,6 +1588,7 @@ static void ws_push_task(void *arg)
                 "\"lat5\":%ld,\"lon5\":%ld,\"alt1\":%ld,"
                 "\"gpsTime\":\"%s\",\"pps\":%d,\"ppsCnt\":%lu,"
                 "\"sdFree\":%lu,\"sdTotal\":%lu,"
+                "\"sdFmt\":%d,\"sdFmtPct\":%d,\"sdFmtS\":%d,"
                 "\"solar\":\"%s\","
                 "\"recBytes\":%lu,\"ovf\":%lu,\"clip\":%lu,"
                 "\"svLat5\":%ld,\"svLon5\":%ld,\"svCnt\":%lu,\"svActive\":%d,"
@@ -1612,6 +1622,9 @@ static void ws_push_task(void *arg)
                 (int)s->gps_ppsSynced, (unsigned long)s->gps_ppsCount,
                 (unsigned long)s->rec_sdFreeKb,
                 (unsigned long)s->rec_sdTotalKb,
+                (int)s->sdFormat_state,
+                (int)s->sdFormat_pct,
+                (int)s->sdFormat_elapsedS,
                 solar,
                 (unsigned long)s->rec_dataBytes,
                 (unsigned long)s->rec_overruns,
@@ -1932,6 +1945,13 @@ static void stm32_watchdog_task(void *arg)
          * that genuinely failed to wake is still recovered. */
         if (stm32_sleep_until_us != 0 && wall_us() < stm32_sleep_until_us) {
             alive_since = 0;  /* not counting toward the post-sleep stability window */
+            continue;
+        }
+
+        /* SD format in progress: a large-card f_mkfs keeps the STM busy. Its SPI
+         * cadence is EXPECTED — do not treat it as dead or reflash it mid-format. */
+        if (stm32_formatting) {
+            alive_since = 0;
             continue;
         }
 

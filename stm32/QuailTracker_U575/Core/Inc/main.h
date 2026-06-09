@@ -69,7 +69,7 @@ void rtcGetDate(uint8_t *day, uint8_t *month, uint16_t *year);
 #define SD_CD_GPIO_Port GPIOC
 
 /* USER CODE BEGIN Private defines */
-#define FW_VERSION "0.10.3"
+#define FW_VERSION "0.10.6"
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

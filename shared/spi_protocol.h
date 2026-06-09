@@ -202,8 +202,19 @@ typedef struct __attribute__((packed)) {
      * (which would falsely read "done" if the GPS fix drops mid-survey). */
     uint8_t  survey_active;
 
+    /* SD card format progress (8 bytes). A long f_mkfs on a large (64 GB+) card
+     * runs on its own LOW-priority STM thread so StartBridgeTask keeps answering
+     * SPI. sdFormat_state: 0=idle, 1=in progress, 2=done OK, 3=error. While ==1
+     * the ESP MUST treat the SPI cadence as a BUSY STM, not a dead one — the
+     * self-heal watchdog must not reflash a unit that is merely formatting. The
+     * UI shows an indeterminate "Formatting… N MB · Ns" indicator. */
+    uint8_t  sdFormat_state;
+    uint8_t  sdFormat_pct;        /* 0..100 progress (FAT-clear is the bulk of mkfs) */
+    uint16_t sdFormat_elapsedS;   /* seconds since the format began */
+    uint32_t _rsv_fmt;            /* (was mbWritten — dropped, misleading on big cards) */
+
     /* Reserved — pad to 384 bytes */
-    uint8_t  _reserved[384 - 223];
+    uint8_t  _reserved[384 - 231];
 } spi_state_t;
 
 _Static_assert(sizeof(spi_state_t) == 384, "spi_state_t must be 384 bytes");

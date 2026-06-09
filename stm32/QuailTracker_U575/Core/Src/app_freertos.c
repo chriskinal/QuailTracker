@@ -320,6 +320,13 @@ const osThreadAttr_t cliTask_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
   .stack_size = 1024 * 4
 };
+/* Definitions for formatTask — an on-demand, LOW-priority worker that runs the
+ * long f_mkfs off StartBridgeTask so the SPI2 keepalive never stalls. */
+const osThreadAttr_t formatTask_attributes = {
+  .name = "formatTask",
+  .priority = (osPriority_t) osPriorityLow,
+  .stack_size = 1024 * 4
+};
 /* Definitions for fileMtx */
 osMutexId_t fileMtxHandle;
 const osMutexAttr_t fileMtx_attributes = {
@@ -341,6 +348,8 @@ const osSemaphoreAttr_t audioDmaSem_attributes = {
 static void StartGpsTask(void *argument);
 static void StartBridgeTask(void *argument);
 static void StartInferenceTask(void *argument);
+static void StartFormatTask(void *argument);
+static void requestFormat(void);
 static void printGpsStatus(void);
 static void gpsSetPower(uint8_t on);
 static void gpsReset(void);
@@ -900,9 +909,8 @@ void StartCliTask(void *argument)
           }
           printf("%c\r\n", confirm);
           if (confirm == 'y' || confirm == 'Y') {
-            osMutexAcquire(fileMtxHandle, osWaitForever);
-            formatSD();
-            osMutexRelease(fileMtxHandle);
+            requestFormat();   /* runs on the format thread; watch progress over SPI/UI */
+            printf("Formatting started (running in background)...\r\n");
           } else {
             printf("Cancelled\r\n");
           }
@@ -2020,6 +2028,50 @@ static uint16_t decimate_8k(int16_t *out, uint16_t maxSamples)
     return count;
 }
 
+/* ========================= Format Task ========================= */
+
+/* The format runs on its own LOW-priority thread so the long f_mkfs on a large
+ * (64 GB+) card doesn't block StartBridgeTask. If it did, the SPI2 keepalive
+ * would stall and the ESP self-heal watchdog would read the 30 s SPI silence as
+ * a dead STM and ROM-reflash the unit mid-format — wiping config and corrupting
+ * the card. Low priority guarantees the bridge (Normal) preempts the format's
+ * busy-wait SD spin loops so it keeps answering SPI. The held fileMtx is fine:
+ * sd_space_refresh() bails out while formatting and uses a timed mutex acquire
+ * elsewhere. Progress is published via spi_state_t.sdFormat_* for the web UI. */
+static void StartFormatTask(void *argument)
+{
+    (void)argument;
+
+    osMutexAcquire(fileMtxHandle, osWaitForever);
+    extern int formatSD(void);
+    formatSD();                       /* sets sdFormatState: 2=done OK, 3=error */
+    osMutexRelease(fileMtxHandle);
+
+    /* Hold the done/error state long enough for the UI to show it, then idle so
+     * the SD panel returns to its normal mounted/free-space display. */
+    extern volatile uint8_t sdFormatState;
+    osDelay(5000);
+    sdFormatState = 0;
+    osThreadExit();
+}
+
+/* Spawn the format worker if the card is idle and no format is already running.
+ * Called from the SPI command dispatch and the CLI menu. */
+static void requestFormat(void)
+{
+    extern volatile uint8_t sdFormatState;
+    if (isRecording) {
+        printf("format: refused — stop recording first\r\n");
+        return;
+    }
+    if (sdFormatState != 0) {
+        printf("format: already in progress\r\n");
+        return;
+    }
+    if (osThreadNew(StartFormatTask, NULL, &formatTask_attributes) == NULL)
+        printf("format: thread spawn failed\r\n");
+}
+
 /* ========================= Bridge Task (SPI2 + housekeeping) ========================= */
 
 static void StartBridgeTask(void *argument)
@@ -2181,6 +2233,11 @@ static void StartBridgeTask(void *argument)
                 /* Dispatch command */
                 switch (cmd) {
                 case SPI_CMD_REC_TOGGLE: {
+                    extern volatile uint8_t sdFormatState;
+                    if (sdFormatState != 0) {
+                        printf("SPI cmd: rec_toggle ignored (formatting)\r\n");
+                        break;
+                    }
                     uint8_t c = isRecording ? CMD_STOP_REC : CMD_START_REC;
                     osMessageQueuePut(audioCmdQueueHandle, &c, 0, 0);
                     printf("SPI cmd: rec_toggle\r\n");
@@ -2209,12 +2266,7 @@ static void StartBridgeTask(void *argument)
                     printf("SPI cmd: sd_eject\r\n");
                     break;
                 case SPI_CMD_SD_FORMAT:
-                    if (!isRecording) {
-                        osMutexAcquire(fileMtxHandle, osWaitForever);
-                        extern int formatSD(void);
-                        formatSD();
-                        osMutexRelease(fileMtxHandle);
-                    }
+                    requestFormat();   /* runs on the format thread, non-blocking */
                     printf("SPI cmd: sd_format\r\n");
                     break;
                 case SPI_CMD_SURVEY_START:
@@ -2608,6 +2660,9 @@ void healthUpdateRecStop(uint32_t bytes, uint32_t durationSecs)
 
 void sd_space_refresh(void)
 {
+    extern volatile uint8_t sdFormatState;
+    if (sdFormatState != 0)
+        return;   /* card is owned by the format thread — leave the last numbers */
     if (!sdMounted) {
         dev.rec.sdTotalKb = 0;
         dev.rec.sdFreeKb = 0;

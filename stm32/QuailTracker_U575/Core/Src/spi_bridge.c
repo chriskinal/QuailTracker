@@ -97,6 +97,27 @@ void spi_state_fill(spi_state_t *s, const device_state_t *dev,
     /* Comms */
     s->comms_spiTransactions = dev->comms.spiTransactions;
     strncpy(s->comms_stm32FwVersion, FW_VERSION, sizeof(s->comms_stm32FwVersion) - 1);
+
+    /* SD format progress (driven by formatSD() on the format thread). Percent
+     * is sectors-written / estimated-total, clamped to 99 until the done flag
+     * (state 2) snaps it to 100, so it never reads complete while still busy. */
+    {
+        extern volatile uint8_t  sdFormatState;
+        extern volatile uint32_t sdFormatBytes;
+        extern volatile uint32_t sdFormatStartTk;
+        extern volatile uint32_t sdFormatTotalSect;
+        s->sdFormat_state = sdFormatState;
+        uint8_t pct = 0;
+        if (sdFormatState == 2) {
+            pct = 100;
+        } else if (sdFormatState == 1 && sdFormatTotalSect) {
+            uint32_t done = (sdFormatBytes / 512U) * 100U / sdFormatTotalSect;
+            pct = (done > 99U) ? 99U : (uint8_t)done;
+        }
+        s->sdFormat_pct = pct;
+        s->sdFormat_elapsedS = sdFormatState
+            ? (uint16_t)((HAL_GetTick() - sdFormatStartTk) / 1000U) : 0;
+    }
 }
 
 /* ── Frame build ─────────────────────────────────────────────── */

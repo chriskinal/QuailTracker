@@ -26,6 +26,7 @@
 #include <stdio.h>
 #include "SEGGER_RTT.h"
 #include "fatfs.h"
+#include "diskio.h"
 #include "user_diskio.h"
 #include "app_freertos.h"
 #include "flac_encoder.h"
@@ -970,12 +971,45 @@ void chunkRecording(void)
     startRecording();
 }
 
+/* SD format progress, published over SPI (spi_state_t.sdFormat_*) so the web UI
+ * can show a live indicator and the ESP self-heal watchdog knows the STM is busy
+ * (not dead) while a long f_mkfs runs. Driven by formatSD() on the format thread;
+ * sdFormatBytes is bumped from USER_write() as f_mkfs clears the FAT region. */
+volatile uint8_t  sdFormatState = 0;   /* 0=idle 1=busy 2=done 3=error */
+volatile uint32_t sdFormatBytes = 0;   /* bytes written by f_mkfs so far */
+volatile uint32_t sdFormatStartTk = 0; /* HAL_GetTick() when the format began */
+volatile uint32_t sdFormatTotalSect = 0; /* est. sectors f_mkfs will write (for %) */
+
+/* Estimate how many sectors f_mkfs will write for this card so progress can be a
+ * real percent. mkfs only writes FS metadata; the FAT table dominates, and its
+ * size scales with the card. Replicates FatFS R0.12c's FAT32 cluster-size pick
+ * (cst32 table) + FAT-size formula (n_fats=1 in this build). Approximate is fine:
+ * the percent is clamped to 99 until the done flag snaps it to 100. */
+static uint32_t estFormatSectors(void)
+{
+    DWORD totSect = 0;
+    if (disk_ioctl(0, GET_SECTOR_COUNT, &totSect) != RES_OK || totSect == 0)
+        return 0;  /* unknown → caller shows an indeterminate state */
+
+    static const uint16_t cst32[] = {1, 2, 4, 8, 16, 32, 0};
+    DWORD n128 = totSect / 0x20000;          /* volume size in 64 MB units */
+    DWORD pau = 1;                            /* cluster size [sectors] */
+    for (int i = 0; cst32[i] && cst32[i] <= n128; i++) pau <<= 1;
+    DWORD n_clst = totSect / pau;
+    DWORD sz_fat = (n_clst * 4 + 8 + 511) / 512;   /* one FAT copy [sectors] */
+    return sz_fat + pau;                      /* FAT + root-dir cluster */
+}
+
 int formatSD(void)
 {
     extern FATFS USERFatFS;
     extern char USERPath[];
 
     printf("Formatting SD card (FAT32)...\r\n");
+
+    sdFormatBytes   = 0;
+    sdFormatStartTk = HAL_GetTick();
+    sdFormatState   = 1;            /* busy — gates the ESP watchdog, drives the UI */
 
     if (sdMounted) {
         f_mount(NULL, USERPath, 0);
@@ -985,14 +1019,25 @@ int formatSD(void)
     FRESULT fres = f_mount(&USERFatFS, USERPath, 0);
     if (fres != FR_OK) {
         printf("f_mount failed: %d\r\n", fres);
+        sdFormatState = 3;
         return 0;
     }
 
-    static uint8_t workBuf[512];
+    sdFormatTotalSect = estFormatSectors();   /* denominator for the progress % */
+
+    /* 32 KB work buffer (not 512 B): f_mkfs clears the FAT in chunks of
+     * len/sector_size sectors. On a big card the two FAT copies are tens of
+     * thousands of sectors; a 1-sector buffer writes them one slow single-block
+     * CMD24 at a time (~minutes). 32 KB = 64 sectors/write → multi-block CMD25,
+     * ~64x fewer SPI transactions. (f_mkfs only writes FS metadata — boot
+     * sector, FSInfo, both FATs, root dir — never the data region; it is already
+     * a "quick format", not a full byte-by-byte wipe.) */
+    static uint8_t workBuf[32 * 1024];
     fres = f_mkfs(USERPath, FM_FAT32, 0, workBuf, sizeof(workBuf));
     if (fres != FR_OK) {
         printf("f_mkfs failed: %d\r\n", fres);
         f_mount(NULL, USERPath, 0);
+        sdFormatState = 3;
         return 0;
     }
 
@@ -1000,12 +1045,14 @@ int formatSD(void)
     fres = f_mount(&USERFatFS, USERPath, 1);
     if (fres != FR_OK) {
         printf("Mount after format failed: %d\r\n", fres);
+        sdFormatState = 3;
         return 0;
     }
 
     sdMounted = 1;
     sdCreateDirs();
     printf("Format complete, SD card ready\r\n");
+    sdFormatState = 2;             /* done OK */
     return 1;
 }
 /* USER CODE END 0 */
