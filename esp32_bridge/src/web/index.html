@@ -859,10 +859,15 @@
         }
 
         function toggleDevMode(el) {
-            // 'dev_mode' on the STM toggles its devMode flag.
-            // Pre-flip already happened in the checkbox; if the device's
-            // current value disagrees, the next status frame will resync us.
+            // 'dev_mode' on the STM toggles its devMode flag. The checkbox already
+            // pre-flipped to the user's intent. The STM takes an SPI round-trip to
+            // apply it, so the next few state frames still report the OLD value —
+            // record the expected value as "pending" so the WS handler ignores those
+            // stale echoes until the device confirms (else the slider bounces
+            // off->on->off). 3s safety window in case the toggle never lands.
             sendCmd('dev_mode');
+            window._devPending = el.checked;
+            window._devPendingUntil = Date.now() + 3000;
             document.getElementById('devModeLbl').textContent = el.checked ? 'On' : 'Off';
         }
 
@@ -1221,17 +1226,31 @@
                     document.getElementById('ppsCount').textContent = '(' + d.ppsCnt + ' pulses)';
 
                 /* Dev Mode toggle + derived schedule status */
+                var _devEff;   /* effective dev-mode: honors an in-flight local toggle */
                 if (d.devMode !== undefined) {
                     var dm = document.getElementById('devModeChk');
                     var dmLbl = document.getElementById('devModeLbl');
                     var on = !!d.devMode;
+                    /* While a local toggle is in flight, ignore stale device echoes
+                     * (they lag the SPI round-trip) and hold the user's value until
+                     * the device confirms it — or the 3s window expires. Stops the
+                     * off->on->off slider bounce. */
+                    if (window._devPending !== undefined) {
+                        if (on === window._devPending || Date.now() > window._devPendingUntil) {
+                            window._devPending = undefined;   /* confirmed or timed out */
+                        } else {
+                            on = window._devPending;          /* hold user's intent */
+                        }
+                    }
+                    _devEff = on;
                     if (dm && dm.checked !== on) dm.checked = on;
                     if (dmLbl) dmLbl.textContent = on ? 'On' : 'Off';
                 }
                 if (d.devMode !== undefined || d.schedActive !== undefined || d.rtcSync !== undefined) {
                     var st = document.getElementById('schedStatus');
+                    var devOn = (_devEff !== undefined) ? _devEff : !!d.devMode;
                     if (st) {
-                        if (d.devMode) {
+                        if (devOn) {
                             st.textContent = 'Dev mode — STM stays awake';
                             st.style.color = '#888';
                         } else if (d.schedActive) {
