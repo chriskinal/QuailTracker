@@ -37,7 +37,7 @@
 #include "spi_protocol.h"
 
 #define TAG "BRIDGE"
-#define ESP_FW_VERSION "0.5.6"
+#define ESP_FW_VERSION "0.5.7"
 
 static bool wifi_started = false;
 

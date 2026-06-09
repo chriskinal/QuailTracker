@@ -706,13 +706,16 @@
                 var d = document.createElement('div');
                 d.className = 'row';
                 d.style.marginBottom = '6px';
-                d.innerHTML = '<input type="time" class="num" style="width:100px" value="' +
+                /* Time inputs flex to fill the row (12-hour locales append " AM/PM"
+                 * + a stepper, which a fixed 100px clipped to "06:00 A"). Capped so
+                 * they don't over-stretch on a wide screen; left-aligned + slim
+                 * padding so the whole value is visible even on a narrow phone. */
+                d.innerHTML = '<input type="time" class="num" style="flex:1 1 0;min-width:0;max-width:150px;text-align:left;padding:6px 6px" value="' +
                     schWindows[i].start + '" onchange="schWindows[' + i + '].start=this.value">' +
-                    '<span class="val-sm" style="margin:0 8px">to</span>' +
-                    '<input type="time" class="num" style="width:100px" value="' +
+                    '<span class="val-sm" style="margin:0 6px;flex:0 0 auto">to</span>' +
+                    '<input type="time" class="num" style="flex:1 1 0;min-width:0;max-width:150px;text-align:left;padding:6px 6px" value="' +
                     schWindows[i].end + '" onchange="schWindows[' + i + '].end=this.value">' +
-                    '<span class="spacer"></span>' +
-                    '<button class="btn btn-red" style="width:auto;padding:4px 10px;margin:0;font-size:11px" onclick="removeWindow(' + i + ')">X</button>';
+                    '<button class="btn btn-red" style="width:auto;padding:4px 10px;margin:0 0 0 8px;font-size:11px;flex:0 0 auto" onclick="removeWindow(' + i + ')">X</button>';
                 el.appendChild(d);
             }
         }
