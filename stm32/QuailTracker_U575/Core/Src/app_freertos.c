@@ -2886,8 +2886,13 @@ static void powerScheduleCheck(void)
          * a time, exit only on shouldRecord transition or USER_CONNECTED. */
         uint32_t loopIter = 0;
         for (;;) {
+            /* secsUntilNext is whole-minute granularity (derived from nowMinUTC,
+             * which drops the seconds), so subtract the seconds already elapsed in
+             * the current minute — otherwise we wake up to ~59s into the window and
+             * clip its start. This lands the wake on the window's :00 second. */
             uint32_t sleepSec = sched.secsUntilNext;
-            if (sleepSec < 60)    sleepSec = 60;     /* min 60s — avoid rapid wake/sleep churn */
+            sleepSec = (sleepSec > ss) ? (sleepSec - ss) : 0;
+            if (sleepSec < 5)     sleepSec = 5;      /* floor: skip a pointless ~0s Stop 2 */
             if (sleepSec > 65000) sleepSec = 65000;  /* RTC wake-timer max */
 
             printf("PWR: sleep iter=%lu rtc=%02u:%02u:%02u sleepSec=%lu nextWindow=%lu\r\n",
