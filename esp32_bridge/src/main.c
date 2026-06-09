@@ -37,7 +37,7 @@
 #include "spi_protocol.h"
 
 #define TAG "BRIDGE"
-#define ESP_FW_VERSION "0.5.9"
+#define ESP_FW_VERSION "0.5.10"
 
 static bool wifi_started = false;
 
@@ -1789,6 +1789,13 @@ static void power_mgmt_task(void *arg)
     uint32_t duty_cycle_tick = xTaskGetTickCount();
     uint32_t last_client_tick = 0;  /* xTaskGetTickCount when a client was last seen */
 
+    /* The 3-min boot grace lets a user connect after a FRESH power-on (deploy/reset).
+     * A duty-cycle deep-sleep wake reboots the chip too — but must NOT re-apply the
+     * grace, or the ESP stays awake the full 3 min EVERY cycle instead of
+     * WIFI_DUTY_ON_MS (the observed "3 min on / 1 min off"). Skip it when we woke
+     * from the duty-cycle timer; keep it for a cold boot or a laser (GPIO) wake. */
+    bool skip_boot_grace = (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER);
+
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
 
@@ -1811,9 +1818,11 @@ static void power_mgmt_task(void *arg)
         bool client_recent = (last_client_tick != 0) &&
                              ((now_tick - last_client_tick) * portTICK_PERIOD_MS) < CLIENT_GRACE_MS;
 
-        /* Boot grace period: stay awake for 3 min after boot so user can connect */
+        /* Boot grace period: stay awake for 3 min after a COLD boot so user can
+         * connect. Skipped after a duty-cycle timer wake (see skip_boot_grace) so
+         * the on-time is WIFI_DUTY_ON_MS, not the full grace, every cycle. */
         uint32_t uptime_ms = now_tick * portTICK_PERIOD_MS;
-        if (uptime_ms < BOOT_GRACE_MS) continue;
+        if (!skip_boot_grace && uptime_ms < BOOT_GRACE_MS) continue;
 
         /* WiFi duty cycle: on 30s with no client (and no recent client),
          * then deep sleep 60s. Deep sleep draws ~5µA vs 44mA with WiFi off
