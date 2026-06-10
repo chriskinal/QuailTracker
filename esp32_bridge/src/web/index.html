@@ -181,6 +181,11 @@
         </div>
     </div>
 
+    <!-- STM32 unrecoverable: soft resets failed, auto-reflash is disabled by design -->
+    <div id="stmServiceBanner" style="display:none;background:#B71C1C;color:#fff;padding:8px 12px;font-size:13px;font-weight:600;text-align:center">
+        ⚠ STM32 not responding — soft resets didn't recover it. Re-flash via Operations → Flash STM32.
+    </div>
+
     <!-- Tab Content -->
     <div class="content">
 
@@ -1146,6 +1151,17 @@
                 _lastMsg = Date.now();
               try {
                 var d = JSON.parse(ev.data);
+
+                /* STM32 watchdog: show the service banner when soft resets gave up;
+                 * clear it as soon as live STM telemetry (e.g. battery) resumes. */
+                if (d.stm32NeedsService) {
+                    var _sb = document.getElementById('stmServiceBanner');
+                    if (_sb) _sb.style.display = 'block';
+                }
+                if (d.bat !== undefined) {
+                    var _sb2 = document.getElementById('stmServiceBanner');
+                    if (_sb2) _sb2.style.display = 'none';
+                }
 
                 /* STM32 flash progress via WebSocket */
                 if (d.stm32flash !== undefined && window._stm32flashing) {

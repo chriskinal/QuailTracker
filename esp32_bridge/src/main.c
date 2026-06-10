@@ -37,7 +37,7 @@
 #include "spi_protocol.h"
 
 #define TAG "BRIDGE"
-#define ESP_FW_VERSION "0.5.14"
+#define ESP_FW_VERSION "0.5.15"
 
 static bool wifi_started = false;
 
@@ -115,9 +115,10 @@ RTC_DATA_ATTR static volatile int64_t stm32_sleep_until_us = 0;
  * finish. 0 = battery unknown (no STM32 telemetry yet) → allowed. */
 #define FLASH_MIN_BATT_MV  3500
 
-/* ── Staged-image metadata (NVS) for self-healing recovery ─────────
- * The stm32fw partition retains the last staged image; we persist its size +
- * CRC so the watchdog can confirm integrity before a recovery re-flash. */
+/* ── Staged-image metadata (NVS) ──────────────────────────────────
+ * Records the size + CRC of the last image flashed to the STM via the web UI as
+ * an integrity/diagnostic record. (No longer used for auto-recovery — the
+ * watchdog never reflashes the STM; see stm32_watchdog_task.) */
 static void staged_meta_save(uint32_t size, uint32_t crc)
 {
     nvs_handle_t h;
@@ -126,16 +127,6 @@ static void staged_meta_save(uint32_t size, uint32_t crc)
     nvs_set_u32(h, "stmfw_crc", crc);
     nvs_commit(h);
     nvs_close(h);
-}
-
-static bool staged_meta_load(uint32_t *size, uint32_t *crc)
-{
-    nvs_handle_t h;
-    if (nvs_open("bridge", NVS_READONLY, &h) != ESP_OK) return false;
-    bool ok = (nvs_get_u32(h, "stmfw_sz", size) == ESP_OK) &&
-              (nvs_get_u32(h, "stmfw_crc", crc) == ESP_OK);
-    nvs_close(h);
-    return ok && *size > 0;
 }
 
 /* ── Audio streaming state ────────────────────────────────────── */
@@ -916,9 +907,7 @@ static esp_err_t stm32_ota_handler(httpd_req_t *req)
                  (unsigned long)sp, (unsigned long)rv);
     }
 
-    /* Persist staged-image metadata BEFORE flashing, so if this flash is
-     * interrupted (power loss) the watchdog can recover from the retained
-     * partition on next boot. */
+    /* Record the staged image's size + CRC (integrity/diagnostic log). */
     {
         uint32_t crc = stm32_flash_crc32(part, (uint32_t)received);
         staged_meta_save((uint32_t)received, crc);
@@ -1919,8 +1908,7 @@ static void laser_wake_check(void)
 #define STM32_WD_BOOT_GRACE_MS  30000       /* let STM32 boot + start SPI before judging */
 #define STM32_WD_DEAD_US        30000000LL  /* no valid frame for 30s = dead */
 #define STM32_WD_STABLE_US      120000000LL /* continuously alive 120s => image good, re-arm */
-#define STM32_WD_RESET_ATTEMPTS 2           /* try this many non-destructive NRST resets first */
-#define STM32_WD_MAX_ATTEMPTS   3           /* total: RESET_ATTEMPTS soft resets, then 1 reflash, then give up */
+#define STM32_WD_RESET_ATTEMPTS 2           /* non-destructive NRST resets, then give up (NO auto-reflash) */
 /* STM32_WD_SLEEP_MARGIN_S defined near stm32_sleep_until_us (used earlier in spi_task) */
 
 static void stm32_watchdog_task(void *arg)
@@ -1973,48 +1961,32 @@ static void stm32_watchdog_task(void *arg)
         /* STM32 has been silent past DEAD_US */
         alive_since = 0;
 
-        if (attempts >= STM32_WD_MAX_ATTEMPTS) {
+        if (attempts >= STM32_WD_RESET_ATTEMPTS) {
+            /* Soft resets didn't recover it. We deliberately DO NOT auto-reflash
+             * the staged image. The ESP can't tell a crashing STM from one that is
+             * merely busy, mid-flash, sleeping, or freshly flashed with a bad
+             * build, and it can't verify the staged image actually boots — so
+             * auto-reflash repeatedly wiped config, looped on a bad staged image,
+             * and fought bench J-Link flashes. Flag for service instead; flashing
+             * is a deliberate, verifiable human action via the web UI. */
             if (!gave_up) {
-                ESP_LOGE(TAG, "STM32 unrecoverable after %d attempts — giving up "
-                              "(unit needs service / replacement)", STM32_WD_MAX_ATTEMPTS);
+                ESP_LOGE(TAG, "STM32 unresponsive after %d NRST resets — flagging for "
+                              "service (auto-reflash disabled; flash via web UI)",
+                         STM32_WD_RESET_ATTEMPTS);
+                ws_broadcast("{\"stm32NeedsService\":1}");
                 gave_up = true;
             }
             continue;
         }
 
-        /* Escalation ladder: try non-destructive NRST resets first (a hung STM
-         * often recovers from a clean reset with config + image untouched), and
-         * only reflash from the staged image if resets don't bring it back. */
+        /* Non-destructive NRST reset — the ONLY automatic recovery action. A hung
+         * STM usually recovers from a clean reset with config + image untouched,
+         * and a reset can never corrupt flash. */
         attempts++;
         ws_broadcast("{\"stm32Recover\":1}");
-
-        if (attempts <= STM32_WD_RESET_ATTEMPTS) {
-            ESP_LOGW(TAG, "STM32 unresponsive %ds — NRST reset %d/%d (soft recovery)",
-                     (int)(STM32_WD_DEAD_US / 1000000), attempts, STM32_WD_RESET_ATTEMPTS);
-            stm32_reset();
-            vTaskDelay(pdMS_TO_TICKS(STM32_WD_BOOT_GRACE_MS));  /* let it boot + check in */
-            continue;
-        }
-
-        /* Resets didn't recover it — reflash from the staged image (if intact). */
-        uint32_t sz = 0, crc = 0;
-        if (!staged_meta_load(&sz, &crc)) {
-            ESP_LOGE(TAG, "STM32 still dead, no staged image to reflash — giving up");
-            attempts = STM32_WD_MAX_ATTEMPTS;
-            continue;
-        }
-        const esp_partition_t *part = esp_partition_find_first(
-            ESP_PARTITION_TYPE_DATA, 0x80, STM32FW_PARTITION_LABEL);
-        if (!part) { attempts = STM32_WD_MAX_ATTEMPTS; continue; }
-        if (stm32_flash_crc32(part, sz) != crc) {
-            ESP_LOGE(TAG, "Recovery aborted: staged image CRC mismatch — giving up");
-            attempts = STM32_WD_MAX_ATTEMPTS;  /* don't reflash a corrupt image */
-            continue;
-        }
-
-        ESP_LOGW(TAG, "STM32 still dead after %d resets — recovery flash (%lu bytes)",
-                 STM32_WD_RESET_ATTEMPTS, (unsigned long)sz);
-        do_stm32_flash(part, sz);
+        ESP_LOGW(TAG, "STM32 unresponsive %ds — NRST reset %d/%d",
+                 (int)(STM32_WD_DEAD_US / 1000000), attempts, STM32_WD_RESET_ATTEMPTS);
+        stm32_reset();
         vTaskDelay(pdMS_TO_TICKS(STM32_WD_BOOT_GRACE_MS));  /* let it boot + check in */
     }
 }
