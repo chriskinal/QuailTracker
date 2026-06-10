@@ -95,6 +95,15 @@ static __attribute__((used, noreturn)) void hf_dump_and_spin(const char *tag, ui
                     : "=r" (frame));                                 \
     hf_dump_and_spin((tag), frame);                                  \
 } while (0)
+/* Capture-and-report trampoline for the naked HardFault_Handler below. Passing
+ * the stacked frame pointer in r0 lets the handler stay naked, so its asm reads
+ * LR (EXC_RETURN) before any C prologue can clobber it — the old non-naked
+ * handler read LR too late, picked the wrong stack, and printed garbage PC/LR/Rx
+ * (tell: R1/R2/R3 echoed CFSR/HFSR/BFAR, its own spilled locals). */
+__attribute__((used, noreturn)) void HardFault_Report(uint32_t *frame)
+{
+    hf_dump_and_spin("HARDFAULT", frame);
+}
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
@@ -129,48 +138,21 @@ void NMI_Handler(void)
 /**
   * @brief This function handles Hard fault interrupt.
   */
-void HardFault_Handler(void)
+/* USER CODE BEGIN HardFault_IRQn 0 */
+/* Naked: capture the stacked frame with LR still = EXC_RETURN, then hand the
+ * correct stack pointer to HardFault_Report so PC/LR/Rx are the REAL faulting
+ * context. (frame: [0]=R0 [1]=R1 [2]=R2 [3]=R3 [4]=R12 [5]=LR [6]=PC [7]=xPSR) */
+__attribute__((naked)) void HardFault_Handler(void)
 {
-  /* USER CODE BEGIN HardFault_IRQn 0 */
-  {
-    volatile uint32_t cfsr  = SCB->CFSR;
-    volatile uint32_t hfsr  = SCB->HFSR;
-    volatile uint32_t mmfar = SCB->MMFAR;
-    volatile uint32_t bfar  = SCB->BFAR;
-
-    /* Get the stacked frame from PSP or MSP depending on EXC_RETURN */
-    uint32_t *frame;
-    __asm volatile ("tst lr, #4 \n"
-                    "ite eq     \n"
-                    "mrseq %0, msp \n"
-                    "mrsne %0, psp \n"
-                    : "=r" (frame));
-    /* frame: [0]=R0 [1]=R1 [2]=R2 [3]=R3 [4]=R12 [5]=LR [6]=PC [7]=xPSR */
-
-    hf_puts("\r\n!!! HARDFAULT\r\n");
-    hf_puts("PC=");  hf_hex32(frame[6]); hf_puts("\r\n");
-    hf_puts("LR=");  hf_hex32(frame[5]); hf_puts("\r\n");
-    hf_puts("SP=");  hf_hex32((uint32_t)frame); hf_puts("\r\n");
-    hf_puts("CFSR="); hf_hex32(cfsr); hf_puts("\r\n");
-    hf_puts("HFSR="); hf_hex32(hfsr); hf_puts("\r\n");
-    hf_puts("BFAR="); hf_hex32(bfar); hf_puts("\r\n");
-    hf_puts("MMFAR="); hf_hex32(mmfar); hf_puts("\r\n");
-    hf_puts("R0="); hf_hex32(frame[0]); hf_puts(" R1="); hf_hex32(frame[1]); hf_puts("\r\n");
-    hf_puts("R2="); hf_hex32(frame[2]); hf_puts(" R3="); hf_hex32(frame[3]); hf_puts("\r\n");
-    hf_puts("R12="); hf_hex32(frame[4]); hf_puts("\r\n");
-  }
-  /* Rapid-blink status LED */
-  for (;;) {
-    GPIOD->ODR ^= GPIO_PIN_13;
-    for (volatile int i = 0; i < 500000; i++) {}
-  }
-  /* USER CODE END HardFault_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_HardFault_IRQn 0 */
-    /* USER CODE END W1_HardFault_IRQn 0 */
-  }
+  __asm volatile (
+      "tst lr, #4         \n"   /* EXC_RETURN bit2: 0 -> MSP, 1 -> PSP */
+      "ite eq             \n"
+      "mrseq r0, msp      \n"
+      "mrsne r0, psp      \n"
+      "b HardFault_Report \n"
+  );
 }
+/* USER CODE END HardFault_IRQn 0 */
 
 /**
   * @brief This function handles Memory management fault.
