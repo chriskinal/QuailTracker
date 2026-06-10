@@ -65,8 +65,7 @@
                             Command="{Binding FindMatchesCommand}" />
                     <Button Content="2. Run Localization"
                             Classes="PrimaryButton"
-                            Command="{Binding LocalizeCommand}"
-                            IsEnabled="{Binding Matches.Count}" />
+                            Command="{Binding LocalizeCommand}" />
                     <Button Content="Clear Results"
                             Classes="ToolbarButton"
                             Command="{Binding ClearLocalizationsCommand}" />

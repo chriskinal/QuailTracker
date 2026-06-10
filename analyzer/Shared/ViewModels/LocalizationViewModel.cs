@@ -41,6 +41,7 @@ public partial class LocalizationViewModel : ObservableObject
     private CancellationTokenSource? _cts;
 
     [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(LocalizeCommand))]
     private bool _isLocalizing;
 
     [ObservableProperty]
@@ -80,6 +81,11 @@ public partial class LocalizationViewModel : ObservableObject
 
         _detections.CollectionChanged += (_, _) => OnPropertyChanged(nameof(SelectedDetectionCount));
         _stations.CollectionChanged += (_, _) => OnPropertyChanged(nameof(StationsWithLocationCount));
+        // RelayCommand caches its CanExecute result and only refreshes on an explicit
+        // notify. FindMatches() populates Matches but nothing told LocalizeCommand, so
+        // its CanExecute stayed false from startup and the button stayed greyed even
+        // with matches found. Re-evaluate whenever the match set changes.
+        Matches.CollectionChanged += (_, _) => LocalizeCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnMaxTimeDifferenceMsChanged(double value)
