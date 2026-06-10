@@ -180,6 +180,12 @@ extern void sht30Read(void);
 #define SURVEY_DURATION_MS  300000      /* 5 minutes */
 #define SURVEY_MIN_SATS     4           /* minimum satellites for valid fix */
 #define SURVEY_MAX_READINGS 150         /* finish early after this many fixes */
+/* Runtime refinement quality gates — stricter than the install survey so a
+ * post-deployment bad/stale fix can't drag the surveyed position off (one field
+ * unit reported ~15 km away and broke TDOA). A fix must clear ALL three. */
+#define REFINE_MIN_SATS     6           /* require good geometry to nudge the anchor */
+#define REFINE_MAX_HDOP     2.0f        /* reject fixes with HDOP worse than this */
+#define REFINE_MAX_OFFSET_M 50.0f       /* reject fixes farther than this from the survey (outlier) */
 
 static volatile uint8_t gpsRawOutput;
 static uint8_t gpsPowered = 1;
@@ -1682,6 +1688,19 @@ static void nmea_parse_gga(const char *line)
     f = nmea_field(line, 6);  gpsData.fix = (uint8_t)nmea_parse_int(f);
     f = nmea_field(line, 7);  gpsData.satellites = (uint8_t)nmea_parse_int(f);
 
+    /* Field 8: HDOP (horizontal dilution of precision, e.g. "1.2") */
+    f = nmea_field(line, 8);
+    if (*f >= '0' && *f <= '9') {
+        int32_t whole = 0, frac = 0, frac_div = 1;
+        const char *p = f;
+        while (*p >= '0' && *p <= '9') { whole = whole * 10 + (*p++ - '0'); }
+        if (*p == '.') {
+            p++;
+            while (*p >= '0' && *p <= '9') { frac = frac * 10 + (*p++ - '0'); frac_div *= 10; }
+        }
+        gpsData.hdop = (float)whole + (float)frac / (float)frac_div;
+    }
+
     /* Field 9: altitude above MSL in meters (e.g. "728.3") */
     f = nmea_field(line, 9);
     if (*f && (*f == '-' || (*f >= '0' && *f <= '9'))) {
@@ -1944,13 +1963,30 @@ static void surveyAccumulate(float lat, float lon, float alt)
         }
         /* Status pushed to ESP32 via SPI JSON */
     } else if (cfg.surveyCount > 0) {
-        /* Continuous refinement: keep averaging after initial survey */
+        /* Continuous refinement: keep improving the surveyed position with
+         * runtime fixes — but only HIGH-CONFIDENCE ones, and reject anything
+         * that jumps far from the established anchor. Without these gates a unit
+         * that woke with poor lock and held a wrong position averaged ~15 km of
+         * garbage into its "surveyed" coordinate and broke TDOA. Survey-in is
+         * the anchor; refinement may only nudge it, never relocate it. */
+        if (gpsData.satellites < REFINE_MIN_SATS)
+            return;                                   /* too few sats — weak geometry */
+        if (gpsData.hdop <= 0.0f || gpsData.hdop > REFINE_MAX_HDOP)
+            return;                                   /* poor/unknown HDOP */
+
+        /* Outlier reject: equirectangular metres from the current survey point. */
+        float mPerDegLon = 111320.0f * cosf(cfg.surveyLat * 0.0174532925f);
+        float dN = (lat - cfg.surveyLat) * 111320.0f;
+        float dE = (lon - cfg.surveyLon) * mPerDegLon;
+        if (dN * dN + dE * dE > REFINE_MAX_OFFSET_M * REFINE_MAX_OFFSET_M)
+            return;                                   /* too far — bad fix / multipath */
+
         cfg.surveyCount++;
         cfg.surveyLat += (lat - cfg.surveyLat) / (float)cfg.surveyCount;
         cfg.surveyLon += (lon - cfg.surveyLon) / (float)cfg.surveyCount;
         cfg.surveyAlt += (alt - cfg.surveyAlt) / (float)cfg.surveyCount;
 
-        /* Save periodically (every 100 fixes) to avoid flash wear */
+        /* Save periodically (every 100 accepted fixes) to limit flash wear */
         if ((cfg.surveyCount % 100) == 0) {
             configSave();
         }

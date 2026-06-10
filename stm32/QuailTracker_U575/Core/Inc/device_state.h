@@ -37,6 +37,7 @@ typedef struct {
     float    latitude;   /* decimal degrees, + = N */
     float    longitude;  /* decimal degrees, + = E */
     float    altitude;   /* meters above MSL (from GGA) */
+    float    hdop;       /* horizontal dilution of precision (GGA field 8); lower=better, 0=unknown */
     uint32_t utc_time;   /* HHMMSS as integer */
     uint32_t utc_date;   /* DDMMYY as integer */
     uint8_t  valid;      /* RMC status: 1=A, 0=V */
