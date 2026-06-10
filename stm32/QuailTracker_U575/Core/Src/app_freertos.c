@@ -130,6 +130,7 @@ void device_state_snapshot(device_state_t *out)
 #define recFilename         dev.rec.filename
 #define gpsData             dev.gps.fix
 #define ppsSynced           dev.gps.ppsSynced
+#define ppsSyncTick         dev.gps.ppsSyncTick
 #define ppsCount            dev.gps.ppsCount
 #define ppsTick             dev.gps.ppsTick
 #define ppsUtcTime          dev.gps.ppsUtcTime
@@ -1650,6 +1651,7 @@ static void nmea_parse_rmc(const char *line)
         ppsLongitude = gpsData.longitude;
         ppsAltitude = gpsData.altitude;
         ppsSynced = 1;
+        ppsSyncTick = HAL_GetTick();   /* freshness stamp — gates TDOA UTC metadata */
 
         /* Accumulate GPS fix for survey-in (PPS-synchronized fixes only) */
         surveyAccumulate(gpsData.latitude, gpsData.longitude, gpsData.altitude);
@@ -1837,6 +1839,10 @@ static void gpsSetPower(uint8_t on)
          * whatever timestamp the first fix-of-the-day delivered. */
         gpsData.valid = 0;
         gpsData.fix = 0;
+        /* Drop the previous power-on's PPS latch too, so the freshness gate in
+         * startRecording can't anchor a recording to a stale pre-sleep UTC. */
+        ppsSynced = 0;
+        ppsUtcDate = 0;
         /* Rail up first, let it settle, THEN release the GPS-facing signals —
          * never drive an unpowered input. */
         HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_SET);   /* GPS_VCC EN high */

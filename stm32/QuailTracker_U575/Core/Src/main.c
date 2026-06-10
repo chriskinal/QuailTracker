@@ -130,6 +130,7 @@ flac_enc_t flacEncoder;
 #define ppsUtcTime     dev.gps.ppsUtcTime
 #define ppsUtcDate     dev.gps.ppsUtcDate
 #define ppsSynced      dev.gps.ppsSynced
+#define ppsSyncTick    dev.gps.ppsSyncTick
 #define ppsLatitude    dev.gps.ppsLatitude
 #define ppsLongitude   dev.gps.ppsLongitude
 #define ppsAltitude    dev.gps.ppsAltitude
@@ -156,6 +157,11 @@ char deviceStationId[16] = "QT001";
 /* Audio DMA callback tracking for PPS-sample correlation */
 volatile uint32_t dmaCallbackCount = 0;
 volatile uint32_t dmaCallbackTick = 0;
+
+/* Max age of the last valid PPS/RMC sync for it to be trusted as the recording's
+ * UTC anchor. When GPS is locked, RMC updates ppsSyncTick every ~1s; anything
+ * older means GPS has lost lock and the cached UTC is stale. */
+#define PPS_SYNC_MAX_AGE_MS 5000U
 
 /* Recording metadata — latched at start, used for GUANO at stop */
 static uint32_t recStartTime = 0;
@@ -574,12 +580,34 @@ void writeFlacVorbisComment(FIL *fp)
         pos += clen;
     }
 
-    /* Block header: is_last=1, type=4 (VORBIS_COMMENT), length = total - 4 */
-    uint32_t dataLen = FLAC_META2_SIZE - 4;
-    buf[0] = 0x84;
-    buf[1] = (uint8_t)(dataLen >> 16);
-    buf[2] = (uint8_t)(dataLen >> 8);
-    buf[3] = (uint8_t)(dataLen);
+    /* Two blocks so the output is valid FLAC: a VORBIS_COMMENT sized to its
+     * ACTUAL content, followed by a PADDING block that absorbs the reserved
+     * slack. We always emit exactly FLAC_META2_SIZE bytes (so the audio offset
+     * is fixed), but the leftover must be a real PADDING block — NOT trailing
+     * zeros inside the comment block, which strict decoders (libFLAC / flac
+     * 1.5+) reject as "reserved fields in use". `pos` is the comment content
+     * end; the bytes from `pos` onward are already zero from the memset. */
+    if (pos + 4 <= FLAC_META2_SIZE) {
+        uint32_t vcLen = pos - 4;                       /* comment content bytes */
+        buf[0] = 0x04;                                  /* is_last=0, type=4 (VORBIS_COMMENT) */
+        buf[1] = (uint8_t)(vcLen >> 16);
+        buf[2] = (uint8_t)(vcLen >> 8);
+        buf[3] = (uint8_t)(vcLen);
+
+        uint32_t padLen = FLAC_META2_SIZE - pos - 4;    /* PADDING payload bytes (>=0) */
+        buf[pos + 0] = 0x81;                            /* is_last=1, type=1 (PADDING) */
+        buf[pos + 1] = (uint8_t)(padLen >> 16);
+        buf[pos + 2] = (uint8_t)(padLen >> 8);
+        buf[pos + 3] = (uint8_t)(padLen);
+    } else {
+        /* No room for a separate PADDING header (would need >508 B of tags —
+         * never happens with the current set). Emit a single full-size block. */
+        uint32_t dataLen = FLAC_META2_SIZE - 4;
+        buf[0] = 0x84;                                  /* is_last=1, type=4 */
+        buf[1] = (uint8_t)(dataLen >> 16);
+        buf[2] = (uint8_t)(dataLen >> 8);
+        buf[3] = (uint8_t)(dataLen);
+    }
 
     UINT bw;
     f_write(fp, buf, FLAC_META2_SIZE, &bw);
@@ -759,8 +787,15 @@ void startRecording(void)
     }
 
     /* Latch GPS state for GUANO metadata.
-     * Prefer surveyed position (sub-meter accuracy) over instantaneous fix. */
-    if (ppsSynced && ppsUtcDate != 0) {
+     * Prefer surveyed position (sub-meter accuracy) over instantaneous fix.
+     * Gate on a FRESH PPS sync: ppsSynced is a sticky latch and ppsUtc* freeze
+     * when GPS loses lock, so without a freshness check a stale/wrong UTC gets
+     * written as PPS_SYNC_UTC — observed in the field as day-off timestamps and
+     * identical syncs carried across consecutive chunks. When locked, RMC (and
+     * thus ppsSyncTick) updates every second; >PPS_SYNC_MAX_AGE_MS old means
+     * GPS isn't locked now, so omit all GPS-derived metadata for this file. */
+    if (ppsSynced && ppsUtcDate != 0 &&
+        (HAL_GetTick() - ppsSyncTick) < PPS_SYNC_MAX_AGE_MS) {
         recStartTime = ppsUtcTime;
         recStartDate = ppsUtcDate;
 

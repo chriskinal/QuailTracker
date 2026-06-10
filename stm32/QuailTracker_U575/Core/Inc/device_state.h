@@ -143,6 +143,7 @@ typedef struct {
     struct {
         gps_data_t fix;           /* was gpsData */
         volatile uint8_t  ppsSynced;
+        volatile uint32_t ppsSyncTick;  /* HAL_GetTick() when ppsUtc time/position last latched from a VALID RMC; freshness gate for TDOA metadata */
         volatile uint32_t ppsCount;
         volatile uint32_t ppsTick;
         uint32_t ppsUtcTime;
