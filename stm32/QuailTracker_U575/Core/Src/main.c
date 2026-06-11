@@ -1602,7 +1602,10 @@ static void MX_SPI1_Init(void)
   SPI_AutonomousModeConfTypeDef HAL_SPI_AutonomousMode_Cfg_Struct = {0};
 
   /* USER CODE BEGIN SPI1_Init 1 */
-
+  /* SPI1 (SD) kernel clock source is switched at runtime by SPI_SetSlow/SetFast
+   * in user_diskio.c: HSI16 for the ≤400 kHz identification phase, PCLK2 (bus)
+   * for the data phase. Clocking it permanently from HSI16 caused SPI FIFO
+   * stalls (spiDead) under sustained writes due to the 10:1 kernel/bus ratio. */
   /* USER CODE END SPI1_Init 1 */
   /* SPI1 parameter configuration*/
   hspi1.Instance = SPI1;

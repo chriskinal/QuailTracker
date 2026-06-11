@@ -820,22 +820,32 @@ void StartCliTask(void *argument)
     {
       uint32_t flags = osThreadFlagsClear(0x30);
       if (flags & 0x10) {
-        /* Card inserted — debounce then mount */
-        osDelay(50);
-        if (HAL_GPIO_ReadPin(SD_CD_GPIO_Port, SD_CD_Pin) == GPIO_PIN_RESET && !sdMounted) {
-          extern FATFS USERFatFS;
-          extern char USERPath[];
+        /* Card inserted. The CD switch trips mid-insertion — before the power and
+         * data contacts have fully seated and the card has powered up — so a mount
+         * fired right after the edge gets CMD0=0xFF on slower cards (flaky: fast
+         * cards make it, slow ones don't). Settle, then retry the mount until it
+         * comes up or the card is pulled back out. */
+        extern FATFS USERFatFS;
+        extern char USERPath[];
+        osDelay(250);  /* let contacts seat + card power settle */
+        for (int att = 0; att < 4 && !sdMounted; att++) {
+          if (HAL_GPIO_ReadPin(SD_CD_GPIO_Port, SD_CD_Pin) != GPIO_PIN_RESET)
+            break;  /* pulled back out */
           osMutexAcquire(fileMtxHandle, osWaitForever);
           if (f_mount(&USERFatFS, USERPath, 1) == FR_OK) {
             sdMounted = 1;
             { extern void sdCreateDirs(void); sdCreateDirs(); }
-            printf("SD card inserted — mounted\r\n");
-          } else {
-            printf("SD card inserted — mount failed\r\n");
           }
           osMutexRelease(fileMtxHandle);
-          { extern void sd_space_refresh(void); sd_space_refresh(); }
+          if (sdMounted) {
+            printf("SD card inserted — mounted (try %d)\r\n", att + 1);
+            { extern void sd_space_refresh(void); sd_space_refresh(); }
+          } else {
+            osDelay(250);  /* not ready yet — settle more and retry */
+          }
         }
+        if (!sdMounted && HAL_GPIO_ReadPin(SD_CD_GPIO_Port, SD_CD_Pin) == GPIO_PIN_RESET)
+          printf("SD card inserted — mount FAILED after retries\r\n");
       }
       if (flags & 0x20) {
         /* Card removed — stop recording if active, unmount */
@@ -2534,6 +2544,15 @@ static int configValid(const device_config_t *c)
 
 static void configLoad(void)
 {
+    /* Log the flash bank layout — config/health writes depend on it. SWAP_BANK=1
+     * (left over from the retired A/B OTA on many units) is handled in
+     * flashWritePage; DUALBANK must be dual for the bank-2 config page to exist. */
+    uint32_t optr = FLASH->OPTR;
+    printf("Flash: OPTR=0x%08lX SWAP_BANK=%d DUALBANK=%d\r\n",
+           (unsigned long)optr,
+           (optr & FLASH_OPTR_SWAP_BANK) ? 1 : 0,
+           (optr & FLASH_OPTR_DUALBANK) ? 1 : 0);
+
     /* Single-bank: config lives at one fixed top page that never moves. */
     const device_config_t *flash = (const device_config_t *)CONFIG_FLASH_ADDR;
     if (configValid(flash)) {

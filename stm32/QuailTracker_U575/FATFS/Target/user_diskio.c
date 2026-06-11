@@ -34,6 +34,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include <string.h>
+#include <stdio.h>
 #include "ff_gen_drv.h"
 #include "main.h"
 
@@ -127,16 +128,32 @@ static void SPI_Recover(void)
     spiDead = 0;
 }
 
+/* Switch SPI1's kernel clock source between phases. Identification must be
+ * 100–400 kHz, which the 160 MHz bus clock can't reach (÷256 = 625 kHz, out of
+ * spec — strict cards refuse CMD0), so init runs off HSI16 (16 MHz)/64 = 250 kHz.
+ * But clocking the data phase from HSI16 stalls the SPI FIFO under sustained
+ * writes (spiDead) due to the 10:1 kernel/bus ratio — so data runs off the bus
+ * clock (PCLK2 = 160 MHz)/32 = 5 MHz, the long-proven reliable config. */
+static void SPI_SetClockSource(uint32_t src)
+{
+    RCC_PeriphCLKInitTypeDef c = {0};
+    c.PeriphClockSelection = RCC_PERIPHCLK_SPI1;
+    c.Spi1ClockSelection   = src;
+    HAL_RCCEx_PeriphCLKConfig(&c);
+}
+
 static void SPI_SetSlow(void)
 {
     if (hspi1.Instance->CR1 & SPI_CR1_SPE) SPI_Stop();
-    MODIFY_REG(hspi1.Instance->CFG1, SPI_CFG1_MBR_Msk, SPI_BAUDRATEPRESCALER_256);
+    SPI_SetClockSource(RCC_SPI1CLKSOURCE_HSI);                                     /* 16 MHz */
+    MODIFY_REG(hspi1.Instance->CFG1, SPI_CFG1_MBR_Msk, SPI_BAUDRATEPRESCALER_64);  /* 16MHz/64 = 250 kHz */
 }
 
 static void SPI_SetFast(void)
 {
     if (hspi1.Instance->CR1 & SPI_CR1_SPE) SPI_Stop();
-    MODIFY_REG(hspi1.Instance->CFG1, SPI_CFG1_MBR_Msk, SPI_BAUDRATEPRESCALER_32);
+    SPI_SetClockSource(RCC_SPI1CLKSOURCE_PCLK2);                                   /* 160 MHz bus */
+    MODIFY_REG(hspi1.Instance->CFG1, SPI_CFG1_MBR_Msk, SPI_BAUDRATEPRESCALER_32);  /* 160MHz/32 = 5 MHz */
 }
 
 /* Timeout ~10ms at 160MHz (each iteration is a few cycles) */
@@ -281,7 +298,10 @@ static int SD_RxDataBlock(uint8_t *buf, uint16_t len)
 
 static int SD_TxDataBlock(const uint8_t *buf, uint8_t token)
 {
-    if (!SD_ReadyWait(500)) return 0;
+    if (!SD_ReadyWait(500)) {
+        printf("SD_Tx FAIL: card busy >500ms (tok=0x%02X spiDead=%d)\r\n", token, spiDead);
+        return 0;
+    }
 
     SPI_TxRx(token);
     if (token != 0xFD) {
@@ -290,7 +310,12 @@ static int SD_TxDataBlock(const uint8_t *buf, uint8_t token)
         SPI_TxRx(0xFF);
 
         uint8_t resp = SPI_TxRx(0xFF);
-        if ((resp & 0x1F) != 0x05) return 0;
+        if ((resp & 0x1F) != 0x05) {
+            /* 0x05=accepted, 0x0B=CRC error (signal), 0x0D=write error (card),
+             * 0xFF=SPI dead. */
+            printf("SD_Tx FAIL: data resp=0x%02X spiDead=%d\r\n", resp, spiDead);
+            return 0;
+        }
     }
     return 1;
 }
@@ -356,20 +381,39 @@ DSTATUS USER_initialize (
     for (n = 0; n < 10; n++) SPI_TxRx(0xFF); /* 80 clocks with CS high */
 
     ty = 0;
-    if (SD_SendCmd(CMD0, 0) == 1) {
+    uint8_t r0 = SD_SendCmd(CMD0, 0);
+    printf("SD init [%u/3]: CMD0 r=0x%02X (1=idle)\r\n", retry + 1, r0);
+    if (r0 == 1) {
         uint32_t start = HAL_GetTick();
-        if (SD_SendCmd(CMD8, 0x1AA) == 1) {
+        uint8_t r8 = SD_SendCmd(CMD8, 0x1AA);
+        if (r8 == 1) {
             /* SDv2 */
             for (n = 0; n < 4; n++) ocr[n] = SPI_TxRx(0xFF);
+            printf("SD init: CMD8 r=0x%02X echo=%02X%02X%02X%02X\r\n",
+                   r8, ocr[0], ocr[1], ocr[2], ocr[3]);
             if (ocr[2] == 0x01 && ocr[3] == 0xAA) {
+                /* Poll ACMD41 until the card leaves idle, or 1 s elapses. NO log
+                 * inside the loop — it would slow the poll and skew the timing. */
                 while ((HAL_GetTick() - start) < 1000 && SD_SendCmd(ACMD41 | 0x80, 1UL << 30));
-                if ((HAL_GetTick() - start) < 1000 && SD_SendCmd(CMD58, 0) == 0) {
+                uint32_t el = HAL_GetTick() - start;
+                int ready = (el < 1000);
+                printf("SD init: ACMD41 %s after %lu ms (budget 1000)\r\n",
+                       ready ? "READY" : "TIMEOUT", (unsigned long)el);
+                if (ready && SD_SendCmd(CMD58, 0) == 0) {
                     for (n = 0; n < 4; n++) ocr[n] = SPI_TxRx(0xFF);
                     ty = (ocr[0] & 0x40) ? (CT_SD2 | CT_BLOCK) : CT_SD2;
+                    printf("SD init: CMD58 OCR=%02X%02X%02X%02X CCS=%d -> %s\r\n",
+                           ocr[0], ocr[1], ocr[2], ocr[3], (ocr[0] & 0x40) ? 1 : 0,
+                           (ocr[0] & 0x40) ? "SDHC/SDXC block-addr" : "SDv2 byte-addr");
+                } else if (ready) {
+                    printf("SD init: CMD58 (read OCR) FAILED\r\n");
                 }
+            } else {
+                printf("SD init: CMD8 echo mismatch — bad voltage window\r\n");
             }
         } else {
             /* SDv1 or MMC */
+            printf("SD init: CMD8 r=0x%02X -> SDv1/MMC path\r\n", r8);
             if (SD_SendCmd(ACMD41 | 0x80, 0) <= 1) {
                 ty = CT_SD1; cmd = ACMD41 | 0x80;
             } else {
@@ -377,6 +421,8 @@ DSTATUS USER_initialize (
             }
             while ((HAL_GetTick() - start) < 1000 && SD_SendCmd(cmd, 0));
             if ((HAL_GetTick() - start) >= 1000) ty = 0;
+            printf("SD init: SDv1/MMC ACMD41 ty=0x%02X after %lu ms\r\n",
+                   ty, (unsigned long)(HAL_GetTick() - start));
         }
     }
     if (ty && !(ty & CT_BLOCK)) {
@@ -389,8 +435,10 @@ DSTATUS USER_initialize (
     if (ty) {
         SPI_SetFast();
         Stat &= ~STA_NOINIT;
+        printf("SD init: SUCCESS type=0x%02X%s\r\n", ty, (ty & CT_BLOCK) ? " (block)" : "");
         break; /* Success — exit retry loop */
     }
+    printf("SD init: attempt %u FAILED (ty=0)\r\n", retry + 1);
     /* Stop SPI before retry */
     if (hspi1.Instance->CR1 & SPI_CR1_SPE) SPI_Stop();
     } /* end retry loop */
@@ -480,25 +528,36 @@ DRESULT USER_write (
 
     UINT reqCount = count;
 
+    uint8_t cmdResp = 0xFF;
+    int cmdFailNum = 0;
     if (count == 1) {
-        if (SD_SendCmd(CMD24, sector) == 0) {
+        cmdResp = SD_SendCmd(CMD24, sector);
+        if (cmdResp == 0) {
             if (SD_TxDataBlock(buff, 0xFE)) count = 0;
+        } else {
+            cmdFailNum = 24;
         }
     } else {
         if (CardType & (CT_SD1 | CT_SD2)) {
             SD_SendCmd(ACMD41 | 0x80, 0); /* Dummy ACMD23 prep */
         }
-        if (SD_SendCmd(CMD25, sector) == 0) {
+        cmdResp = SD_SendCmd(CMD25, sector);
+        if (cmdResp == 0) {
             do {
                 if (!SD_TxDataBlock(buff, 0xFC)) break;
                 buff += 512;
             } while (--count);
             if (!SD_TxDataBlock(0, 0xFD)) count = 1; /* Stop token */
+        } else {
+            cmdFailNum = 25;
         }
     }
     SD_Deselect();
     if (sdFormatState == 1 && count == 0)
         sdFormatBytes += (uint32_t)reqCount * 512U;
+    if (cmdFailNum)
+        printf("USER_write FAIL: CMD%d resp=0x%02X LBA=%lu spiDead=%d\r\n",
+               cmdFailNum, cmdResp, (unsigned long)sector, spiDead);
     return count ? RES_ERROR : RES_OK;
   /* USER CODE END WRITE */
 }
