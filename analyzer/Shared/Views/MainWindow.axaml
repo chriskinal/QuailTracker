@@ -50,7 +50,14 @@
                         <TextBlock Text="Single Analysis" VerticalAlignment="Center" />
                     </StackPanel>
                 </TabItem.Header>
-                <views:SingleAnalysisView DataContext="{Binding SingleAnalysisViewModel}" />
+                <TabControl Margin="0,4,0,0">
+                    <TabItem Header="Detection">
+                        <views:SingleAnalysisView DataContext="{Binding SingleAnalysisViewModel}" />
+                    </TabItem>
+                    <TabItem Header="Quality">
+                        <views:QualityView DataContext="{Binding QualityViewModel}" />
+                    </TabItem>
+                </TabControl>
             </TabItem>
 
             <!-- Bulk Analysis -->

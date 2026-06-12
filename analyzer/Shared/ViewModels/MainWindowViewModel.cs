@@ -74,6 +74,9 @@ public partial class MainWindowViewModel : ObservableObject
     private SingleAnalysisViewModel _singleAnalysisViewModel;
 
     [ObservableProperty]
+    private QualityViewModel _qualityViewModel;
+
+    [ObservableProperty]
     private ImportViewModel _importViewModel;
 
     [ObservableProperty]
@@ -151,6 +154,15 @@ public partial class MainWindowViewModel : ObservableObject
             noiseReduction,
             configService,
             appState);
+
+        _qualityViewModel = new QualityViewModel(audioFileService, new QualityAnalysisService());
+        // Forward the recording loaded in Single Analysis to the Quality panel so it
+        // analyzes the same file — decoupled, no direct VM-to-VM reference.
+        _singleAnalysisViewModel.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(SingleAnalysisViewModel.FilePath))
+                _qualityViewModel.FilePath = _singleAnalysisViewModel.FilePath;
+        };
 
         _importViewModel = new ImportViewModel(
             audioFileService,

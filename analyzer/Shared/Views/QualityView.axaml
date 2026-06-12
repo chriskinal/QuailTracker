@@ -1,0 +1,108 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:QuailTracker.Analyzer.Shared.ViewModels"
+             x:Class="QuailTracker.Analyzer.Shared.Views.QualityView"
+             x:DataType="vm:QualityViewModel">
+
+    <Grid RowDefinitions="Auto,*" Margin="8">
+
+        <!-- Controls + overall score -->
+        <Border Grid.Row="0" Classes="CardPanel" Margin="0,0,0,8">
+            <Grid ColumnDefinitions="Auto,Auto,*,Auto">
+                <Button Grid.Column="0"
+                        Classes="PrimaryButton"
+                        Content="Run Quality Analysis"
+                        Command="{Binding AnalyzeCommand}"
+                        IsVisible="{Binding !IsAnalyzing}" />
+                <Button Grid.Column="0"
+                        Classes="DangerButton"
+                        Content="Cancel"
+                        Command="{Binding CancelCommand}"
+                        IsVisible="{Binding IsAnalyzing}" />
+
+                <TextBlock Grid.Column="2"
+                           Text="{Binding StatusMessage}"
+                           VerticalAlignment="Center"
+                           Margin="12,0"
+                           Foreground="#757575"
+                           TextTrimming="CharacterEllipsis" />
+
+                <Border Grid.Column="3"
+                        IsVisible="{Binding HasReport}"
+                        Background="{Binding ScoreColor}"
+                        CornerRadius="6"
+                        Padding="14,6">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Quality" Foreground="White" VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding ScoreText}" Foreground="White"
+                                   FontWeight="Bold" FontSize="16" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Border>
+
+        <!-- Report card -->
+        <ScrollViewer Grid.Row="1" IsVisible="{Binding HasReport}">
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+
+                <!-- Metrics -->
+                <Border Grid.Column="0" Classes="CardPanel">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="Metrics" Classes="SectionHeader" />
+                        <ItemsControl ItemsSource="{Binding Metrics}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid ColumnDefinitions="170,*,90" Margin="0,4">
+                                        <TextBlock Grid.Column="0" Text="{Binding Name}"
+                                                   VerticalAlignment="Center" />
+                                        <ProgressBar Grid.Column="1"
+                                                     Minimum="0" Maximum="100"
+                                                     Value="{Binding BarPercent}"
+                                                     Foreground="{Binding RatingColor}"
+                                                     Height="8" VerticalAlignment="Center"
+                                                     Margin="4,0" />
+                                        <TextBlock Grid.Column="2" Text="{Binding Value}"
+                                                   Foreground="{Binding RatingColor}"
+                                                   FontWeight="SemiBold"
+                                                   TextAlignment="Right"
+                                                   VerticalAlignment="Center" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <!-- Suggestions -->
+                <Border Grid.Column="1" Classes="CardPanel">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="Suggestions" Classes="SectionHeader" />
+                        <ItemsControl ItemsSource="{Binding Suggestions}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border BorderThickness="3,0,0,0"
+                                            BorderBrush="{Binding Color}"
+                                            Padding="10,4" Margin="0,4">
+                                        <Grid ColumnDefinitions="Auto,*">
+                                            <TextBlock Grid.Column="0" Text="{Binding Icon}"
+                                                       Foreground="{Binding Color}"
+                                                       FontSize="16" Margin="0,0,8,0"
+                                                       VerticalAlignment="Top" />
+                                            <StackPanel Grid.Column="1" Spacing="2">
+                                                <TextBlock Text="{Binding Category}"
+                                                           FontWeight="Bold"
+                                                           Foreground="{Binding Color}" />
+                                                <TextBlock Text="{Binding Message}"
+                                                           TextWrapping="Wrap" />
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </ScrollViewer>
+    </Grid>
+</UserControl>
