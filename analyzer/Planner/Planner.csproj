@@ -8,4 +8,8 @@
     <AssemblyName>qt-planner</AssemblyName>
     <RootNamespace>QuailTracker.Planner</RootNamespace>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Localization\QuailTracker.Localization.csproj" />
+  </ItemGroup>
 </Project>
