@@ -18,6 +18,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -28,17 +29,27 @@ using QuailTracker.Analyzer.Shared.Services;
 
 namespace QuailTracker.Analyzer.Shared.ViewModels;
 
+/// <summary>One row of the coverage sweep: percent-of-area within target per method.</summary>
+public sealed record CoverageRow(int Stations, string Tdoa, string Bearing, string Fusion);
+
 /// <summary>
-/// Deployment Planner tab: draw a study-area boundary on the map, then (later phases)
-/// auto-place PPS stations and score coverage. Phase 3 covers drawing the polygon and
-/// reporting its size.
+/// Deployment Planner tab: draw a study-area boundary on the map, then auto-place a
+/// perimeter ring of PPS stations and score coverage (CRLB) across station counts for
+/// TDOA / Bearing / Fusion.
 /// </summary>
 public partial class DeploymentPlannerViewModel : ObservableObject
 {
     private const double SqMetersPerHectare = 10_000.0;
     private const double SqMetersPerAcre = 4046.8564224;
 
+    // Coverage sweep parameters (mirror the qt-planner CLI defaults).
+    private const int MinStations = 3, MaxStations = 8, GridRes = 41;
+    private const double CoverageGoal = 0.90;
+
     private readonly DeploymentPlannerMapService _mapService;
+
+    /// <summary>Latest drawn study-area ring (WGS84, closed), or null when there's no usable polygon.</summary>
+    private IReadOnlyList<(double Lat, double Lon)>? _currentRing;
 
     [ObservableProperty]
     private string _statusMessage =
@@ -47,9 +58,16 @@ public partial class DeploymentPlannerViewModel : ObservableObject
     [ObservableProperty]
     private string _areaSummary = "No study area drawn yet.";
 
-    /// <summary>True once a usable polygon (≥3 corners) exists — gates the later "plan" step.</summary>
     [ObservableProperty]
+    private string _planSummary = string.Empty;
+
+    /// <summary>True once a usable polygon (≥3 corners) exists — gates the "Plan Stations" step.</summary>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(PlanStationsCommand))]
     private bool _hasArea;
+
+    /// <summary>Coverage-per-method by station count, for the results table.</summary>
+    public ObservableCollection<CoverageRow> CoverageRows { get; } = [];
 
     public DeploymentPlannerViewModel(DeploymentPlannerMapService mapService)
     {
@@ -81,22 +99,96 @@ public partial class DeploymentPlannerViewModel : ObservableObject
         StatusMessage = "Cleared. Click “Draw Area” to start again.";
     }
 
+    [RelayCommand(CanExecute = nameof(CanPlanStations))]
+    private async Task PlanStationsAsync()
+    {
+        var ring = _currentRing;
+        if (ring is null) return;
+
+        StatusMessage = "Computing station layout…";
+        var (rows, stations, summary) = await Task.Run(() => ComputePlan(ring));
+
+        CoverageRows.Clear();
+        foreach (var r in rows) CoverageRows.Add(r);
+        PlanSummary = summary;
+        _mapService.ShowStations(stations);
+        StatusMessage = $"Placed {stations.Count} stations. Adjust the area and re-plan, or tweak placement next.";
+    }
+
+    private bool CanPlanStations() => HasArea;
+
     private void OnAreaChanged(IReadOnlyList<(double Lat, double Lon)>? ring)
     {
         // The ring is closed (last == first), so distinct corners = count - 1.
         var corners = ring is { Count: >= 4 } ? ring.Count - 1 : 0;
         if (corners < 3)
         {
+            _currentRing = null;
             HasArea = false;
             AreaSummary = "No study area drawn yet.";
+            ClearPlan();
             return;
         }
 
+        _currentRing = ring;
         double m2 = PolygonAreaSqMeters(ring!);
         AreaSummary = $"Study area: {m2 / SqMetersPerHectare:F1} ha "
                     + $"({m2 / SqMetersPerAcre:F1} ac) · {corners} corners";
         HasArea = true;
+
+        // The geometry changed, so any existing plan is stale.
+        ClearPlan();
     }
+
+    private void ClearPlan()
+    {
+        if (CoverageRows.Count == 0 && PlanSummary.Length == 0) return;
+        CoverageRows.Clear();
+        PlanSummary = string.Empty;
+        _mapService.ClearStations();
+    }
+
+    /// <summary>
+    /// Sweep station counts over the drawn polygon: place a perimeter ring, score CRLB
+    /// coverage per method, pick the smallest count meeting the Fusion goal, and return the
+    /// table + chosen stations (WGS84 + inward heading) + a summary. Pure / off the UI thread.
+    /// </summary>
+    private static (List<CoverageRow> Rows, List<(double Lat, double Lon, double HeadingDeg)> Stations, string Summary)
+        ComputePlan(IReadOnlyList<(double Lat, double Lon)> ring)
+    {
+        var proj = new GeoProjection(ring.Average(p => p.Lat), ring.Average(p => p.Lon));
+        var polygon = ring.Select(p => proj.ToLocal(p.Lat, p.Lon)).ToList();
+        var prm = new LocalizationParams();
+
+        var rows = new List<CoverageRow>();
+        int? bestFusionN = null;
+        for (var n = MinStations; n <= MaxStations; n++)
+        {
+            var stns = PerimeterLayout.Ring(polygon, n);
+            var t = AreaModel.EvaluatePolygon(stns, LocalizationMethod.Tdoa, prm, polygon, GridRes);
+            var b = AreaModel.EvaluatePolygon(stns, LocalizationMethod.Bearing, prm, polygon, GridRes);
+            var f = AreaModel.EvaluatePolygon(stns, LocalizationMethod.Fusion, prm, polygon, GridRes);
+            rows.Add(new CoverageRow(n, Cell(t), Cell(b), Cell(f)));
+            if (bestFusionN is null && f.Coverage >= CoverageGoal) bestFusionN = n;
+        }
+
+        var pickN = bestFusionN ?? MaxStations;
+        var stations = PerimeterLayout.Ring(polygon, pickN)
+            .Select(s =>
+            {
+                var (lat, lon) = proj.ToGeo(s.X, s.Y);
+                return (lat, lon, s.HeadingDeg);
+            })
+            .ToList();
+
+        var summary = bestFusionN is null
+            ? $"No layout up to {MaxStations} stations reaches {CoverageGoal:P0} (Fusion). Showing {pickN}."
+            : $"Recommended: {pickN} stations — Fusion ≥ {CoverageGoal:P0} coverage.";
+
+        return (rows, stations, summary);
+    }
+
+    private static string Cell(AreaResult r) => r.FixCount == 0 ? "—" : $"{r.Coverage:P0}";
 
     /// <summary>
     /// Planar area of a lat/lon ring, via the shared local-ENU projection (centred on the

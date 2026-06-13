@@ -49,10 +49,14 @@ public sealed class DeploymentPlannerMapService
 {
     private const double DefaultLon = -87.18, DefaultLat = 32.5917; // QT001/QT002 site
 
-    private static readonly Color AreaColor = new(33, 150, 243); // #2196F3 blue
+    private static readonly Color AreaColor = new(33, 150, 243);    // #2196F3 blue
+    private static readonly Color StationColor = new(255, 152, 0);  // #FF9800 orange
+
+    private static readonly GeometryFactory Gf = new();
 
     private MapControl? _mapControl;
     private WritableLayer? _editLayer;
+    private MemoryLayer? _stationLayer;
     private EditManager? _editManager;
     private bool _isInitialized;
 
@@ -79,6 +83,10 @@ public sealed class DeploymentPlannerMapService
             var handler = AreaChanged;
             if (handler != null) Dispatcher.UIThread.Post(() => handler(ring));
         };
+
+        // Planned stations draw on top of the study area.
+        _stationLayer = new MemoryLayer("PlannedStations") { Style = null };
+        map.Layers.Add(_stationLayer);
 
         _editManager = new EditManager { Layer = _editLayer, VertexRadius = 16 };
         map.Widgets.Enqueue(new EditingWidget(_editManager));
@@ -122,11 +130,55 @@ public sealed class DeploymentPlannerMapService
         AreaChanged?.Invoke(null);
     }
 
+    /// <summary>Draw the planned stations: an orange dot per station with a number label and an inward heading tick.</summary>
+    public void ShowStations(IReadOnlyList<(double Lat, double Lon, double HeadingDeg)> stations)
+    {
+        if (_stationLayer == null) return;
+
+        var features = new List<IFeature>();
+        var index = 1;
+        foreach (var s in stations)
+        {
+            var (wx, wy) = SphericalMercator.FromLonLat(s.Lon, s.Lat);
+
+            // ~70 m heading tick toward the centre (world units = metres / cos(lat)).
+            var len = 70.0 / Math.Cos(s.Lat * Math.PI / 180.0);
+            var hx = wx + len * Math.Sin(s.HeadingDeg * Math.PI / 180.0);
+            var hy = wy + len * Math.Cos(s.HeadingDeg * Math.PI / 180.0);
+            var tick = new GeometryFeature
+            {
+                Geometry = Gf.CreateLineString([new Coordinate(wx, wy), new Coordinate(hx, hy)]),
+            };
+            tick.Styles.Add(new VectorStyle { Line = new Pen(new Color(StationColor.R, StationColor.G, StationColor.B, 255), 3) });
+            features.Add(tick);
+
+            var dot = new PointFeature(new MPoint(wx, wy));
+            dot.Styles.Add(StationStyle());
+            dot.Styles.Add(NumberLabel(index.ToString()));
+            features.Add(dot);
+            index++;
+        }
+
+        _stationLayer.Features = features;
+        _stationLayer.DataHasChanged();
+        _mapControl?.RefreshGraphics();
+    }
+
+    /// <summary>Remove any planned stations.</summary>
+    public void ClearStations()
+    {
+        if (_stationLayer == null) return;
+        _stationLayer.Features = [];
+        _stationLayer.DataHasChanged();
+        _mapControl?.RefreshGraphics();
+    }
+
     private void ResetArea()
     {
         if (_editManager != null) _editManager.EditMode = EditMode.None;
         _editLayer?.Clear();
         _editLayer?.DataHasChanged();
+        ClearStations();
     }
 
     private Polygon? CurrentPolygon()
@@ -174,6 +226,25 @@ public sealed class DeploymentPlannerMapService
                 Outline = new Pen(new Color(AreaColor.R, AreaColor.G, AreaColor.B, 255), 2),
             },
         },
+    };
+
+    private static SymbolStyle StationStyle() => new()
+    {
+        SymbolType = SymbolType.Ellipse,
+        SymbolScale = 0.7,
+        Fill = new Brush(new Color(StationColor.R, StationColor.G, StationColor.B, 255)),
+        Outline = new Pen(Color.White, 2),
+    };
+
+    private static LabelStyle NumberLabel(string text) => new()
+    {
+        Text = text,
+        ForeColor = Color.White,
+        BackColor = new Brush(new Color(0, 0, 0, 140)),
+        Halo = new Pen(Color.Black, 1),
+        HorizontalAlignment = LabelStyle.HorizontalAlignmentEnum.Center,
+        VerticalAlignment = LabelStyle.VerticalAlignmentEnum.Bottom,
+        Offset = new Offset(0, -14),
     };
 
     private static MPoint ToWorld(double lon, double lat)

@@ -21,6 +21,11 @@
                             Classes="DangerButton"
                             Command="{Binding ClearAreaCommand}"
                             IsEnabled="{Binding HasArea}" />
+                    <Border Width="1" Background="#E0E0E0" Margin="4,0" />
+                    <Button Content="Plan Stations"
+                            Classes="PrimaryButton"
+                            Command="{Binding PlanStationsCommand}"
+                            IsEnabled="{Binding HasArea}" />
                 </StackPanel>
 
                 <TextBlock Grid.Column="2"
@@ -30,13 +35,48 @@
             </Grid>
         </Border>
 
-        <!-- Map -->
-        <Border Grid.Row="1"
-                Background="#1B1B1D"
-                CornerRadius="4"
-                ClipToBounds="True">
-            <mapsui:MapControl x:Name="MapControl" />
-        </Border>
+        <!-- Map + results panel -->
+        <Grid Grid.Row="1" ColumnDefinitions="*,300">
+            <Border Grid.Column="0"
+                    Background="#1B1B1D"
+                    CornerRadius="4"
+                    ClipToBounds="True"
+                    Margin="0,0,8,0">
+                <mapsui:MapControl x:Name="MapControl" />
+            </Border>
+
+            <!-- Coverage results -->
+            <Grid Grid.Column="1" RowDefinitions="Auto,Auto,*">
+                <TextBlock Grid.Row="0"
+                           Text="Coverage by station count"
+                           FontWeight="SemiBold"
+                           Margin="0,0,0,4" />
+
+                <TextBlock Grid.Row="1"
+                           Text="{Binding PlanSummary}"
+                           TextWrapping="Wrap"
+                           Foreground="{StaticResource QuailPrimaryBrush}"
+                           Margin="0,0,0,8"
+                           IsVisible="{Binding PlanSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+                <DataGrid Grid.Row="2"
+                          ItemsSource="{Binding CoverageRows}"
+                          IsReadOnly="True"
+                          GridLinesVisibility="Horizontal"
+                          BorderBrush="#E0E0E0"
+                          BorderThickness="1"
+                          CanUserResizeColumns="False"
+                          CanUserReorderColumns="False"
+                          CanUserSortColumns="False">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="N" Binding="{Binding Stations}" Width="40" />
+                        <DataGridTextColumn Header="TDOA" Binding="{Binding Tdoa}" Width="*" />
+                        <DataGridTextColumn Header="Bearing" Binding="{Binding Bearing}" Width="*" />
+                        <DataGridTextColumn Header="Fusion" Binding="{Binding Fusion}" Width="*" />
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Grid>
+        </Grid>
 
         <!-- Status -->
         <Border Grid.Row="2" Classes="CardPanel" Margin="0,8,0,0">
