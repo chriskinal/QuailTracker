@@ -48,6 +48,7 @@ public sealed class DeploymentPlannerMapService
 
     private MapControl? _mapControl;
     private WritableLayer? _editLayer;
+    private MemoryLayer? _vertexLayer;
     private EditManager? _editManager;
     private bool _isInitialized;
 
@@ -67,13 +68,14 @@ public sealed class DeploymentPlannerMapService
 
         _editLayer = new WritableLayer { Name = "StudyArea", Style = AreaStyle() };
         map.Layers.Add(_editLayer);
-        // DataChanged fires as the user adds/moves vertices — report the live ring.
-        _editLayer.DataChanged += (_, _) =>
-        {
-            var ring = CurrentRingLatLon();
-            var handler = AreaChanged;
-            if (handler != null) Dispatcher.UIThread.Post(() => handler(ring));
-        };
+
+        // Corner dots, drawn on top of the polygon (purely visual — the editor still
+        // hit-tests the polygon geometry, so this doesn't affect dragging).
+        _vertexLayer = new MemoryLayer("StudyAreaVertices") { Style = null };
+        map.Layers.Add(_vertexLayer);
+
+        // DataChanged fires as the user adds/moves vertices — refresh dots + report the ring.
+        _editLayer.DataChanged += (_, _) => OnEditLayerChanged();
 
         _editManager = new EditManager { Layer = _editLayer };
         map.Widgets.Enqueue(new EditingWidget(_editManager));
@@ -122,18 +124,30 @@ public sealed class DeploymentPlannerMapService
         if (_editManager != null) _editManager.EditMode = EditMode.None;
         _editLayer?.Clear();
         _editLayer?.DataHasChanged();
+        RebuildVertices(null);
     }
 
-    /// <summary>Current polygon exterior ring as WGS84 (lat, lon), or null if none / too few points.</summary>
-    private IReadOnlyList<(double Lat, double Lon)>? CurrentRingLatLon()
+    private void OnEditLayerChanged()
     {
-        var polygon = _editLayer?.GetFeatures()
+        var polygon = CurrentPolygon();
+        RebuildVertices(polygon);
+
+        var ring = ToLatLonRing(polygon);
+        var handler = AreaChanged;
+        if (handler != null) Dispatcher.UIThread.Post(() => handler(ring));
+    }
+
+    private Polygon? CurrentPolygon()
+        => _editLayer?.GetFeatures()
             .OfType<GeometryFeature>()
             .Select(f => f.Geometry)
             .OfType<Polygon>()
             .LastOrDefault();
-        if (polygon is null) return null;
 
+    /// <summary>Polygon exterior ring as WGS84 (lat, lon), or null if none / too few points.</summary>
+    private static IReadOnlyList<(double Lat, double Lon)>? ToLatLonRing(Polygon? polygon)
+    {
+        if (polygon is null) return null;
         var coords = polygon.ExteriorRing.Coordinates;
         if (coords.Length < 3) return null;
 
@@ -146,10 +160,43 @@ public sealed class DeploymentPlannerMapService
         return ring;
     }
 
+    /// <summary>Place a dot on each distinct corner of the current polygon.</summary>
+    private void RebuildVertices(Polygon? polygon)
+    {
+        if (_vertexLayer is null) return;
+
+        var features = new List<IFeature>();
+        if (polygon is not null)
+        {
+            var coords = polygon.ExteriorRing.Coordinates;
+            // Drop the closing duplicate (ring is closed: last == first).
+            var count = coords.Length;
+            if (count >= 2 && coords[0].Equals2D(coords[count - 1])) count--;
+
+            for (var i = 0; i < count; i++)
+            {
+                var f = new PointFeature(new MPoint(coords[i].X, coords[i].Y));
+                f.Styles.Add(VertexStyle());
+                features.Add(f);
+            }
+        }
+
+        _vertexLayer.Features = features;
+        _vertexLayer.DataHasChanged();
+    }
+
     private static IStyle AreaStyle() => new VectorStyle
     {
         Fill = new Brush(new Color(AreaColor.R, AreaColor.G, AreaColor.B, 48)),
         Line = new Pen(new Color(AreaColor.R, AreaColor.G, AreaColor.B, 220), 2),
+    };
+
+    private static SymbolStyle VertexStyle() => new()
+    {
+        SymbolType = SymbolType.Ellipse,
+        SymbolScale = 0.5,
+        Fill = new Brush(Color.White),
+        Outline = new Pen(new Color(AreaColor.R, AreaColor.G, AreaColor.B, 255), 2),
     };
 
     private static MPoint ToWorld(double lon, double lat)
