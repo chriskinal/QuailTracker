@@ -39,6 +39,11 @@ namespace QuailTracker.Analyzer.Shared.Services;
 /// edit a single study-area polygon (Mapsui.Nts <see cref="EditManager"/> driven by an
 /// <see cref="EditingWidget"/>). Reports the drawn ring back as WGS84 lat/lon via
 /// <see cref="AreaChanged"/> so the view-model can compute area / station layouts.
+///
+/// The edit layer is styled with a <see cref="StyleCollection"/> whose <see cref="SymbolStyle"/>
+/// renders a dot on every vertex. That is not just decoration: the editor decides "did you
+/// tap a vertex?" by hit-testing the edit layer for a SymbolStyle, which is what makes
+/// vertex insert/delete behave correctly (a separate decorative layer does NOT work).
 /// </summary>
 public sealed class DeploymentPlannerMapService
 {
@@ -48,7 +53,6 @@ public sealed class DeploymentPlannerMapService
 
     private MapControl? _mapControl;
     private WritableLayer? _editLayer;
-    private MemoryLayer? _vertexLayer;
     private EditManager? _editManager;
     private bool _isInitialized;
 
@@ -66,18 +70,17 @@ public sealed class DeploymentPlannerMapService
         var map = new Map { CRS = "EPSG:3857" };
         map.Layers.Add(MapImagery.CreateSatelliteBaseLayer());
 
-        _editLayer = new WritableLayer { Name = "StudyArea", Style = AreaStyle() };
+        _editLayer = new WritableLayer { Name = "StudyArea", Style = EditLayerStyle() };
         map.Layers.Add(_editLayer);
+        // DataChanged fires as the user adds/moves vertices — report the live ring.
+        _editLayer.DataChanged += (_, _) =>
+        {
+            var ring = ToLatLonRing(CurrentPolygon());
+            var handler = AreaChanged;
+            if (handler != null) Dispatcher.UIThread.Post(() => handler(ring));
+        };
 
-        // Corner dots, drawn on top of the polygon (purely visual — the editor still
-        // hit-tests the polygon geometry, so this doesn't affect dragging).
-        _vertexLayer = new MemoryLayer("StudyAreaVertices") { Style = null };
-        map.Layers.Add(_vertexLayer);
-
-        // DataChanged fires as the user adds/moves vertices — refresh dots + report the ring.
-        _editLayer.DataChanged += (_, _) => OnEditLayerChanged();
-
-        _editManager = new EditManager { Layer = _editLayer };
+        _editManager = new EditManager { Layer = _editLayer, VertexRadius = 16 };
         map.Widgets.Enqueue(new EditingWidget(_editManager));
 
         mapControl.Map = map;
@@ -96,7 +99,7 @@ public sealed class DeploymentPlannerMapService
         _mapControl?.RefreshGraphics();
     }
 
-    /// <summary>Enter modify mode — drag vertices to adjust, shift/double/long-tap a vertex to delete.</summary>
+    /// <summary>Enter modify mode — drag vertices to move, double-tap/long-press a vertex to delete, tap an edge to add.</summary>
     public void EditArea()
     {
         if (!_isInitialized || _editManager == null) return;
@@ -124,17 +127,6 @@ public sealed class DeploymentPlannerMapService
         if (_editManager != null) _editManager.EditMode = EditMode.None;
         _editLayer?.Clear();
         _editLayer?.DataHasChanged();
-        RebuildVertices(null);
-    }
-
-    private void OnEditLayerChanged()
-    {
-        var polygon = CurrentPolygon();
-        RebuildVertices(polygon);
-
-        var ring = ToLatLonRing(polygon);
-        var handler = AreaChanged;
-        if (handler != null) Dispatcher.UIThread.Post(() => handler(ring));
     }
 
     private Polygon? CurrentPolygon()
@@ -160,43 +152,28 @@ public sealed class DeploymentPlannerMapService
         return ring;
     }
 
-    /// <summary>Place a dot on each distinct corner of the current polygon.</summary>
-    private void RebuildVertices(Polygon? polygon)
+    /// <summary>
+    /// Polygon fill/outline + a dot on every vertex. The vertex <see cref="SymbolStyle"/> is
+    /// required for correct insert/delete hit-testing (see class remarks), not just looks.
+    /// </summary>
+    private static StyleCollection EditLayerStyle() => new()
     {
-        if (_vertexLayer is null) return;
-
-        var features = new List<IFeature>();
-        if (polygon is not null)
+        Styles =
         {
-            var coords = polygon.ExteriorRing.Coordinates;
-            // Drop the closing duplicate (ring is closed: last == first).
-            var count = coords.Length;
-            if (count >= 2 && coords[0].Equals2D(coords[count - 1])) count--;
-
-            for (var i = 0; i < count; i++)
+            new VectorStyle
             {
-                var f = new PointFeature(new MPoint(coords[i].X, coords[i].Y));
-                f.Styles.Add(VertexStyle());
-                features.Add(f);
-            }
-        }
-
-        _vertexLayer.Features = features;
-        _vertexLayer.DataHasChanged();
-    }
-
-    private static IStyle AreaStyle() => new VectorStyle
-    {
-        Fill = new Brush(new Color(AreaColor.R, AreaColor.G, AreaColor.B, 48)),
-        Line = new Pen(new Color(AreaColor.R, AreaColor.G, AreaColor.B, 220), 2),
-    };
-
-    private static SymbolStyle VertexStyle() => new()
-    {
-        SymbolType = SymbolType.Ellipse,
-        SymbolScale = 0.5,
-        Fill = new Brush(Color.White),
-        Outline = new Pen(new Color(AreaColor.R, AreaColor.G, AreaColor.B, 255), 2),
+                Fill = new Brush(new Color(AreaColor.R, AreaColor.G, AreaColor.B, 48)),
+                Line = new Pen(new Color(AreaColor.R, AreaColor.G, AreaColor.B, 220), 2),
+                Outline = new Pen(new Color(AreaColor.R, AreaColor.G, AreaColor.B, 220), 2),
+            },
+            new SymbolStyle
+            {
+                SymbolType = SymbolType.Ellipse,
+                SymbolScale = 0.5,
+                Fill = new Brush(Color.White),
+                Outline = new Pen(new Color(AreaColor.R, AreaColor.G, AreaColor.B, 255), 2),
+            },
+        },
     };
 
     private static MPoint ToWorld(double lon, double lat)

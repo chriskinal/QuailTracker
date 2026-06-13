@@ -71,7 +71,7 @@ public partial class DeploymentPlannerViewModel : ObservableObject
     private void EditArea()
     {
         _mapService.EditArea();
-        StatusMessage = "Drag a corner to move it. Shift-tap (or double-tap) a corner to delete it.";
+        StatusMessage = "Drag a corner to move it · double-tap (or long-press) a corner to delete it · tap an edge to add one.";
     }
 
     [RelayCommand]
