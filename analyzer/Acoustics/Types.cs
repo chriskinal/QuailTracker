@@ -4,7 +4,7 @@
  * GNU GPL v3 or later. See <https://www.gnu.org/licenses/>.
  */
 
-namespace QuailTracker.Localization;
+namespace QuailTracker.Acoustics;
 
 /// <summary>Localization method whose error is being modelled.</summary>
 public enum LocalizationMethod
@@ -22,7 +22,7 @@ public enum LocalizationMethod
 /// <paramref name="HeadingDeg"/> is the compass bearing (0°=north, 90°=east) the
 /// stereo mic faces; only used by <see cref="LocalizationMethod.Bearing"/>/<see cref="LocalizationMethod.Fusion"/>.
 /// </summary>
-public readonly record struct Station(double X, double Y, double HeadingDeg);
+public readonly record struct ArrayStation(double X, double Y, double HeadingDeg);
 
 /// <summary>Aggregate localization quality over a survey area for one layout + method.</summary>
 /// <param name="Coverage">Fraction of area points whose 1σ error is within the target.</param>

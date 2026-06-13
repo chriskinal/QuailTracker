@@ -4,6 +4,6 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
-    <RootNamespace>QuailTracker.Localization</RootNamespace>
+    <RootNamespace>QuailTracker.Acoustics</RootNamespace>
   </PropertyGroup>
 </Project>

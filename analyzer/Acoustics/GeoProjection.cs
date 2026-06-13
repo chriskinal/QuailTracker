@@ -4,7 +4,7 @@
  * GNU GPL v3 or later. See <https://www.gnu.org/licenses/>.
  */
 
-namespace QuailTracker.Localization;
+namespace QuailTracker.Acoustics;
 
 /// <summary>
 /// Equirectangular projection between WGS84 lat/lon and a local east(X)/north(Y) metre

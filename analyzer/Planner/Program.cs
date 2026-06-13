@@ -2,7 +2,7 @@
  * QuailTracker - Array Deployment Planner (CLI)
  * Copyright (C) 2026 QuailTracker Project
  *
- * Command-line front-end over the QuailTracker.Localization CRLB engine. Models
+ * Command-line front-end over the QuailTracker.Acoustics CRLB engine. Models
  * acoustic-localization error across a survey area for a candidate station layout
  * and compares localization methods:
  *   - TDOA     : time-of-arrival across PPS-synced stations (no front/back issue)
@@ -16,7 +16,7 @@
  */
 
 using System.Globalization;
-using QuailTracker.Localization;
+using QuailTracker.Acoustics;
 
 var ci = CultureInfo.InvariantCulture;
 
@@ -118,14 +118,14 @@ return;
 
 // ======================= CLI helpers =======================
 
-AreaResult Evaluate(Station[] stns, LocalizationMethod method)
+AreaResult Evaluate(ArrayStation[] stns, LocalizationMethod method)
     => AreaModel.EvaluateDisc(stns, method, prm, areaRadius, gridRes);
 
 string Med(AreaResult r) => r.FixCount == 0
     ? "  -- "
     : (r.MedianError < 10 ? $"{r.MedianError,4:F1}m" : $"{r.MedianError,4:F0}m");
 
-void PrintHeatmap(Station[] stns, LocalizationMethod method)
+void PrintHeatmap(ArrayStation[] stns, LocalizationMethod method)
 {
     var step = 2 * areaRadius / (gridRes - 1);
     for (var iy = gridRes - 1; iy >= 0; iy--) // north on top
@@ -151,7 +151,7 @@ void PrintHeatmap(Station[] stns, LocalizationMethod method)
     }
 }
 
-bool NearStation(double x, double y, Station[] stns, double step)
+bool NearStation(double x, double y, ArrayStation[] stns, double step)
 {
     foreach (var s in stns)
         if (Math.Abs(x - s.X) <= step / 2 && Math.Abs(y - s.Y) <= step / 2) return true;

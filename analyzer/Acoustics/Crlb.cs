@@ -9,7 +9,7 @@
  * GNU GPL v3 or later. See <https://www.gnu.org/licenses/>.
  */
 
-namespace QuailTracker.Localization;
+namespace QuailTracker.Acoustics;
 
 /// <summary>Cramér-Rao lower-bound position-error model for an acoustic station array.</summary>
 public static class Crlb
@@ -22,7 +22,7 @@ public static class Crlb
     /// (too few stations hear it, or the geometry is underdetermined/singular).
     /// </summary>
     public static double? PositionError(
-        double px, double py, IReadOnlyList<Station> stns, LocalizationMethod method, LocalizationParams p)
+        double px, double py, IReadOnlyList<ArrayStation> stns, LocalizationMethod method, LocalizationParams p)
     {
         double sigmaT = p.SigmaT, sigmaTheta = p.SigmaTheta;
         double speedOfSound = p.SpeedOfSound, detectRadius = p.DetectRadius;
@@ -105,7 +105,7 @@ public static class Crlb
     }
 
     /// <summary>Line-of-sight from station <paramref name="s"/> to the point: range R and unit vector (ux,uy).</summary>
-    static (double R, double ux, double uy) Los(double px, double py, Station s)
+    static (double R, double ux, double uy) Los(double px, double py, ArrayStation s)
     {
         double dx = px - s.X, dy = py - s.Y;
         double R = Math.Sqrt(dx * dx + dy * dy);
@@ -113,7 +113,7 @@ public static class Crlb
     }
 
     /// <summary>True if the point lies in the station's front hemisphere (within ±90° of its heading).</summary>
-    static bool InFront(double px, double py, Station s)
+    static bool InFront(double px, double py, ArrayStation s)
     {
         // compass bearing station→point, vs station heading; front = within ±90°.
         double bearing = Math.Atan2(px - s.X, py - s.Y) * RadToDeg; // (east,north)

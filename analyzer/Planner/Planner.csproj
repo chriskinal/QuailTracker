@@ -10,6 +10,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Localization\QuailTracker.Localization.csproj" />
+    <ProjectReference Include="..\Acoustics\QuailTracker.Acoustics.csproj" />
   </ItemGroup>
 </Project>

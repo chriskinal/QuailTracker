@@ -4,7 +4,7 @@
  * GNU GPL v3 or later. See <https://www.gnu.org/licenses/>.
  */
 
-namespace QuailTracker.Localization;
+namespace QuailTracker.Acoustics;
 
 /// <summary>Rasters a survey area and aggregates per-point CRLB error into coverage stats.</summary>
 public static class AreaModel
@@ -15,7 +15,7 @@ public static class AreaModel
     /// coverage within the target, fix count, and median 1σ error.
     /// </summary>
     public static AreaResult EvaluateDisc(
-        IReadOnlyList<Station> stns, LocalizationMethod method, LocalizationParams p,
+        IReadOnlyList<ArrayStation> stns, LocalizationMethod method, LocalizationParams p,
         double areaRadius, int gridRes)
     {
         var errors = new List<double>();
