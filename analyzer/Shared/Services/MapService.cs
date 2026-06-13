@@ -18,279 +18,347 @@
 
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
-using System.Reflection;
-using System.Text.Json;
 using System.Threading.Tasks;
-using Avalonia.Controls;
+using Avalonia.Threading;
+using BruTile;
+using BruTile.Predefined;
+using BruTile.Web;
+using Mapsui;
+using Mapsui.Layers;
+using Mapsui.Nts;
+using Mapsui.Projections;
+using Mapsui.Styles;
+using Mapsui.Tiling.Layers;
+using Mapsui.UI.Avalonia;
+using NetTopologySuite.Geometries;
 using QuailTracker.Analyzer.Shared.Models;
 
 namespace QuailTracker.Analyzer.Shared.Services;
 
 /// <summary>
-/// Cesium map visualization backed by Avalonia's NativeWebView.
-/// Loads the embedded WebContent/cesium.html at startup and exposes a
-/// thin C#-side wrapper over the JS API defined in that file. Click events
-/// flow back via NativeWebView.WebMessageReceived (JS calls
-/// <c>invokeCSharpAction(JSON.stringify(msg))</c>).
+/// Map visualization backed by a native Mapsui <see cref="MapControl"/> (2D, web-mercator).
+/// Stations, detections, and localizations are rendered as point features on three
+/// <see cref="MemoryLayer"/>s over a satellite base layer; localizations also draw a
+/// confidence ellipse. Taps are hit-tested via <see cref="MapControl.Info"/> and surfaced
+/// through the <c>*Clicked</c> events. Replaces the former CesiumJS/WebView implementation
+/// — no browser, no CDN, and ready for offline (MBTiles) imagery.
 /// </summary>
 public class MapService : IMapService
 {
-    private NativeWebView? _webView;
+    // Marker colours (match the retired Cesium SVG markers).
+    private static readonly Color StationColor = new(33, 150, 243);    // #2196F3 blue
+    private static readonly Color DetectionColor = new(255, 235, 59);  // #FFEB3B yellow
+    private static readonly Color LocalizationColor = new(244, 67, 54); // #F44336 red
+
+    // Default view centre (QT001/QT002 site) used until data loads.
+    private const double DefaultLon = -87.18, DefaultLat = 32.5917;
+
+    private static readonly GeometryFactory Gf = new();
+
+    private MapControl? _mapControl;
+    private MemoryLayer? _stationLayer;
+    private MemoryLayer? _detectionLayer;
+    private MemoryLayer? _localizationLayer;
     private bool _isInitialized;
+
+    // Raw data caches so layers can be rebuilt when the time filter / highlight changes.
+    private IReadOnlyList<Station> _stations = [];
+    private IReadOnlyList<Detection> _detections = [];
+    private IReadOnlyList<Station> _detectionStations = [];
+    private IReadOnlyList<Localization> _localizations = [];
+    private DateTime? _filterStart, _filterEnd;
+    private string? _highlightId;
 
     public event EventHandler? MapReady;
     public event EventHandler<string>? StationClicked;
     public event EventHandler<Guid>? DetectionClicked;
     public event EventHandler<Guid>? LocalizationClicked;
 
-    public Task InitializeAsync(NativeWebView webView)
+    public Task InitializeAsync(MapControl mapControl)
     {
-        if (_webView != null) return Task.CompletedTask;
+        if (_mapControl != null) return Task.CompletedTask;
+        _mapControl = mapControl;
 
-        _webView = webView;
-        _webView.WebMessageReceived += OnWebMessageReceived;
-        _webView.NavigationStarted += (_, _) =>
-            Console.WriteLine("[MapService] NavigationStarted");
-        _webView.NavigationCompleted += OnNavigationCompleted;
+        var map = new Map { CRS = "EPSG:3857" };
+        map.Layers.Add(CreateBaseLayer());
 
-        var html = LoadCesiumHtml();
-        Console.WriteLine($"[MapService] Loaded cesium.html ({html.Length} bytes); calling NavigateToString");
-        _webView.NavigateToString(html);
+        // Draw order: ellipses/localizations below, detections, stations on top.
+        _localizationLayer = new MemoryLayer("Localizations") { Style = null };
+        _detectionLayer = new MemoryLayer("Detections") { Style = null };
+        _stationLayer = new MemoryLayer("Stations") { Style = null };
+        map.Layers.Add(_localizationLayer);
+        map.Layers.Add(_detectionLayer);
+        map.Layers.Add(_stationLayer);
 
-        // MapReady is raised when the JS sends `{"type":"mapReady"}` (preferred),
-        // or — as a fallback — when NavigationCompleted fires. The fallback
-        // ensures the WebView surface becomes visible even if Cesium throws
-        // (e.g., bad ion token) so DevTools is reachable for debugging.
+        mapControl.Map = map;
+        mapControl.Info += OnMapInfo;
+
+        // Initial view: the default site until data loads (FlyToAll re-frames once it does).
+        map.Navigator.CenterOnAndZoomTo(ToWorld(DefaultLon, DefaultLat), ZoomResolution(12));
+
+        _isInitialized = true;
+        MapReady?.Invoke(this, EventArgs.Empty);
         return Task.CompletedTask;
     }
 
-    private async void OnNavigationCompleted(object? sender, Avalonia.Controls.WebViewNavigationCompletedEventArgs e)
+    private static TileLayer CreateBaseLayer()
     {
-        Console.WriteLine($"[MapService] NavigationCompleted (success={e.IsSuccess})");
-
-        if (_webView != null)
-        {
-            try
-            {
-                var hasHelper = await _webView.InvokeScript("typeof invokeCSharpAction");
-                Console.WriteLine($"[MapService] typeof invokeCSharpAction = {hasHelper}");
-
-                var hasViewer = await _webView.InvokeScript("typeof Cesium !== 'undefined' && typeof viewer !== 'undefined'");
-                Console.WriteLine($"[MapService] Cesium+viewer ready = {hasViewer}");
-
-                var lastError = await _webView.InvokeScript("(window.__lastError||'(none)')");
-                Console.WriteLine($"[MapService] window.__lastError = {lastError}");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[MapService] InvokeScript probe failed: {ex.Message}");
-            }
-        }
-
-        if (_isInitialized) return;
-        // Fallback path — JS mapReady didn't arrive. Surface the WebView anyway
-        // so the user (and DevTools) can see what's happening.
-        _isInitialized = true;
-        MapReady?.Invoke(this, EventArgs.Empty);
+        // Google hybrid (satellite + roads/labels) — same zero-config endpoint the
+        // Cesium map used. Swap for an MBTiles source to go fully offline.
+        var source = new HttpTileSource(
+            new GlobalSphericalMercator(0, 20),
+            "https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
+            ["0", "1", "2", "3"],
+            name: "GoogleHybrid",
+            attribution: new Attribution("© Google"));
+        return new TileLayer(source) { Name = "Base" };
     }
 
-    private static string LoadCesiumHtml()
-    {
-        var assembly = typeof(MapService).Assembly;
-        const string resourceName = "QuailTracker.Analyzer.Shared.WebContent.cesium.html";
-        using var stream = assembly.GetManifestResourceStream(resourceName)
-            ?? throw new InvalidOperationException(
-                $"Embedded resource '{resourceName}' not found. Check csproj <EmbeddedResource>.");
-        using var reader = new StreamReader(stream);
-        return reader.ReadToEnd();
-    }
+    // ---------------- data setters (marshalled to the UI thread) ----------------
 
-    private void OnWebMessageReceived(object? sender, Avalonia.Controls.WebMessageReceivedEventArgs e)
-    {
-        if (string.IsNullOrEmpty(e.Body)) return;
+    public Task SetStationsAsync(IReadOnlyList<Station> stations)
+        => OnUi(() => { _stations = stations; RebuildStations(); });
 
-        Console.WriteLine($"[MapService] WebMessage: {e.Body}");
+    public Task SetDetectionsAsync(IReadOnlyList<Detection> detections, IReadOnlyList<Station> stations)
+        => OnUi(() => { _detections = detections; _detectionStations = stations; RebuildDetections(); });
 
-        try
+    public Task SetLocalizationsAsync(IReadOnlyList<Localization> localizations)
+        => OnUi(() => { _localizations = localizations; RebuildLocalizations(); });
+
+    public Task ClearAllAsync()
+        => OnUi(() =>
         {
-            using var doc = JsonDocument.Parse(e.Body);
-            var root = doc.RootElement;
-            if (!root.TryGetProperty("type", out var typeElement)) return;
-            var type = typeElement.GetString();
+            _stations = []; _detections = []; _localizations = [];
+            RebuildStations(); RebuildDetections(); RebuildLocalizations();
+        });
 
-            switch (type)
+    public Task SetLayerVisibilityAsync(bool stations, bool detections, bool localizations)
+        => OnUi(() =>
+        {
+            if (_stationLayer != null) _stationLayer.Enabled = stations;
+            if (_detectionLayer != null) _detectionLayer.Enabled = detections;
+            if (_localizationLayer != null) _localizationLayer.Enabled = localizations;
+        });
+
+    public Task SetTimeFilterAsync(DateTime? startTime, DateTime? endTime)
+        => OnUi(() =>
+        {
+            _filterStart = startTime; _filterEnd = endTime;
+            RebuildDetections(); RebuildLocalizations();
+        });
+
+    public Task FlyToAsync(double latitude, double longitude, double altitude = 1000)
+        => OnUi(() => _mapControl?.Map.Navigator.CenterOnAndZoomTo(ToWorld(longitude, latitude), ZoomResolution(16)));
+
+    public Task FlyToAllAsync()
+        => OnUi(() =>
+        {
+            var pts = AllVisibleWorldPoints();
+            if (pts.Count == 0 || _mapControl == null) return;
+
+            double minX = pts.Min(p => p.X), maxX = pts.Max(p => p.X);
+            double minY = pts.Min(p => p.Y), maxY = pts.Max(p => p.Y);
+
+            if (maxX - minX < 1 && maxY - minY < 1)
             {
-                case "mapReady":
-                    if (_isInitialized) return;
-                    _isInitialized = true;
-                    MapReady?.Invoke(this, EventArgs.Empty);
-                    break;
-
-                case "entitySelected":
-                    DispatchEntitySelected(root);
-                    break;
+                _mapControl.Map.Navigator.CenterOnAndZoomTo(new MPoint(minX, minY), ZoomResolution(16));
+                return;
             }
-        }
-        catch (JsonException)
+
+            // 15% padding around the extent.
+            double padX = (maxX - minX) * 0.15, padY = (maxY - minY) * 0.15;
+            _mapControl.Map.Navigator.ZoomToBox(new MRect(minX - padX, minY - padY, maxX + padX, maxY + padY));
+        });
+
+    public Task HighlightEntityAsync(Guid? detectionId = null, Guid? localizationId = null, string? stationId = null)
+        => OnUi(() =>
         {
-            // Ignore malformed messages — JS is the only sender, but defensive.
+            _highlightId = detectionId?.ToString() ?? localizationId?.ToString() ?? stationId;
+            RebuildStations(); RebuildDetections(); RebuildLocalizations();
+        });
+
+    // ---------------- layer building ----------------
+
+    private void RebuildStations()
+    {
+        if (_stationLayer == null) return;
+        var features = new List<IFeature>();
+        foreach (var s in _stations)
+        {
+            var f = new PointFeature(ToWorld(s.Longitude, s.Latitude));
+            f["type"] = "station";
+            f["id"] = s.Id;
+            f.Styles.Add(MarkerStyle(StationColor, 0.7, _highlightId == s.Id));
+            if (!string.IsNullOrEmpty(s.Name)) f.Styles.Add(NameLabel(s.Name));
+            features.Add(f);
         }
+        _stationLayer.Features = features;
+        _stationLayer.DataHasChanged();
     }
 
-    private void DispatchEntitySelected(JsonElement msg)
+    private void RebuildDetections()
     {
-        if (!msg.TryGetProperty("entityType", out var entityTypeElement)) return;
-        var entityType = entityTypeElement.GetString();
+        if (_detectionLayer == null) return;
+        var byStation = _detectionStations.GroupBy(s => s.Id).ToDictionary(g => g.Key, g => g.First());
+        var features = new List<IFeature>();
+        foreach (var d in _detections)
+        {
+            if (!InTimeFilter(d.Timestamp)) continue;
+            if (!byStation.TryGetValue(d.StationId, out var st)) continue; // detection drawn at its station
+            var f = new PointFeature(ToWorld(st.Longitude, st.Latitude));
+            f["type"] = "detection";
+            f["id"] = d.Id.ToString();
+            f.Styles.Add(MarkerStyle(DetectionColor, 0.4, _highlightId == d.Id.ToString()));
+            features.Add(f);
+        }
+        _detectionLayer.Features = features;
+        _detectionLayer.DataHasChanged();
+    }
 
-        switch (entityType)
+    private void RebuildLocalizations()
+    {
+        if (_localizationLayer == null) return;
+        var features = new List<IFeature>();
+        foreach (var l in _localizations)
+        {
+            if (!InTimeFilter(l.Timestamp)) continue;
+            if (l.ErrorEllipseMajor > 0 && l.ErrorEllipseMinor > 0) features.Add(EllipseFeature(l));
+
+            var f = new PointFeature(ToWorld(l.Longitude, l.Latitude));
+            f["type"] = "localization";
+            f["id"] = l.Id.ToString();
+            f.Styles.Add(MarkerStyle(LocalizationColor, 0.8, _highlightId == l.Id.ToString()));
+            features.Add(f);
+        }
+        _localizationLayer.Features = features;
+        _localizationLayer.DataHasChanged();
+    }
+
+    /// <summary>Confidence ellipse as an N-gon polygon, axes (metres) scaled to world units.</summary>
+    private static GeometryFeature EllipseFeature(Localization l)
+    {
+        var (cx, cy) = SphericalMercator.FromLonLat(l.Longitude, l.Latitude);
+        // Web-mercator stretches by 1/cos(lat); convert metric axes to world units.
+        double mPerWorld = Math.Cos(l.Latitude * Math.PI / 180.0);
+        double a = l.ErrorEllipseMajor / mPerWorld;
+        double b = l.ErrorEllipseMinor / mPerWorld;
+        double rot = l.ErrorEllipseRotation * Math.PI / 180.0; // from north, clockwise
+        double sin = Math.Sin(rot), cos = Math.Cos(rot);
+
+        const int n = 48;
+        var coords = new Coordinate[n + 1];
+        for (var i = 0; i < n; i++)
+        {
+            double t = 2 * Math.PI * i / n;
+            double ex = a * Math.Cos(t), ey = b * Math.Sin(t);
+            coords[i] = new Coordinate(cx + ex * cos + ey * sin, cy - ex * sin + ey * cos);
+        }
+        coords[n] = coords[0];
+
+        var feature = new GeometryFeature { Geometry = Gf.CreatePolygon(Gf.CreateLinearRing(coords)) };
+        feature.Styles.Add(new VectorStyle
+        {
+            Fill = new Brush(new Color(LocalizationColor.R, LocalizationColor.G, LocalizationColor.B, 40)),
+            Line = new Pen(new Color(LocalizationColor.R, LocalizationColor.G, LocalizationColor.B, 160), 1.5),
+        });
+        return feature;
+    }
+
+    private static SymbolStyle MarkerStyle(Color color, double scale, bool highlight) => new()
+    {
+        SymbolType = SymbolType.Ellipse,
+        SymbolScale = highlight ? scale * 1.6 : scale,
+        Fill = new Brush(color),
+        Outline = new Pen(highlight ? Color.White : Color.Gray, highlight ? 3 : 1),
+    };
+
+    private static LabelStyle NameLabel(string text) => new()
+    {
+        Text = text,
+        ForeColor = Color.White,
+        BackColor = new Brush(new Color(0, 0, 0, 140)),
+        Halo = new Pen(Color.Black, 1),
+        HorizontalAlignment = LabelStyle.HorizontalAlignmentEnum.Center,
+        VerticalAlignment = LabelStyle.VerticalAlignmentEnum.Bottom,
+        Offset = new Offset(0, -14),
+    };
+
+    // ---------------- click handling ----------------
+
+    private void OnMapInfo(object? sender, MapInfoEventArgs e)
+    {
+        var layers = new List<ILayer>();
+        if (_stationLayer != null) layers.Add(_stationLayer);
+        if (_detectionLayer != null) layers.Add(_detectionLayer);
+        if (_localizationLayer != null) layers.Add(_localizationLayer);
+
+        var feature = e.GetMapInfo(layers)?.Feature;
+        if (feature is null) return;
+
+        var id = feature["id"] as string;
+        if (string.IsNullOrEmpty(id)) return;
+
+        switch (feature["type"] as string)
         {
             case "station":
-                if (msg.TryGetProperty("stationId", out var sid))
-                    StationClicked?.Invoke(this, sid.GetString() ?? string.Empty);
+                StationClicked?.Invoke(this, id);
                 break;
-
             case "detection":
-                if (msg.TryGetProperty("detectionId", out var did) &&
-                    Guid.TryParse(did.GetString(), out var detectionGuid))
-                    DetectionClicked?.Invoke(this, detectionGuid);
+                if (Guid.TryParse(id, out var dg)) DetectionClicked?.Invoke(this, dg);
                 break;
-
             case "localization":
-                if (msg.TryGetProperty("localizationId", out var lid) &&
-                    Guid.TryParse(lid.GetString(), out var localizationGuid))
-                    LocalizationClicked?.Invoke(this, localizationGuid);
+                if (Guid.TryParse(id, out var lg)) LocalizationClicked?.Invoke(this, lg);
                 break;
         }
     }
 
-    public async Task SetStationsAsync(IReadOnlyList<Station> stations)
-    {
-        if (!_isInitialized) return;
+    // ---------------- helpers ----------------
 
-        var stationData = stations.Select(s => new
+    private List<MPoint> AllVisibleWorldPoints()
+    {
+        var pts = new List<MPoint>();
+        if (_stationLayer?.Enabled == true)
+            foreach (var s in _stations)
+                if (s.HasValidLocation) pts.Add(ToWorld(s.Longitude, s.Latitude));
+
+        if (_localizationLayer?.Enabled == true)
+            foreach (var l in _localizations)
+                if (InTimeFilter(l.Timestamp)) pts.Add(ToWorld(l.Longitude, l.Latitude));
+
+        if (_detectionLayer?.Enabled == true)
         {
-            id = s.Id,
-            name = s.Name,
-            lat = s.Latitude,
-            lon = s.Longitude,
-            elevation = s.Elevation ?? 0
-        });
-
-        var json = JsonSerializer.Serialize(stationData);
-        await ExecuteJsAsync($"setStations({json})");
-    }
-
-    public async Task SetDetectionsAsync(IReadOnlyList<Detection> detections, IReadOnlyList<Station> stations)
-    {
-        if (!_isInitialized) return;
-
-        var stationDict = stations.ToDictionary(s => s.Id);
-
-        var detectionData = detections
-            .Where(d => stationDict.ContainsKey(d.StationId))
-            .Select(d =>
-            {
-                var station = stationDict[d.StationId];
-                return new
-                {
-                    id = d.Id,
-                    stationId = d.StationId,
-                    lat = station.Latitude,
-                    lon = station.Longitude,
-                    species = d.CommonName,
-                    confidence = d.Confidence,
-                    timestamp = d.Timestamp.ToString("o")
-                };
-            });
-
-        var json = JsonSerializer.Serialize(detectionData);
-        await ExecuteJsAsync($"setDetections({json})");
-    }
-
-    public async Task SetLocalizationsAsync(IReadOnlyList<Localization> localizations)
-    {
-        if (!_isInitialized) return;
-
-        var locData = localizations.Select(l => new
-        {
-            id = l.Id,
-            lat = l.Latitude,
-            lon = l.Longitude,
-            species = l.Species,
-            timestamp = l.Timestamp.ToString("o"),
-            quality = l.QualityScore,
-            ellipseMajor = l.ErrorEllipseMajor,
-            ellipseMinor = l.ErrorEllipseMinor,
-            ellipseRotation = l.ErrorEllipseRotation
-        });
-
-        var json = JsonSerializer.Serialize(locData);
-        await ExecuteJsAsync($"setLocalizations({json})");
-    }
-
-    public async Task ClearAllAsync()
-    {
-        if (!_isInitialized) return;
-        await ExecuteJsAsync("clearAll()");
-    }
-
-    public async Task SetLayerVisibilityAsync(bool stations, bool detections, bool localizations)
-    {
-        if (!_isInitialized) return;
-        await ExecuteJsAsync($"setLayerVisibility({JsonBool(stations)}, {JsonBool(detections)}, {JsonBool(localizations)})");
-    }
-
-    public async Task SetTimeFilterAsync(DateTime? startTime, DateTime? endTime)
-    {
-        if (!_isInitialized) return;
-
-        var start = startTime?.ToString("o") ?? "null";
-        var end = endTime?.ToString("o") ?? "null";
-        await ExecuteJsAsync($"setTimeFilter({JsonString(start)}, {JsonString(end)})");
-    }
-
-    public async Task FlyToAsync(double latitude, double longitude, double altitude = 1000)
-    {
-        if (!_isInitialized) return;
-        await ExecuteJsAsync($"flyTo({latitude}, {longitude}, {altitude})");
-    }
-
-    public async Task FlyToAllAsync()
-    {
-        if (!_isInitialized) return;
-        await ExecuteJsAsync("flyToAll()");
-    }
-
-    public async Task HighlightEntityAsync(Guid? detectionId = null, Guid? localizationId = null, string? stationId = null)
-    {
-        if (!_isInitialized) return;
-
-        var id = detectionId?.ToString() ?? localizationId?.ToString() ?? stationId ?? "null";
-        await ExecuteJsAsync($"highlightEntity({JsonString(id)})");
-    }
-
-    private async Task ExecuteJsAsync(string script)
-    {
-        if (_webView == null || !_isInitialized) return;
-        try
-        {
-            await _webView.InvokeScript(script);
+            var byStation = _detectionStations.GroupBy(s => s.Id).ToDictionary(g => g.Key, g => g.First());
+            foreach (var d in _detections)
+                if (InTimeFilter(d.Timestamp) && byStation.TryGetValue(d.StationId, out var st))
+                    pts.Add(ToWorld(st.Longitude, st.Latitude));
         }
-        catch (Exception ex)
-        {
-            // Common cause: TabControl unrealized the MapView while we were
-            // away on another tab, the native WKWebView handle got torn down,
-            // and InvokeScript can't run against a non-existent page. Reset
-            // _isInitialized so subsequent calls early-exit cleanly; the next
-            // NavigationCompleted (when the user returns) re-fires MapReady,
-            // and MapViewModel's handler triggers a full RefreshMapAsync.
-            Console.WriteLine($"[MapService] InvokeScript failed: {ex.Message}");
-            _isInitialized = false;
-        }
+        return pts;
     }
 
-    private static string JsonBool(bool value) => value ? "true" : "false";
-    private static string JsonString(string value) => value == "null" ? "null" : $"\"{value}\"";
+    private bool InTimeFilter(DateTime t)
+    {
+        if (_filterStart.HasValue && t < _filterStart.Value) return false;
+        if (_filterEnd.HasValue && t > _filterEnd.Value) return false;
+        return true;
+    }
+
+    private static MPoint ToWorld(double lon, double lat)
+    {
+        var (x, y) = SphericalMercator.FromLonLat(lon, lat);
+        return new MPoint(x, y);
+    }
+
+    /// <summary>Web-mercator resolution (m/px at the equator) for a standard tile zoom level.</summary>
+    private static double ZoomResolution(int zoom) => 156543.033928 / Math.Pow(2, zoom);
+
+    private Task OnUi(Action action)
+    {
+        if (!_isInitialized) return Task.CompletedTask;
+        return Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            action();
+            _mapControl?.RefreshGraphics();
+        }).GetTask();
+    }
 }

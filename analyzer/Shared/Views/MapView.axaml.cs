@@ -30,18 +30,6 @@ public partial class MapView : UserControl
     public MapView()
     {
         InitializeComponent();
-
-        // EnvironmentRequested must be hooked before the WebView's underlying
-        // adapter is created — earliest reliable point is the constructor.
-        // EnableDevTools lets us right-click → Inspect to debug Cesium / JS issues.
-        MapWebView.EnvironmentRequested += (_, args) =>
-        {
-            Console.WriteLine($"[MapView] EnvironmentRequested fired ({args.GetType().Name})");
-            args.EnableDevTools = true;
-        };
-
-        MapWebView.AdapterCreated += (_, _) =>
-            Console.WriteLine("[MapView] AdapterCreated");
     }
 
     protected override async void OnDataContextChanged(EventArgs e)
@@ -52,7 +40,7 @@ public partial class MapView : UserControl
         if (DataContext is not MapViewModel vm) return;
 
         _mapInitialized = true;
-        await vm.InitializeMapAsync(MapWebView);
+        await vm.InitializeMapAsync(MapControl);
     }
 
     private async void OnExportKmlClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)

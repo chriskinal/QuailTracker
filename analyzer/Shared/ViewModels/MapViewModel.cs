@@ -21,7 +21,7 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Avalonia.Controls;
+using Mapsui.UI.Avalonia;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using QuailTracker.Analyzer.Shared.Models;
@@ -120,12 +120,12 @@ public partial class MapViewModel : ObservableObject
         _localizations.CollectionChanged += async (_, _) => await RefreshLocalizationsAsync();
     }
 
-    public async Task InitializeMapAsync(NativeWebView webView)
+    public async Task InitializeMapAsync(MapControl mapControl)
     {
         try
         {
             _setStatus("Initializing map...");
-            await _mapService.InitializeAsync(webView);
+            await _mapService.InitializeAsync(mapControl);
         }
         catch (Exception ex)
         {

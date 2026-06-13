@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:QuailTracker.Analyzer.Shared.ViewModels"
+             xmlns:mapsui="clr-namespace:Mapsui.UI.Avalonia;assembly=Mapsui.UI.Avalonia"
              x:Class="QuailTracker.Analyzer.Shared.Views.MapView"
              x:DataType="vm:MapViewModel">
 
@@ -46,35 +47,13 @@
 
         <!-- Map Container -->
         <Grid Grid.Row="1" ColumnDefinitions="*,250">
-            <!-- WebView for Cesium (placeholder until actual WebView integration) -->
+            <!-- Native Mapsui map control. -->
             <Border Grid.Column="0"
                     Background="#1B1B1D"
                     CornerRadius="4"
                     ClipToBounds="True"
                     Margin="0,0,8,0">
-                <Grid>
-                    <!-- Placeholder when map not ready -->
-                    <StackPanel VerticalAlignment="Center"
-                                HorizontalAlignment="Center"
-                                IsVisible="{Binding !IsMapReady}">
-                        <PathIcon Data="M20.5,3L20.34,3.03L15,5.1L9,3L3.36,4.9C3.15,4.97 3,5.15 3,5.38V20.5A0.5,0.5 0 0,0 3.5,21L3.66,20.97L9,18.9L15,21L20.64,19.1C20.85,19.03 21,18.85 21,18.62V3.5A0.5,0.5 0 0,0 20.5,3M15,19L9,16.89V5L15,7.11V19Z"
-                                  Width="64" Height="64"
-                                  Foreground="#4A4A4D" />
-                        <TextBlock Text="Cesium Map Loading..."
-                                   HorizontalAlignment="Center"
-                                   Foreground="#808080"
-                                   Margin="0,16,0,0" />
-                        <TextBlock Text="WebView will be initialized when available"
-                                   HorizontalAlignment="Center"
-                                   Foreground="#606060"
-                                   FontSize="12"
-                                   Margin="0,4,0,0" />
-                    </StackPanel>
-
-                    <!-- Native WebView host. Hidden until MapService raises MapReady. -->
-                    <NativeWebView x:Name="MapWebView"
-                                   IsVisible="{Binding IsMapReady}" />
-                </Grid>
+                <mapsui:MapControl x:Name="MapControl" />
             </Border>
 
             <!-- Side Panel -->

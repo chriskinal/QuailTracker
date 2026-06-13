@@ -19,13 +19,13 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using Avalonia.Controls;
+using Mapsui.UI.Avalonia;
 using QuailTracker.Analyzer.Shared.Models;
 
 namespace QuailTracker.Analyzer.Shared.Services;
 
 /// <summary>
-/// Service for Cesium map visualization via WebView interop.
+/// Service for map visualization, backed by a native Mapsui <see cref="MapControl"/>.
 /// </summary>
 public interface IMapService
 {
@@ -50,9 +50,9 @@ public interface IMapService
     event EventHandler<Guid>? LocalizationClicked;
 
     /// <summary>
-    /// Initializes the Cesium viewer in the WebView.
+    /// Initializes the map on the supplied Mapsui control (base imagery + marker layers).
     /// </summary>
-    Task InitializeAsync(NativeWebView webView);
+    Task InitializeAsync(MapControl mapControl);
 
     /// <summary>
     /// Adds or updates station markers on the map.

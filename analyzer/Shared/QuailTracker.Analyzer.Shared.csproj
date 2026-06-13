@@ -12,8 +12,11 @@
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.*" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="12.0.*" />
     <PackageReference Include="Svg.Controls.Skia.Avalonia" Version="12.0.*" />
-    <PackageReference Include="Avalonia.Controls.WebView" Version="12.0.*" />
     <PackageReference Include="Avalonia.Controls.DataGrid" Version="12.0.*" />
+    <!-- Map (native 2D, replaces Cesium/WebView) -->
+    <PackageReference Include="Mapsui.Avalonia12" Version="5.1.0" />
+    <PackageReference Include="Mapsui.Nts" Version="5.1.0" />
+    <PackageReference Include="Mapsui.Tiling" Version="5.1.0" />
     <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.*" />
     <PackageReference Include="BunLabs.NAudio.Flac" Version="2.0.1" />
     <!-- MVVM -->
@@ -31,6 +34,9 @@
   <ItemGroup>
     <AvaloniaResource Include="Assets\**" />
     <AvaloniaResource Include="Styles\**" />
-    <EmbeddedResource Include="WebContent\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Acoustics\QuailTracker.Acoustics.csproj" />
   </ItemGroup>
 </Project>
