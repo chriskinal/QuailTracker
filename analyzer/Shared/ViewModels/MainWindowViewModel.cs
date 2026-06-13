@@ -103,6 +103,9 @@ public partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     private MapViewModel _mapViewModel;
 
+    [ObservableProperty]
+    private DeploymentPlannerViewModel _deploymentPlannerViewModel;
+
     public MainWindowViewModel()
         : this(ConfigService.Load())
     {
@@ -208,5 +211,7 @@ public partial class MainWindowViewModel : ObservableObject
             Stations,
             Detections,
             Localizations);
+
+        _deploymentPlannerViewModel = new DeploymentPlannerViewModel(new DeploymentPlannerMapService());
     }
 }

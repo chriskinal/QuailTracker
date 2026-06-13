@@ -1,0 +1,48 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:QuailTracker.Analyzer.Shared.ViewModels"
+             xmlns:mapsui="clr-namespace:Mapsui.UI.Avalonia;assembly=Mapsui.UI.Avalonia"
+             x:Class="QuailTracker.Analyzer.Shared.Views.DeploymentPlannerView"
+             x:DataType="vm:DeploymentPlannerViewModel">
+
+    <Grid RowDefinitions="Auto,*,Auto" Margin="8">
+        <!-- Toolbar -->
+        <Border Grid.Row="0" Classes="CardPanel" Margin="0,0,0,8">
+            <Grid ColumnDefinitions="Auto,*,Auto">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Content="Draw Area"
+                            Classes="PrimaryButton"
+                            Command="{Binding DrawAreaCommand}" />
+                    <Button Content="Edit Corners"
+                            Classes="SecondaryButton"
+                            Command="{Binding EditAreaCommand}"
+                            IsEnabled="{Binding HasArea}" />
+                    <Button Content="Clear"
+                            Classes="DangerButton"
+                            Command="{Binding ClearAreaCommand}"
+                            IsEnabled="{Binding HasArea}" />
+                </StackPanel>
+
+                <TextBlock Grid.Column="2"
+                           Text="{Binding AreaSummary}"
+                           VerticalAlignment="Center"
+                           FontWeight="SemiBold" />
+            </Grid>
+        </Border>
+
+        <!-- Map -->
+        <Border Grid.Row="1"
+                Background="#1B1B1D"
+                CornerRadius="4"
+                ClipToBounds="True">
+            <mapsui:MapControl x:Name="MapControl" />
+        </Border>
+
+        <!-- Status -->
+        <Border Grid.Row="2" Classes="CardPanel" Margin="0,8,0,0">
+            <TextBlock Text="{Binding StatusMessage}"
+                       VerticalAlignment="Center"
+                       Foreground="#757575" />
+        </Border>
+    </Grid>
+</UserControl>

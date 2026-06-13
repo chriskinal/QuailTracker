@@ -21,15 +21,11 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Avalonia.Threading;
-using BruTile;
-using BruTile.Predefined;
-using BruTile.Web;
 using Mapsui;
 using Mapsui.Layers;
 using Mapsui.Nts;
 using Mapsui.Projections;
 using Mapsui.Styles;
-using Mapsui.Tiling.Layers;
 using Mapsui.UI.Avalonia;
 using NetTopologySuite.Geometries;
 using QuailTracker.Analyzer.Shared.Models;
@@ -81,7 +77,7 @@ public class MapService : IMapService
         _mapControl = mapControl;
 
         var map = new Map { CRS = "EPSG:3857" };
-        map.Layers.Add(CreateBaseLayer());
+        map.Layers.Add(MapImagery.CreateSatelliteBaseLayer());
 
         // Draw order: ellipses/localizations below, detections, stations on top.
         _localizationLayer = new MemoryLayer("Localizations") { Style = null };
@@ -100,19 +96,6 @@ public class MapService : IMapService
         _isInitialized = true;
         MapReady?.Invoke(this, EventArgs.Empty);
         return Task.CompletedTask;
-    }
-
-    private static TileLayer CreateBaseLayer()
-    {
-        // Google hybrid (satellite + roads/labels) — same zero-config endpoint the
-        // Cesium map used. Swap for an MBTiles source to go fully offline.
-        var source = new HttpTileSource(
-            new GlobalSphericalMercator(0, 20),
-            "https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
-            ["0", "1", "2", "3"],
-            name: "GoogleHybrid",
-            attribution: new Attribution("© Google"));
-        return new TileLayer(source) { Name = "Base" };
     }
 
     // ---------------- data setters (marshalled to the UI thread) ----------------
