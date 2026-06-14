@@ -73,44 +73,44 @@ public class TdoaService : ITdoaService
                 if (!stationDict.TryGetValue(detection.StationId, out var station)) continue;
                 if (!station.HasValidLocation) continue;
 
-                // Find all detections within time window from different stations
-                var cluster = new List<(Detection d, Station s)> { (detection, station) };
+                // Gather every in-window detection of this species, then keep the
+                // single BEST (highest-confidence) detection per DISTINCT station.
+                // A station that fires on several consecutive segments must count
+                // once — otherwise a 2-station cluster padded with repeats would
+                // pass the >=3 check and feed the localizer a degenerate fix.
+                var bestPerStation = new Dictionary<string, (Detection d, Station s)>();
+                var memberIds = new List<Guid>();
 
                 foreach (var other in speciesDetections)
                 {
-                    if (other.Id == detection.Id) continue;
                     if (used.Contains(other.Id)) continue;
-                    if (other.StationId == detection.StationId) continue;
+                    if (Math.Abs((other.Timestamp - detection.Timestamp).TotalMilliseconds) > MaxTimeDifferenceMs) continue;
                     if (!stationDict.TryGetValue(other.StationId, out var otherStation)) continue;
                     if (!otherStation.HasValidLocation) continue;
 
-                    var timeDiffMs = Math.Abs((other.Timestamp - detection.Timestamp).TotalMilliseconds);
-                    if (timeDiffMs <= MaxTimeDifferenceMs)
-                    {
-                        cluster.Add((other, otherStation));
-                    }
+                    memberIds.Add(other.Id);
+                    if (!bestPerStation.TryGetValue(other.StationId, out var cur) || other.Confidence > cur.d.Confidence)
+                        bestPerStation[other.StationId] = (other, otherStation);
                 }
 
-                // Only create match if we have at least 3 stations
-                if (cluster.Count >= 3)
+                // Need at least 3 DISTINCT stations to localize.
+                if (bestPerStation.Count >= 3)
                 {
+                    var cluster = bestPerStation.Values.ToList();
                     var referenceTime = cluster.Min(c => c.d.Timestamp);
 
-                    var match = new DetectionMatch
+                    matches.Add(new DetectionMatch
                     {
                         ReferenceTime = referenceTime,
                         Species = speciesGroup.Key,
                         Detections = cluster.Select(c =>
                             (c.d, c.s, (c.d.Timestamp - referenceTime).TotalMilliseconds)
                         ).ToList()
-                    };
+                    });
 
-                    matches.Add(match);
-
-                    foreach (var (d, _) in cluster)
-                    {
-                        used.Add(d.Id);
-                    }
+                    // Consume every in-window member (incl. the non-best same-station
+                    // segments) so the same call can't seed an overlapping match.
+                    foreach (var id in memberIds) used.Add(id);
                 }
             }
         }
