@@ -171,9 +171,13 @@ static float    recStartLon = 0.0f;
 static float    recStartAlt = 0.0f;
 static uint8_t  recHasPosition = 0; /* surveyed position available → write LOCATION */
 static uint8_t  recHasDate = 0;     /* RTC time available → write DATE/Timestamp */
-static uint8_t  recHasPpsSync = 0;  /* fresh PPS lock → PPS_SYNC_UTC valid */
-static uint32_t recPpsUtcTime = 0;  /* UTC of the pre-record PPS edge (fresh lock only) */
+static uint8_t  recHasPpsSync = 0;  /* a PPS edge fired during this recording while GPS was
+                                     * freshly synced → PPS_SYNC_UTC/SAMPLE valid. Captured
+                                     * DURING recording (in the PPS ISR), not at file open —
+                                     * so a unit that locks mid-file still anchors. */
+static uint32_t recPpsUtcTime = 0;  /* UTC of the edge BEFORE the anchor edge (anchor = +1s) */
 static uint32_t recPpsUtcDate = 0;
+static uint64_t recPpsAnchorSample = 0; /* recording-relative sample of the anchor PPS edge */
 
 /* PPS-sample correlation for TDOA */
 static uint64_t recStartAbsSample = 0;   /* absolute sample when recording started */
@@ -403,11 +407,28 @@ void writeGuanoChunk(FIL *fp, uint32_t audioDataBytes)
                             "QuailTracker|Mic Heading: %u\n", (unsigned)hdg);
     }
 
-    /* PPS-sample correlation for TDOA */
+    /* PPS-sample correlation for TDOA. Sync Sample + Sync UTC are a matched pair
+     * (anchor edge captured mid-recording while GPS was freshly synced); written
+     * together or not at all. */
     if (recPpsEdgesInRec > 0) {
-        len += snprintf(buf + len, sizeof(buf) - len,
-                        "QuailTracker|PPS Sync Sample: %lu\n",
-                        (unsigned long)recPpsFirstSample);
+        if (recHasPpsSync) {
+            uint32_t dd = recPpsUtcDate / 10000;
+            uint32_t mm = (recPpsUtcDate / 100) % 100;
+            uint32_t yy = recPpsUtcDate % 100;
+            uint32_t hh = recPpsUtcTime / 10000;
+            uint32_t mn = (recPpsUtcTime / 100) % 100;
+            uint32_t ss = (recPpsUtcTime % 100) + 1; /* anchor edge = previous edge + 1s */
+            if (ss >= 60) { ss = 0; mn++; }
+            if (mn >= 60) { mn = 0; hh++; }
+            if (hh >= 24) { hh = 0; }
+            len += snprintf(buf + len, sizeof(buf) - len,
+                            "QuailTracker|PPS Sync UTC: 20%02lu-%02lu-%02luT%02lu:%02lu:%02luZ\n",
+                            (unsigned long)yy, (unsigned long)mm, (unsigned long)dd,
+                            (unsigned long)hh, (unsigned long)mn, (unsigned long)ss);
+            len += snprintf(buf + len, sizeof(buf) - len,
+                            "QuailTracker|PPS Sync Sample: %lu\n",
+                            (unsigned long)recPpsAnchorSample);
+        }
         len += snprintf(buf + len, sizeof(buf) - len,
                         "QuailTracker|PPS Edges: %lu\n",
                         (unsigned long)recPpsEdgesInRec);
@@ -541,10 +562,11 @@ void writeFlacVorbisComment(FIL *fp)
 
     /* PPS-sample correlation for TDOA */
     if (recPpsEdgesInRec > 0) {
-        /* UTC time of first PPS edge = recPpsUtcTime + 1 second
-         * (recPpsUtcTime is the UTC of the PPS edge BEFORE recording started;
-         *  the first PPS during recording is the next whole second). Requires a
-         * FRESH PPS lock — independent of DATE/LOCATION, which are always written. */
+        /* The anchor edge's UTC = recPpsUtcTime + 1 second (recPpsUtcTime is the
+         * UTC of the edge BEFORE the anchor edge; RMC lags the pulse ~300ms).
+         * SAMPLE and UTC are a matched pair — both written, or neither — and are
+         * captured during recording, so a mid-file GPS lock still anchors.
+         * Independent of DATE/LOCATION, which are always written. */
         if (recHasPpsSync) {
             uint32_t dd = recPpsUtcDate / 10000;
             uint32_t mm = (recPpsUtcDate / 100) % 100;
@@ -559,9 +581,9 @@ void writeFlacVorbisComment(FIL *fp)
                      "PPS_SYNC_UTC=20%02lu-%02lu-%02luT%02lu:%02lu:%02luZ",
                      (unsigned long)yy, (unsigned long)mm, (unsigned long)dd,
                      (unsigned long)hh, (unsigned long)mn, (unsigned long)ss);
+            snprintf(tags[ntags++], 80,
+                     "PPS_SYNC_SAMPLE=%lu", (unsigned long)recPpsAnchorSample);
         }
-        snprintf(tags[ntags++], 80,
-                 "PPS_SYNC_SAMPLE=%lu", (unsigned long)recPpsFirstSample);
         snprintf(tags[ntags++], 80,
                  "PPS_EDGES=%lu", (unsigned long)recPpsEdgesInRec);
         if (recPpsEdgesInRec >= 2) {
@@ -840,24 +862,24 @@ void startRecording(void)
         recHasDate = 0;
     }
 
-    if (ppsSynced && ppsUtcDate != 0 &&
-        (HAL_GetTick() - ppsSyncTick) < PPS_SYNC_MAX_AGE_MS) {
-        recPpsUtcTime = ppsUtcTime;
-        recPpsUtcDate = ppsUtcDate;
-        recHasPpsSync = 1;
-    } else {
-        recHasPpsSync = 0;
-    }
-
-    /* Latch absolute sample position for PPS-sample correlation (TDOA).
-     * Disable PPS EXTI while writing 64-bit values — the ISR reads them
-     * and a torn 64-bit write would produce garbage sample positions. */
+    /* PPS_SYNC anchor is captured DURING recording by the PPS ISR (the first edge
+     * that fires while GPS is freshly synced), NOT snapshotted here — a unit that
+     * only locks part-way into the file would otherwise lose PPS_SYNC_UTC for the
+     * whole recording. Just reset the anchor state; the ISR fills it in.
+     *
+     * Latch absolute sample position too. Disable PPS EXTI while writing the 64-bit
+     * values — the ISR reads/writes them and a torn 64-bit access would garble the
+     * sample positions. */
     HAL_NVIC_DisableIRQ(EXTI8_IRQn);
     __DSB();
     recStartAbsSample = audioAbsSampleNow();
     recPpsEdgesInRec = 0;
     recPpsFirstSample = 0;
     recPpsLastSample = 0;
+    recHasPpsSync = 0;
+    recPpsAnchorSample = 0;
+    recPpsUtcTime = 0;
+    recPpsUtcDate = 0;
     HAL_NVIC_EnableIRQ(EXTI8_IRQn);
 
     strncpy(recFilename, fname, sizeof(recFilename) - 1);
@@ -2372,6 +2394,18 @@ void HAL_GPIO_EXTI_Rising_Callback(uint16_t GPIO_Pin)
                 recPpsFirstSample = recSample;
             recPpsLastSample = recSample;
             recPpsEdgesInRec++;
+
+            /* Anchor the first edge that fires while GPS is freshly synced. This
+             * edge's UTC = ppsUtcTime + 1s (RMC lags ~300ms, so ppsUtcTime is the
+             * PREVIOUS edge's second). Captured here, mid-recording, so locking
+             * after the file opened still yields a valid TDOA anchor. */
+            if (!recHasPpsSync && ppsSynced && ppsUtcDate != 0 &&
+                (HAL_GetTick() - ppsSyncTick) < PPS_SYNC_MAX_AGE_MS) {
+                recPpsAnchorSample = recSample;
+                recPpsUtcTime = ppsUtcTime;
+                recPpsUtcDate = ppsUtcDate;
+                recHasPpsSync = 1;
+            }
         }
     }
 }
