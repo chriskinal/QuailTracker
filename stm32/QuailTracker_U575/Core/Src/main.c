@@ -164,12 +164,16 @@ volatile uint32_t dmaCallbackTick = 0;
 #define PPS_SYNC_MAX_AGE_MS 5000U
 
 /* Recording metadata — latched at start, used for GUANO at stop */
-static uint32_t recStartTime = 0;
+static uint32_t recStartTime = 0;   /* RTC UTC at recording start (DATE/Timestamp) */
 static uint32_t recStartDate = 0;
-static float    recStartLat = 0.0f;
+static float    recStartLat = 0.0f; /* surveyed station position */
 static float    recStartLon = 0.0f;
 static float    recStartAlt = 0.0f;
-static uint8_t  recHasGps = 0;
+static uint8_t  recHasPosition = 0; /* surveyed position available → write LOCATION */
+static uint8_t  recHasDate = 0;     /* RTC time available → write DATE/Timestamp */
+static uint8_t  recHasPpsSync = 0;  /* fresh PPS lock → PPS_SYNC_UTC valid */
+static uint32_t recPpsUtcTime = 0;  /* UTC of the pre-record PPS edge (fresh lock only) */
+static uint32_t recPpsUtcDate = 0;
 
 /* PPS-sample correlation for TDOA */
 static uint64_t recStartAbsSample = 0;   /* absolute sample when recording started */
@@ -328,8 +332,8 @@ void writeGuanoChunk(FIL *fp, uint32_t audioDataBytes)
     /* Required: GUANO version (must be first) */
     len += snprintf(buf + len, sizeof(buf) - len, "GUANO|Version: 1.0\n");
 
-    /* GPS-dependent fields */
-    if (recHasGps) {
+    /* Recording timestamp from the RTC (UTC, GPS-disciplined) — every wake, no fix needed. */
+    if (recHasDate) {
         /* Timestamp: ISO 8601 UTC */
         uint32_t dd = recStartDate / 10000;
         uint32_t mm = (recStartDate / 100) % 100;
@@ -341,7 +345,11 @@ void writeGuanoChunk(FIL *fp, uint32_t audioDataBytes)
                         "Timestamp: 20%02lu-%02lu-%02luT%02lu:%02lu:%02luZ\n",
                         (unsigned long)yy, (unsigned long)mm, (unsigned long)dd,
                         (unsigned long)hh, (unsigned long)mn, (unsigned long)ss);
+    }
 
+    /* Surveyed station position — written every recording, independent of GPS lock.
+     * (Position always comes from the deployment survey, never the live fix.) */
+    if (recHasPosition) {
         /* Loc Position: lat lon (decimal degrees, negative for S/W) */
         float lat = recStartLat, lon = recStartLon;
         int latNeg = (lat < 0); if (latNeg) lat = -lat;
@@ -475,7 +483,8 @@ void writeFlacVorbisComment(FIL *fp)
     char tags[16][80];
     int ntags = 0;
 
-    if (recHasGps) {
+    /* DATE from the RTC (UTC, GPS-disciplined) — every wake, no fix needed. */
+    if (recHasDate) {
         uint32_t dd = recStartDate / 10000;
         uint32_t mm = (recStartDate / 100) % 100;
         uint32_t yy = recStartDate % 100;
@@ -486,7 +495,10 @@ void writeFlacVorbisComment(FIL *fp)
                  "DATE=20%02lu-%02lu-%02luT%02lu:%02lu:%02luZ",
                  (unsigned long)yy, (unsigned long)mm, (unsigned long)dd,
                  (unsigned long)hh, (unsigned long)mn, (unsigned long)ss);
+    }
 
+    /* LOCATION from the deployment survey — written every recording, never the live fix. */
+    if (recHasPosition) {
         float lat = recStartLat, lon = recStartLon, alt = recStartAlt;
         int latNeg = (lat < 0); if (latNeg) lat = -lat;
         int lonNeg = (lon < 0); if (lonNeg) lon = -lon;
@@ -529,16 +541,17 @@ void writeFlacVorbisComment(FIL *fp)
 
     /* PPS-sample correlation for TDOA */
     if (recPpsEdgesInRec > 0) {
-        /* UTC time of first PPS edge = recStartTime + 1 second
-         * (recStartTime is the UTC of the PPS edge BEFORE recording started;
-         *  the first PPS during recording is the next whole second) */
-        if (recHasGps) {
-            uint32_t dd = recStartDate / 10000;
-            uint32_t mm = (recStartDate / 100) % 100;
-            uint32_t yy = recStartDate % 100;
-            uint32_t hh = recStartTime / 10000;
-            uint32_t mn = (recStartTime / 100) % 100;
-            uint32_t ss = (recStartTime % 100) + 1;
+        /* UTC time of first PPS edge = recPpsUtcTime + 1 second
+         * (recPpsUtcTime is the UTC of the PPS edge BEFORE recording started;
+         *  the first PPS during recording is the next whole second). Requires a
+         * FRESH PPS lock — independent of DATE/LOCATION, which are always written. */
+        if (recHasPpsSync) {
+            uint32_t dd = recPpsUtcDate / 10000;
+            uint32_t mm = (recPpsUtcDate / 100) % 100;
+            uint32_t yy = recPpsUtcDate % 100;
+            uint32_t hh = recPpsUtcTime / 10000;
+            uint32_t mn = (recPpsUtcTime / 100) % 100;
+            uint32_t ss = (recPpsUtcTime % 100) + 1;
             if (ss >= 60) { ss = 0; mn++; }
             if (mn >= 60) { mn = 0; hh++; }
             if (hh >= 24) { hh = 0; } /* date rollover not handled — rare edge case */
@@ -786,31 +799,54 @@ void startRecording(void)
                  (unsigned long)fileCounter, deviceStationId, ext);
     }
 
-    /* Latch GPS state for GUANO metadata.
-     * Prefer surveyed position (sub-meter accuracy) over instantaneous fix.
-     * Gate on a FRESH PPS sync: ppsSynced is a sticky latch and ppsUtc* freeze
-     * when GPS loses lock, so without a freshness check a stale/wrong UTC gets
-     * written as PPS_SYNC_UTC — observed in the field as day-off timestamps and
-     * identical syncs carried across consecutive chunks. When locked, RMC (and
-     * thus ppsSyncTick) updates every second; >PPS_SYNC_MAX_AGE_MS old means
-     * GPS isn't locked now, so omit all GPS-derived metadata for this file. */
+    /* Latch metadata for this recording. Three INDEPENDENT sources — the prior
+     * bug bundled them all behind a fresh PPS lock, so the first file after each
+     * wake (GPS not yet locked) lost position AND date, even though neither needs
+     * a live fix:
+     *
+     *   1. POSITION  — always the surveyed station position (the whole point of the
+     *      deployment survey). Never the instantaneous GPS fix; falls back to a live
+     *      fix only when no survey is stored.
+     *   2. DATE      — from the RTC (UTC, kept current by the GPS duty-cycle), so it
+     *      matches the filename and is present every wake without a lock.
+     *   3. PPS_SYNC  — only this needs a FRESH PPS lock. ppsSynced is sticky and
+     *      ppsUtc* freeze on lock loss, so without a freshness check a stale/day-off
+     *      UTC gets written; >PPS_SYNC_MAX_AGE_MS old means not locked now → omit
+     *      ONLY PPS_SYNC_UTC (sample/edges/rate still describe this file's PPS). */
+    if (configGetSurveyCount() > 0) {
+        recStartLat = configGetSurveyLat();
+        recStartLon = configGetSurveyLon();
+        recStartAlt = configGetSurveyAlt();
+        recHasPosition = 1;
+    } else if (ppsSynced && ppsUtcDate != 0 &&
+               (HAL_GetTick() - ppsSyncTick) < PPS_SYNC_MAX_AGE_MS) {
+        recStartLat = ppsLatitude;
+        recStartLon = ppsLongitude;
+        recStartAlt = ppsAltitude;
+        recHasPosition = 1;
+    } else {
+        recHasPosition = 0;
+    }
+
+    if (dev.pwr.rtcSynced) {
+        uint8_t rH, rM, rS, rD, rMo;
+        uint16_t rY;
+        rtcGetTime(&rH, &rM, &rS);
+        rtcGetDate(&rD, &rMo, &rY);
+        recStartDate = (uint32_t)rD * 10000u + (uint32_t)rMo * 100u + (uint32_t)(rY % 100);
+        recStartTime = (uint32_t)rH * 10000u + (uint32_t)rM * 100u + (uint32_t)rS;
+        recHasDate = 1;
+    } else {
+        recHasDate = 0;
+    }
+
     if (ppsSynced && ppsUtcDate != 0 &&
         (HAL_GetTick() - ppsSyncTick) < PPS_SYNC_MAX_AGE_MS) {
-        recStartTime = ppsUtcTime;
-        recStartDate = ppsUtcDate;
-
-        if (configGetSurveyCount() > 0) {
-            recStartLat = configGetSurveyLat();
-            recStartLon = configGetSurveyLon();
-            recStartAlt = configGetSurveyAlt();
-        } else {
-            recStartLat  = ppsLatitude;
-            recStartLon  = ppsLongitude;
-            recStartAlt  = ppsAltitude;
-        }
-        recHasGps = 1;
+        recPpsUtcTime = ppsUtcTime;
+        recPpsUtcDate = ppsUtcDate;
+        recHasPpsSync = 1;
     } else {
-        recHasGps = 0;
+        recHasPpsSync = 0;
     }
 
     /* Latch absolute sample position for PPS-sample correlation (TDOA).
