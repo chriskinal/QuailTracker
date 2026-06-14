@@ -154,9 +154,9 @@ public class TdoaService : ITdoaService
             var (lat, lon, residual) = OptimizeLocation(
                 centerLat, centerLon, stations, timeDiffs);
 
-            // Calculate confidence ellipse
+            // Calculate confidence ellipse (timing precision depends on PPS refinement)
             var (majorAxis, minorAxis, rotation) = CalculateErrorEllipse(
-                lat, lon, stations, timeDiffs);
+                lat, lon, stations, timeDiffs, residual, refined);
 
             // Quality score based on geometry and residual
             var qualityScore = CalculateQualityScore(stations, lat, lon, residual);
@@ -362,26 +362,32 @@ public class TdoaService : ITdoaService
     }
 
     private (double major, double minor, double rotation) CalculateErrorEllipse(
-        double lat, double lon, Station[] stations, double[] timeDiffs)
+        double lat, double lon, Station[] stations, double[] timeDiffs, double residual, bool refined)
     {
-        // Simplified error estimation based on station geometry
-        var distances = stations.Select(s => CalculateDistance(lat, lon, s.Latitude, s.Longitude)).ToArray();
-        var avgDistance = distances.Average();
-
-        // GDOP-like calculation
+        // GDOP-like geometry term: bearing spread of the stations as seen from the fix.
         var bearings = stations.Select(s =>
             Math.Atan2(s.Longitude - lon, s.Latitude - lat) * RadToDeg).ToArray();
-
         var bearingSpread = CalculateBearingSpread(bearings);
 
-        // Scale error based on time sync accuracy (~1ms = ~0.343m)
-        var baseError = 0.343 * 1000; // 1ms timing error
-        var geometryFactor = 1.0 / Math.Max(bearingSpread / 180.0, 0.1);
+        // Range-equivalent 1σ of one arrival-time measurement (metres), from:
+        //  - timing: c·σt. PPS + GCC-PHAT cross-correlation is sub-millisecond
+        //    (correlation/multipath limited); coarse timestamp matching is ~seconds.
+        //  - fit: the RMS TDOA residual is a lower bound on the real timing noise
+        //    (informative with >3 stations; ~0 for an exactly-determined 3-station fix).
+        //  - GPS: surveyed station positions carry ~3 m, an irreducible floor.
+        const double gpsPosSigmaM = 3.0;
+        var intrinsicSigmaT = refined ? 0.0005 : 1.0;            // seconds
+        var n = timeDiffs.Length;
+        var rmsResidualSec = n > 1 ? Math.Sqrt(Math.Max(residual, 0) / (n - 1)) : 0.0;
+        var sigmaT = Math.Max(intrinsicSigmaT, rmsResidualSec);
+        var rangeSigma = Math.Sqrt(Math.Pow(SpeedOfSound * sigmaT, 2) + gpsPosSigmaM * gpsPosSigmaM);
 
-        var majorAxis = baseError * geometryFactor;
-        var minorAxis = baseError * geometryFactor * 0.5;
+        // Tight when stations surround the point; blows up when they're clustered in
+        // one direction (a far-field divergent fix), correctly inflating implausible solutions.
+        var geometryFactor = 1.0 / Math.Max(bearingSpread / 180.0, 0.02);
 
-        // Rotation based on dominant bearing direction
+        var majorAxis = Math.Min(rangeSigma * geometryFactor, 10000.0);
+        var minorAxis = majorAxis * 0.5;
         var rotation = bearings.Average();
 
         return (majorAxis, minorAxis, rotation);

@@ -29,6 +29,16 @@
                                        FormatString="F1"
                                        Width="100" />
                     </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Min Quality:" VerticalAlignment="Center"
+                                   ToolTip.Tip="Drop low-quality fixes from coincidental cross-station detections (0 keeps all)." />
+                        <NumericUpDown Value="{Binding MinQualityScore}"
+                                       Minimum="0"
+                                       Maximum="1"
+                                       Increment="0.05"
+                                       FormatString="F2"
+                                       Width="90" />
+                    </StackPanel>
                 </StackPanel>
 
                 <!-- Status -->

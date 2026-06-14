@@ -59,6 +59,14 @@ public partial class LocalizationViewModel : ObservableObject
     [ObservableProperty]
     private double _speedOfSound = 343.0;
 
+    /// <summary>
+    /// Drop localizations below this quality (0–1). Filters out spurious fixes from
+    /// coincidental cross-station detections (divergent geometry, weak correlation),
+    /// which otherwise clutter the map. 0 keeps everything.
+    /// </summary>
+    [ObservableProperty]
+    private double _minQualityScore = 0.6;
+
     public ObservableCollection<Station> Stations => _stations;
     public ObservableCollection<Detection> Detections => _detections;
     public ObservableCollection<Localization> Localizations => _localizations;
@@ -152,8 +160,11 @@ public partial class LocalizationViewModel : ObservableObject
                 progress,
                 _cts.Token);
 
+            var kept = 0;
             foreach (var localization in results)
             {
+                if (localization.QualityScore < MinQualityScore) continue; // drop spurious fixes
+                kept++;
                 _localizations.Add(localization);
 
                 // Link detections to their localization
@@ -167,7 +178,10 @@ public partial class LocalizationViewModel : ObservableObject
                 }
             }
 
-            _setStatus($"Localization complete. {results.Count} positions calculated.");
+            var filtered = results.Count - kept;
+            _setStatus(filtered > 0
+                ? $"Localization complete. {kept} positions (filtered {filtered} below quality {MinQualityScore:F2})."
+                : $"Localization complete. {kept} positions calculated.");
         }
         catch (OperationCanceledException)
         {
