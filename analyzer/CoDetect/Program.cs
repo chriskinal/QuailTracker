@@ -82,16 +82,9 @@ var detections = (await bird.AnalyzeBatchAsync(
     targetSpecies: null, overlapSeconds: 0.0, progress: progress)).ToList();
 Console.WriteLine($"\nTotal detections: {detections.Count}");
 
-// Re-anchor each detection's timestamp to true PPS UTC where available, so cross-station
-// matching uses a common clock rather than per-station filename/RTC time.
-var byPath = files.ToDictionary(f => f.FilePath);
-foreach (var d in detections)
-{
-    if (!byPath.TryGetValue(d.AudioFilePath, out var af) || !af.HasPpsTiming) continue;
-    if (af.EffectiveSampleRate is double rate &&
-        af.NativeSampleToUtc(d.OffsetSeconds * rate) is DateTime utc)
-        d.Timestamp = utc;
-}
+// Detection timestamps are PPS-anchored inside BirdNetService (when the file has PPS
+// timing), so cross-station matching already uses a common drift-free clock — no
+// re-anchoring needed here.
 
 // Build the station list (id + survey location) for TDOA matching.
 var stations = files

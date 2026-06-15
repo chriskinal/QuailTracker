@@ -18,7 +18,7 @@
                                        Minimum="100"
                                        Maximum="10000"
                                        Increment="100"
-                                       Width="100" />
+                                       MinWidth="150" />
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <TextBlock Text="Speed of Sound (m/s):" VerticalAlignment="Center" />
@@ -27,7 +27,7 @@
                                        Maximum="400"
                                        Increment="1"
                                        FormatString="F1"
-                                       Width="100" />
+                                       MinWidth="150" />
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" Spacing="8">
                         <TextBlock Text="Min Quality:" VerticalAlignment="Center"
@@ -37,7 +37,7 @@
                                        Maximum="1"
                                        Increment="0.05"
                                        FormatString="F2"
-                                       Width="90" />
+                                       MinWidth="130" />
                     </StackPanel>
                 </StackPanel>
 

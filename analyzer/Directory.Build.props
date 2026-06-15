@@ -1,9 +1,9 @@
 <Project>
   <PropertyGroup>
     <!-- Apple-style calendar versioning: major tracks the year (2026 -> 26). -->
-    <Version>26.1.2</Version>
-    <AssemblyVersion>26.1.2.0</AssemblyVersion>
-    <FileVersion>26.1.2.0</FileVersion>
+    <Version>26.1.3</Version>
+    <AssemblyVersion>26.1.3.0</AssemblyVersion>
+    <FileVersion>26.1.3.0</FileVersion>
     <Product>QuailTracker Analyzer</Product>
     <Company>QuailTracker Project</Company>
   </PropertyGroup>
