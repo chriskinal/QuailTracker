@@ -221,6 +221,10 @@ static uint32_t streamLastSpiTick = 0;  /* auto-stop timeout */
 #define GPS_FIX_TIMEOUT_MS         15000 /* max wait for GPS fix during duty cycle */
 #define OTA_SELF_CONFIRM_MS        20000 /* uptime after which a trial image self-confirms (not bricked) */
 #define SCHEDULE_CHECK_INTERVAL_MS 1000  /* how often to evaluate schedule */
+#define GPS_WARMUP_SEC                90  /* wake GPS this many seconds before a recording
+                                           * window so it acquires a fix before recording —
+                                           * Stop 2 cuts GPS_VCC, so this lead is spent awake.
+                                           * The 0.10.19 mid-file anchor is the safety net. */
 #define USER_CONNECTED_IDLE_MS    300000 /* 5 min: backstop only — STM stays awake after an
                                           * ESP wake until SPI idle IF the live client count
                                           * is unavailable (ESP silent). Real presence wins. */
@@ -2799,8 +2803,10 @@ static void powerEnterRecord(void)
         osMutexRelease(fileMtxHandle);
     }
 
-    /* Start GPS duty cycle */
-    gpsSetPower(1);
+    /* Start GPS duty cycle. If the warm-up lead already powered the GPS, leave it
+     * on — re-powering clears the freshly-acquired fix/PPS latch and throws away
+     * the warm-up. */
+    if (!gpsPowered) gpsSetPower(1);
     lastGpsDutyTick = HAL_GetTick();
     gpsDutyActive = 0;
 
@@ -3002,23 +3008,38 @@ static void powerScheduleCheck(void)
          * a time, exit only on shouldRecord transition or USER_CONNECTED. */
         uint32_t loopIter = 0;
         for (;;) {
-            /* secsUntilNext is whole-minute granularity (derived from nowMinUTC,
-             * which drops the seconds), so subtract the seconds already elapsed in
-             * the current minute — otherwise we wake up to ~59s into the window and
-             * clip its start. This lands the wake on the window's :00 second. */
-            uint32_t sleepSec = sched.secsUntilNext;
-            sleepSec = (sleepSec > ss) ? (sleepSec - ss) : 0;
-            if (sleepSec < 5)     sleepSec = 5;      /* floor: skip a pointless ~0s Stop 2 */
-            if (sleepSec > 65000) sleepSec = 65000;  /* RTC wake-timer max */
+            /* secsUntilNext is whole-minute granularity (drops the seconds), so
+             * subtract the elapsed seconds to land on the window's :00 second.
+             *
+             * Two regimes: far out, deep-sleep (GPS off) until the warm-up point;
+             * within GPS_WARMUP_SEC of the window, stay AWAKE with the GPS powered
+             * so it acquires a fix and we track PPS/RMC before recording starts.
+             * (Stop 2 cuts GPS_VCC — see enterStop2 — so warm-up can't be slept
+             * through.) This puts the PPS anchor at ~sample 0 instead of ~20 s in. */
+            uint32_t secsToWindow = (sched.secsUntilNext > ss) ? (sched.secsUntilNext - ss) : 0;
+            wake_source_t ws = WAKE_RTC;
 
-            printf("PWR: sleep iter=%lu rtc=%02u:%02u:%02u sleepSec=%lu nextWindow=%lu\r\n",
-                   (unsigned long)loopIter, hh, mm, ss,
-                   (unsigned long)sleepSec,
-                   (unsigned long)sched.secsUntilNext);
+            if (secsToWindow > GPS_WARMUP_SEC) {
+                uint32_t sleepSec = secsToWindow - GPS_WARMUP_SEC;
+                if (sleepSec < 5)     sleepSec = 5;      /* floor: skip a pointless ~0s Stop 2 */
+                if (sleepSec > 65000) sleepSec = 65000;  /* RTC wake-timer max */
 
-            wake_source_t ws = enterScheduledSleep(sleepSec);
-            printf("\r\nPWR: Woke from Stop 2 (%s)\r\n",
-                   ws == WAKE_ESP32 ? "ESP32" : "RTC");
+                printf("PWR: sleep iter=%lu rtc=%02u:%02u:%02u sleepSec=%lu nextWindow=%lu\r\n",
+                       (unsigned long)loopIter, hh, mm, ss,
+                       (unsigned long)sleepSec,
+                       (unsigned long)sched.secsUntilNext);
+
+                ws = enterScheduledSleep(sleepSec);
+                printf("\r\nPWR: Woke from Stop 2 (%s)\r\n",
+                       ws == WAKE_ESP32 ? "ESP32" : "RTC");
+            } else {
+                if (!gpsPowered) {
+                    gpsSetPower(1);   /* pre-warm: acquire a fix before the window opens */
+                    printf("PWR: GPS warm-up ON (%lus to window)\r\n",
+                           (unsigned long)secsToWindow);
+                }
+                osDelay(1000);  /* stay awake; the GPS/NMEA task tracks the fix */
+            }
 
             if (ws == WAKE_ESP32) {
                 /* User connected. Stay awake until idle timeout. Inline

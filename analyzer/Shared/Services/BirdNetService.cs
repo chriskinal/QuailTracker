@@ -179,7 +179,17 @@ public class BirdNetService : IBirdNetService
 
             // Find detections above threshold
             var detections = new List<Detection>();
-            var timestamp = sourceFile.Timestamp.AddSeconds(offsetSeconds);
+
+            // Absolute time of this segment. Prefer the PPS anchor (sample->UTC) when
+            // present: the filename/RTC clock drifts up to ~2 s across a 30-min file
+            // (segment offsets are indexed at the nominal 48 kHz, but the true rate is
+            // ~48050 Hz), which can push the same call's cross-station detections outside
+            // the TDOA match window. RecordingStartUtc + offset is drift-free. Keep the
+            // filename's DateTimeKind so display/sorting are unaffected.
+            var timestamp = sourceFile.HasPpsTiming
+                ? DateTime.SpecifyKind(
+                    sourceFile.RecordingStartUtc.AddSeconds(offsetSeconds), sourceFile.Timestamp.Kind)
+                : sourceFile.Timestamp.AddSeconds(offsetSeconds);
 
             for (var i = 0; i < probabilities.Length; i++)
             {

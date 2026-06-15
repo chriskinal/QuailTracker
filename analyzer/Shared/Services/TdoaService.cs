@@ -73,44 +73,44 @@ public class TdoaService : ITdoaService
                 if (!stationDict.TryGetValue(detection.StationId, out var station)) continue;
                 if (!station.HasValidLocation) continue;
 
-                // Find all detections within time window from different stations
-                var cluster = new List<(Detection d, Station s)> { (detection, station) };
+                // Gather every in-window detection of this species, then keep the
+                // single BEST (highest-confidence) detection per DISTINCT station.
+                // A station that fires on several consecutive segments must count
+                // once — otherwise a 2-station cluster padded with repeats would
+                // pass the >=3 check and feed the localizer a degenerate fix.
+                var bestPerStation = new Dictionary<string, (Detection d, Station s)>();
+                var memberIds = new List<Guid>();
 
                 foreach (var other in speciesDetections)
                 {
-                    if (other.Id == detection.Id) continue;
                     if (used.Contains(other.Id)) continue;
-                    if (other.StationId == detection.StationId) continue;
+                    if (Math.Abs((other.Timestamp - detection.Timestamp).TotalMilliseconds) > MaxTimeDifferenceMs) continue;
                     if (!stationDict.TryGetValue(other.StationId, out var otherStation)) continue;
                     if (!otherStation.HasValidLocation) continue;
 
-                    var timeDiffMs = Math.Abs((other.Timestamp - detection.Timestamp).TotalMilliseconds);
-                    if (timeDiffMs <= MaxTimeDifferenceMs)
-                    {
-                        cluster.Add((other, otherStation));
-                    }
+                    memberIds.Add(other.Id);
+                    if (!bestPerStation.TryGetValue(other.StationId, out var cur) || other.Confidence > cur.d.Confidence)
+                        bestPerStation[other.StationId] = (other, otherStation);
                 }
 
-                // Only create match if we have at least 3 stations
-                if (cluster.Count >= 3)
+                // Need at least 3 DISTINCT stations to localize.
+                if (bestPerStation.Count >= 3)
                 {
+                    var cluster = bestPerStation.Values.ToList();
                     var referenceTime = cluster.Min(c => c.d.Timestamp);
 
-                    var match = new DetectionMatch
+                    matches.Add(new DetectionMatch
                     {
                         ReferenceTime = referenceTime,
                         Species = speciesGroup.Key,
                         Detections = cluster.Select(c =>
                             (c.d, c.s, (c.d.Timestamp - referenceTime).TotalMilliseconds)
                         ).ToList()
-                    };
+                    });
 
-                    matches.Add(match);
-
-                    foreach (var (d, _) in cluster)
-                    {
-                        used.Add(d.Id);
-                    }
+                    // Consume every in-window member (incl. the non-best same-station
+                    // segments) so the same call can't seed an overlapping match.
+                    foreach (var id in memberIds) used.Add(id);
                 }
             }
         }
@@ -154,9 +154,9 @@ public class TdoaService : ITdoaService
             var (lat, lon, residual) = OptimizeLocation(
                 centerLat, centerLon, stations, timeDiffs);
 
-            // Calculate confidence ellipse
+            // Calculate confidence ellipse (timing precision depends on PPS refinement)
             var (majorAxis, minorAxis, rotation) = CalculateErrorEllipse(
-                lat, lon, stations, timeDiffs);
+                lat, lon, stations, timeDiffs, residual, refined);
 
             // Quality score based on geometry and residual
             var qualityScore = CalculateQualityScore(stations, lat, lon, residual);
@@ -362,26 +362,32 @@ public class TdoaService : ITdoaService
     }
 
     private (double major, double minor, double rotation) CalculateErrorEllipse(
-        double lat, double lon, Station[] stations, double[] timeDiffs)
+        double lat, double lon, Station[] stations, double[] timeDiffs, double residual, bool refined)
     {
-        // Simplified error estimation based on station geometry
-        var distances = stations.Select(s => CalculateDistance(lat, lon, s.Latitude, s.Longitude)).ToArray();
-        var avgDistance = distances.Average();
-
-        // GDOP-like calculation
+        // GDOP-like geometry term: bearing spread of the stations as seen from the fix.
         var bearings = stations.Select(s =>
             Math.Atan2(s.Longitude - lon, s.Latitude - lat) * RadToDeg).ToArray();
-
         var bearingSpread = CalculateBearingSpread(bearings);
 
-        // Scale error based on time sync accuracy (~1ms = ~0.343m)
-        var baseError = 0.343 * 1000; // 1ms timing error
-        var geometryFactor = 1.0 / Math.Max(bearingSpread / 180.0, 0.1);
+        // Range-equivalent 1σ of one arrival-time measurement (metres), from:
+        //  - timing: c·σt. PPS + GCC-PHAT cross-correlation is sub-millisecond
+        //    (correlation/multipath limited); coarse timestamp matching is ~seconds.
+        //  - fit: the RMS TDOA residual is a lower bound on the real timing noise
+        //    (informative with >3 stations; ~0 for an exactly-determined 3-station fix).
+        //  - GPS: surveyed station positions carry ~3 m, an irreducible floor.
+        const double gpsPosSigmaM = 3.0;
+        var intrinsicSigmaT = refined ? 0.0005 : 1.0;            // seconds
+        var n = timeDiffs.Length;
+        var rmsResidualSec = n > 1 ? Math.Sqrt(Math.Max(residual, 0) / (n - 1)) : 0.0;
+        var sigmaT = Math.Max(intrinsicSigmaT, rmsResidualSec);
+        var rangeSigma = Math.Sqrt(Math.Pow(SpeedOfSound * sigmaT, 2) + gpsPosSigmaM * gpsPosSigmaM);
 
-        var majorAxis = baseError * geometryFactor;
-        var minorAxis = baseError * geometryFactor * 0.5;
+        // Tight when stations surround the point; blows up when they're clustered in
+        // one direction (a far-field divergent fix), correctly inflating implausible solutions.
+        var geometryFactor = 1.0 / Math.Max(bearingSpread / 180.0, 0.02);
 
-        // Rotation based on dominant bearing direction
+        var majorAxis = Math.Min(rangeSigma * geometryFactor, 10000.0);
+        var minorAxis = majorAxis * 0.5;
         var rotation = bearings.Average();
 
         return (majorAxis, minorAxis, rotation);
