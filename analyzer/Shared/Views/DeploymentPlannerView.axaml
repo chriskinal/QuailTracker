@@ -30,6 +30,16 @@
                             Classes="SecondaryButton"
                             Command="{Binding MoveStationsCommand}"
                             IsEnabled="{Binding HasPlan}" />
+                    <Border Width="1" Background="#E0E0E0" Margin="4,0" />
+                    <TextBlock Text="Max units:" VerticalAlignment="Center"
+                               ToolTip.Tip="Upper bound of the station-count sweep — how many units you have to deploy." />
+                    <NumericUpDown Value="{Binding MaxStations}"
+                                   Minimum="3" Maximum="30" Increment="1"
+                                   MinWidth="120" VerticalAlignment="Center" />
+                    <CheckBox Content="Detection mode"
+                              IsChecked="{Binding OptimizeForDetection}"
+                              VerticalAlignment="Center"
+                              ToolTip.Tip="Optimize placement so ≥1 mic hemisphere covers the area (presence surveys), instead of ≥3-station localization." />
                 </StackPanel>
 
                 <TextBlock Grid.Column="2"
@@ -63,7 +73,9 @@
                            Margin="0,0,0,8"
                            IsVisible="{Binding PlanSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 
+                <!-- Localization: CRLB coverage per method -->
                 <DataGrid Grid.Row="2"
+                          IsVisible="{Binding !OptimizeForDetection}"
                           ItemsSource="{Binding CoverageRows}"
                           SelectedItem="{Binding SelectedRow}"
                           IsReadOnly="True"
@@ -78,6 +90,24 @@
                         <DataGridTextColumn Header="TDOA" Binding="{Binding Tdoa}" Width="*" />
                         <DataGridTextColumn Header="Bearing" Binding="{Binding Bearing}" Width="*" />
                         <DataGridTextColumn Header="Fusion" Binding="{Binding Fusion}" Width="*" />
+                    </DataGrid.Columns>
+                </DataGrid>
+
+                <!-- Detection: ≥1-hemisphere coverage -->
+                <DataGrid Grid.Row="2"
+                          IsVisible="{Binding OptimizeForDetection}"
+                          ItemsSource="{Binding DetectionRows}"
+                          SelectedItem="{Binding SelectedDetectionRow}"
+                          IsReadOnly="True"
+                          GridLinesVisibility="Horizontal"
+                          BorderBrush="#E0E0E0"
+                          BorderThickness="1"
+                          CanUserResizeColumns="False"
+                          CanUserReorderColumns="False"
+                          CanUserSortColumns="False">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Stations" Binding="{Binding Stations}" Width="90" />
+                        <DataGridTextColumn Header="Detection coverage" Binding="{Binding Coverage}" Width="*" />
                     </DataGrid.Columns>
                 </DataGrid>
 

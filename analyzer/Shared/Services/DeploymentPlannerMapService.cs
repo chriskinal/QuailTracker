@@ -185,6 +185,7 @@ public sealed class DeploymentPlannerMapService
             var (wx, wy) = SphericalMercator.FromLonLat(s.Lon, s.Lat);
             var dot = new GeometryFeature { Geometry = Gf.CreatePoint(new Coordinate(wx, wy)) };
             dot["num"] = index.ToString();   // LabelStyle.Text is write-only; keep the number in feature data
+            dot["hdg"] = s.HeadingDeg;        // boresight heading (VM owns the mode-aware aim logic)
             dot.Styles.Add(StationStyle());
             dot.Styles.Add(NumberLabel(index.ToString()));
             _stationLayer.Add(dot);
@@ -292,65 +293,57 @@ public sealed class DeploymentPlannerMapService
     {
         if (_stationDecoLayer == null || _stationLayer == null) return;
 
-        var points = _stationLayer.GetFeatures().OfType<GeometryFeature>()
-            .Select(f => f.Geometry).OfType<Point>().ToList();
-
         var deco = new List<IFeature>();
-        var centroid = CurrentPolygon()?.Centroid;
-        if (centroid != null)
+        var res = _mapControl?.Map.Navigator.Viewport.Resolution ?? 1.0;
+        var boxPen = new Pen(new Color(StationColor.R, StationColor.G, StationColor.B, 255), 2);
+        var boxFill = new Brush(new Color(StationColor.R, StationColor.G, StationColor.B, 60));
+        var tickPen = new Pen(new Color(StationColor.R, StationColor.G, StationColor.B, 220), 2);
+
+        // Fixed screen sizes (px) → world units at current zoom; aspect 130:100.
+        var longHalf = 17.0 * res;   // half the 130 mm (mic-axis) side
+        var shortHalf = 13.0 * res;  // half the 100 mm side
+        var tickLen = 22.0 * res;
+
+        foreach (var f in _stationLayer.GetFeatures().OfType<GeometryFeature>())
         {
-            var res = _mapControl?.Map.Navigator.Viewport.Resolution ?? 1.0;
-            var boxPen = new Pen(new Color(StationColor.R, StationColor.G, StationColor.B, 255), 2);
-            var boxFill = new Brush(new Color(StationColor.R, StationColor.G, StationColor.B, 60));
-            var tickPen = new Pen(new Color(StationColor.R, StationColor.G, StationColor.B, 220), 2);
+            if (f.Geometry is not Point p) continue;
+            var hdg = f["hdg"] is double d ? d : 0.0;
 
-            // Fixed screen sizes (px) → world units at current zoom; aspect 130:100.
-            var longHalf = 17.0 * res;   // half the 130 mm (mic-axis) side
-            var shortHalf = 13.0 * res;  // half the 100 mm side
-            var tickLen = 22.0 * res;
+            double ux = Math.Sin(hdg * Math.PI / 180.0);   // aim (boresight) unit vector (east,north)
+            double uy = Math.Cos(hdg * Math.PI / 180.0);
+            double rx = -uy, ry = ux;                       // mic axis (perpendicular to aim)
 
-            foreach (var p in points)
+            // Box rectangle: ± longHalf along the mic axis, ± shortHalf along the aim.
+            Coordinate Corner(double a, double b) =>
+                new(p.X + a * longHalf * rx + b * shortHalf * ux,
+                    p.Y + a * longHalf * ry + b * shortHalf * uy);
+            var box = new GeometryFeature
             {
-                var dx = centroid.X - p.X;
-                var dy = centroid.Y - p.Y;
-                var mag = Math.Sqrt(dx * dx + dy * dy);
-                if (mag < 1e-6) continue;
+                Geometry = Gf.CreatePolygon(Gf.CreateLinearRing(
+                [
+                    Corner(+1, +1), Corner(+1, -1), Corner(-1, -1), Corner(-1, +1), Corner(+1, +1),
+                ])),
+            };
+            box.Styles.Add(new VectorStyle { Fill = boxFill, Line = boxPen, Outline = boxPen });
+            deco.Add(box);
 
-                double ux = dx / mag, uy = dy / mag;        // aim (boresight, toward centroid)
-                double rx = -uy, ry = ux;                    // mic axis (perpendicular to aim)
+            // Aim tick off the broad (target-facing) side + heading label at its tip.
+            var bx = p.X + ux * shortHalf;
+            var by = p.Y + uy * shortHalf;
+            var ex = bx + ux * tickLen;
+            var ey = by + uy * tickLen;
+            var tick = new GeometryFeature
+            {
+                Geometry = Gf.CreateLineString([new Coordinate(bx, by), new Coordinate(ex, ey)]),
+            };
+            tick.Styles.Add(new VectorStyle { Line = tickPen });
+            deco.Add(tick);
 
-                // Box rectangle: ± longHalf along the mic axis, ± shortHalf along the aim.
-                Coordinate Corner(double a, double b) =>
-                    new(p.X + a * longHalf * rx + b * shortHalf * ux,
-                        p.Y + a * longHalf * ry + b * shortHalf * uy);
-                var box = new GeometryFeature
-                {
-                    Geometry = Gf.CreatePolygon(Gf.CreateLinearRing(
-                    [
-                        Corner(+1, +1), Corner(+1, -1), Corner(-1, -1), Corner(-1, +1), Corner(+1, +1),
-                    ])),
-                };
-                box.Styles.Add(new VectorStyle { Fill = boxFill, Line = boxPen, Outline = boxPen });
-                deco.Add(box);
-
-                // Aim tick off the broad (target-facing) side + heading label at its tip.
-                var bx = p.X + ux * shortHalf;
-                var by = p.Y + uy * shortHalf;
-                var ex = bx + ux * tickLen;
-                var ey = by + uy * tickLen;
-                var tick = new GeometryFeature
-                {
-                    Geometry = Gf.CreateLineString([new Coordinate(bx, by), new Coordinate(ex, ey)]),
-                };
-                tick.Styles.Add(new VectorStyle { Line = tickPen });
-                deco.Add(tick);
-
-                var headingDeg = (Math.Atan2(dx, dy) * 180.0 / Math.PI + 360) % 360;
-                var label = new PointFeature(new MPoint(ex, ey));
-                label.Styles.Add(HeadingLabel($"{headingDeg:F0}°"));
-                deco.Add(label);
-            }
+            var label = new PointFeature(new MPoint(ex, ey));
+            label.Styles.Add(HeadingLabel($"{hdg:F0}°"));
+            deco.Add(label);
         }
+
         _stationDecoLayer.Features = deco;
         _stationDecoLayer.DataHasChanged();
     }

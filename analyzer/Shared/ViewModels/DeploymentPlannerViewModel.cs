@@ -29,36 +29,43 @@ using QuailTracker.Analyzer.Shared.Services;
 
 namespace QuailTracker.Analyzer.Shared.ViewModels;
 
-/// <summary>One row of the coverage sweep: percent-of-area within target per method.</summary>
+/// <summary>Localization sweep row: percent-of-area localizable per method, by station count.</summary>
 public sealed record CoverageRow(int Stations, string Tdoa, string Bearing, string Fusion);
 
+/// <summary>Detection sweep row: percent-of-area within ≥1 mic hemisphere, by station count.</summary>
+public sealed record DetectionRow(int Stations, string Coverage);
+
 /// <summary>
-/// Deployment Planner tab: draw a study-area boundary on the map, then auto-place a
-/// perimeter ring of PPS stations and score coverage (CRLB) across station counts for
-/// TDOA / Bearing / Fusion.
+/// Deployment Planner tab: draw a study-area boundary, then either
+///   - Localization: auto-place a perimeter ring and score CRLB coverage (TDOA/Bearing/Fusion), or
+///   - Detection: greedily spread stations to maximise ±90°-hemisphere coverage (≥1 mic hears it),
+/// pick a station count from the table, and move stations to real-world spots with a live
+/// "how far off optimal" readout.
 /// </summary>
 public partial class DeploymentPlannerViewModel : ObservableObject
 {
     private const double SqMetersPerHectare = 10_000.0;
     private const double SqMetersPerAcre = 4046.8564224;
 
-    // Coverage sweep parameters (mirror the qt-planner CLI defaults).
-    private const int MinStations = 3, MaxStations = 8, GridRes = 41;
-    private const double CoverageGoal = 0.90;
+    private const int MinStations = 3, GridRes = 41;
+    private const double LocalizationGoal = 0.90;   // Fusion coverage target
+    private const double DetectionGoal = 0.95;      // ≥1-hemisphere coverage target
 
     private readonly DeploymentPlannerMapService _mapService;
 
     /// <summary>Latest drawn study-area ring (WGS84, closed), or null when there's no usable polygon.</summary>
     private IReadOnlyList<(double Lat, double Lon)>? _currentRing;
 
-    /// <summary>Fusion coverage of the current planned ring — the baseline tweaks are measured against.</summary>
-    private double _optimalFusionCoverage;
+    /// <summary>Coverage of the current planned layout — the baseline tweaks are measured against.</summary>
+    private double _optimalCoverage;
 
-    /// <summary>Fusion coverage per station count from the last sweep (drives the baseline when N changes).</summary>
-    private Dictionary<int, double> _fusionByN = new();
+    /// <summary>Coverage by station count from the last sweep (Fusion% or detection% per mode).</summary>
+    private Dictionary<int, double> _coverageByN = new();
 
-    /// <summary>Guards against re-placing while we set <see cref="SelectedRow"/> programmatically.</summary>
-    private bool _suppressRowSelect;
+    /// <summary>Detection-mode greedy layout (full, up to MaxStations); first N = best N-station spread.</summary>
+    private List<(double Lat, double Lon, double HeadingDeg)>? _greedyLayout;
+
+    private bool _suppressRowSelect;   // guards programmatic table selection
 
     [ObservableProperty]
     private string _statusMessage =
@@ -70,26 +77,36 @@ public partial class DeploymentPlannerViewModel : ObservableObject
     [ObservableProperty]
     private string _planSummary = string.Empty;
 
-    /// <summary>Live "how far off optimal" readout shown after a station is dragged.</summary>
+    /// <summary>Live "how far off optimal" readout shown after a station is moved.</summary>
     [ObservableProperty]
     private string _tweakSummary = string.Empty;
 
-    /// <summary>True once a usable polygon (≥3 corners) exists — gates the "Plan Stations" step.</summary>
+    /// <summary>Detection mode (≥1-hemisphere) vs Localization mode (≥3-station CRLB).</summary>
+    [ObservableProperty]
+    private bool _optimizeForDetection;
+
+    /// <summary>Upper bound of the station-count sweep — how many units are available to deploy.</summary>
+    [ObservableProperty]
+    private int _maxStations = 12;
+
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(PlanStationsCommand))]
     private bool _hasArea;
 
-    /// <summary>True once stations are placed — gates the "Move Stations" step.</summary>
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(MoveStationsCommand))]
     private bool _hasPlan;
 
-    /// <summary>Selected coverage-table row — picking a row re-places the layout at that station count.</summary>
+    /// <summary>Selected localization-table row — picking a row re-places the layout at that count.</summary>
     [ObservableProperty]
     private CoverageRow? _selectedRow;
 
-    /// <summary>Coverage-per-method by station count, for the results table.</summary>
+    /// <summary>Selected detection-table row — picking a row re-places the layout at that count.</summary>
+    [ObservableProperty]
+    private DetectionRow? _selectedDetectionRow;
+
     public ObservableCollection<CoverageRow> CoverageRows { get; } = [];
+    public ObservableCollection<DetectionRow> DetectionRows { get; } = [];
 
     public DeploymentPlannerViewModel(DeploymentPlannerMapService mapService)
     {
@@ -101,6 +118,20 @@ public partial class DeploymentPlannerViewModel : ObservableObject
 
     public async Task InitializeMapAsync(MapControl mapControl)
         => await _mapService.InitializeAsync(mapControl);
+
+    partial void OnOptimizeForDetectionChanged(bool value)
+    {
+        StatusMessage = value
+            ? "Detection mode: stations spread so ≥1 mic hemisphere covers the area (presence surveys)."
+            : "Localization mode: ≥3 stations to pin a source (TDOA).";
+        if (HasArea) _ = PlanStationsAsync();   // re-plan in the new mode
+    }
+
+    partial void OnMaxStationsChanged(int value)
+    {
+        if (value < MinStations) return;
+        if (HasArea) _ = PlanStationsAsync();   // re-sweep up to the new cap
+    }
 
     [RelayCommand]
     private void DrawArea()
@@ -130,47 +161,90 @@ public partial class DeploymentPlannerViewModel : ObservableObject
         if (ring is null) return;
 
         StatusMessage = "Computing station layout…";
-        var (rows, recommendedN, fusionByN, summary) = await Task.Run(() => ComputePlan(ring));
+        var detection = OptimizeForDetection;
+        var maxN = Math.Max(MinStations, MaxStations);
 
-        CoverageRows.Clear();
-        foreach (var r in rows) CoverageRows.Add(r);
-        _fusionByN = fusionByN;
-        PlanSummary = $"{summary} Click a row to place that many.";
+        if (detection)
+        {
+            var (rows, recommendedN, coverageByN, greedy, summary) = await Task.Run(() => ComputeDetectionPlan(ring, maxN));
+            _suppressRowSelect = true;
+            CoverageRows.Clear();
+            DetectionRows.Clear();
+            foreach (var r in rows) DetectionRows.Add(r);
+            _suppressRowSelect = false;
 
-        // Select the recommended row (highlights it) without re-triggering placement, then place.
-        _suppressRowSelect = true;
-        SelectedRow = CoverageRows.FirstOrDefault(r => r.Stations == recommendedN);
-        _suppressRowSelect = false;
-        PlaceStations(recommendedN);
+            _coverageByN = coverageByN;
+            _greedyLayout = greedy;
+            PlanSummary = $"{summary} Click a row to place that many.";
+
+            _suppressRowSelect = true;
+            SelectedDetectionRow = DetectionRows.FirstOrDefault(r => r.Stations == recommendedN);
+            _suppressRowSelect = false;
+            PlaceStations(recommendedN);
+        }
+        else
+        {
+            var (rows, recommendedN, coverageByN, summary) = await Task.Run(() => ComputeLocalizationPlan(ring, maxN));
+            _suppressRowSelect = true;
+            DetectionRows.Clear();
+            CoverageRows.Clear();
+            foreach (var r in rows) CoverageRows.Add(r);
+            _suppressRowSelect = false;
+
+            _coverageByN = coverageByN;
+            _greedyLayout = null;
+            PlanSummary = $"{summary} Click a row to place that many.";
+
+            _suppressRowSelect = true;
+            SelectedRow = CoverageRows.FirstOrDefault(r => r.Stations == recommendedN);
+            _suppressRowSelect = false;
+            PlaceStations(recommendedN);
+        }
     }
 
     private bool CanPlanStations() => HasArea;
 
-    /// <summary>Selecting a coverage-table row re-places the ring at that station count.</summary>
     partial void OnSelectedRowChanged(CoverageRow? value)
     {
         if (_suppressRowSelect || value is null) return;
         PlaceStations(value.Stations);
     }
 
-    /// <summary>Place a perimeter ring of <paramref name="n"/> stations and update the baseline + map.</summary>
+    partial void OnSelectedDetectionRowChanged(DetectionRow? value)
+    {
+        if (_suppressRowSelect || value is null) return;
+        PlaceStations(value.Stations);
+    }
+
+    /// <summary>Place an N-station layout (perimeter ring or detection greedy) and update baseline + map.</summary>
     private void PlaceStations(int n)
     {
         var ring = _currentRing;
         if (ring is null || n < 3) return;
 
-        var proj = new GeoProjection(ring.Average(p => p.Lat), ring.Average(p => p.Lon));
-        var polygon = ring.Select(p => proj.ToLocal(p.Lat, p.Lon)).ToList();
-        var stations = PerimeterLayout.Ring(polygon, n)
-            .Select(s => { var (lat, lon) = proj.ToGeo(s.X, s.Y); return (lat, lon, s.HeadingDeg); })
-            .ToList();
+        List<(double Lat, double Lon, double HeadingDeg)> stations;
+        if (OptimizeForDetection)
+        {
+            if (_greedyLayout is null) return;
+            stations = _greedyLayout.Take(n).ToList();
+        }
+        else
+        {
+            var proj = new GeoProjection(ring.Average(p => p.Lat), ring.Average(p => p.Lon));
+            var polygon = ring.Select(p => proj.ToLocal(p.Lat, p.Lon)).ToList();
+            stations = PerimeterLayout.Ring(polygon, n)
+                .Select(s => { var (lat, lon) = proj.ToGeo(s.X, s.Y); return (lat, lon, s.HeadingDeg); })
+                .ToList();
+        }
 
         _mapService.ShowStations(stations);
         _mapService.FinishEditing();   // leave edit mode so stray taps don't extend the polygon
-        _optimalFusionCoverage = _fusionByN.TryGetValue(n, out var f) ? f : 0;
+        _optimalCoverage = _coverageByN.TryGetValue(n, out var c) ? c : 0;
         HasPlan = stations.Count >= 3;
+
+        var metric = OptimizeForDetection ? "detection" : "Fusion";
         TweakSummary = HasPlan
-            ? $"Optimal {n}-station layout: {_optimalFusionCoverage:P0} Fusion coverage. Click “Move Stations”, then tap a station and its real-world spot to see the cost."
+            ? $"Optimal {n}-station layout: {_optimalCoverage:P0} {metric} coverage. Click “Move Stations”, then tap a station and its real-world spot to see the cost."
             : string.Empty;
         StatusMessage = $"Placed {n} stations. Pick another row to change the count, or move them to real-world spots.";
     }
@@ -184,21 +258,43 @@ public partial class DeploymentPlannerViewModel : ObservableObject
 
     private bool CanMoveStations() => HasPlan;
 
-    private void OnStationsMoved(IReadOnlyList<(double Lat, double Lon)> stations)
+    private void OnStationsMoved(IReadOnlyList<(double Lat, double Lon)> positions)
     {
         var ring = _currentRing;
-        if (ring is null || stations.Count < 3)
+        if (ring is null || positions.Count < 3)
         {
-            TweakSummary = "Need ≥3 stations for a fix.";
+            TweakSummary = "Need ≥3 stations.";
             return;
         }
 
-        var current = EvaluateFusionCoverage(ring, stations);
-        var deltaPts = (_optimalFusionCoverage - current) * 100.0;
+        var prm = new LocalizationParams();
+        var proj = new GeoProjection(ring.Average(p => p.Lat), ring.Average(p => p.Lon));
+        var polygon = ring.Select(p => proj.ToLocal(p.Lat, p.Lon)).ToList();
+
+        // Boxes aim at the centroid in both modes (detection is omnidirectional, so heading
+        // is only a box-orientation cue there; localization uses it for bearing/fusion).
+        double cx = polygon.Average(p => p.X), cy = polygon.Average(p => p.Y);
+        var stns = positions.Select(s =>
+        {
+            var (x, y) = proj.ToLocal(s.Lat, s.Lon);
+            var heading = (Math.Atan2(cx - x, cy - y) * 180.0 / Math.PI + 360) % 360;
+            return new ArrayStation(x, y, heading);
+        }).ToArray();
+
+        var current = OptimizeForDetection
+            ? AreaModel.EvaluateDetectionPolygon(stns, prm, polygon, GridRes).Coverage
+            : AreaModel.EvaluatePolygon(stns, LocalizationMethod.Fusion, prm, polygon, GridRes).Coverage;
+
+        // Re-render with the mode-correct headings (the service draws whatever heading it's given).
+        var rendered = stns.Select(s => { var (lat, lon) = proj.ToGeo(s.X, s.Y); return (lat, lon, s.HeadingDeg); }).ToList();
+        _mapService.ShowStations(rendered);
+
+        var deltaPts = (_optimalCoverage - current) * 100.0;
         var verdict = deltaPts <= 0.5 ? "as good as optimal"
             : deltaPts <= 5 ? $"{deltaPts:F0} pts below optimal"
             : $"{deltaPts:F0} pts below optimal — consider a better spot";
-        TweakSummary = $"Your layout: {current:P0} Fusion coverage ({verdict}; optimal {_optimalFusionCoverage:P0}).";
+        var metric = OptimizeForDetection ? "detection" : "Fusion";
+        TweakSummary = $"Your layout: {current:P0} {metric} coverage ({verdict}; optimal {_optimalCoverage:P0}).";
     }
 
     private void OnAreaChanged(IReadOnlyList<(double Lat, double Lon)>? ring)
@@ -216,80 +312,88 @@ public partial class DeploymentPlannerViewModel : ObservableObject
 
         _currentRing = ring;
         double m2 = PolygonAreaSqMeters(ring!);
-        AreaSummary = $"Study area: {m2 / SqMetersPerHectare:F1} ha "
-                    + $"({m2 / SqMetersPerAcre:F1} ac) · {corners} corners";
+        AreaSummary = $"Study area: {m2 / SqMetersPerHectare:F1} ha ({m2 / SqMetersPerAcre:F1} ac) · {corners} corners";
         HasArea = true;
-
-        // The geometry changed, so any existing plan is stale.
-        ClearPlan();
+        ClearPlan();   // geometry changed → any existing plan is stale
     }
 
     private void ClearPlan()
     {
         HasPlan = false;
         TweakSummary = string.Empty;
-        _optimalFusionCoverage = 0;
-        _fusionByN = new();
-        if (CoverageRows.Count == 0 && PlanSummary.Length == 0) return;
+        _optimalCoverage = 0;
+        _coverageByN = new();
+        _greedyLayout = null;
+        if (CoverageRows.Count == 0 && DetectionRows.Count == 0 && PlanSummary.Length == 0) return;
         _suppressRowSelect = true;
-        CoverageRows.Clear();      // clears SelectedRow → guarded handler won't re-place
+        CoverageRows.Clear();
+        DetectionRows.Clear();
         _suppressRowSelect = false;
         PlanSummary = string.Empty;
         _mapService.ClearStations();
     }
 
-    /// <summary>Fusion coverage for an arbitrary set of station positions (headings re-aimed at the area centroid).</summary>
-    private static double EvaluateFusionCoverage(
-        IReadOnlyList<(double Lat, double Lon)> ring, IReadOnlyList<(double Lat, double Lon)> stationLatLon)
-    {
-        if (stationLatLon.Count < 3) return 0;
-        var proj = new GeoProjection(ring.Average(p => p.Lat), ring.Average(p => p.Lon));
-        var polygon = ring.Select(p => proj.ToLocal(p.Lat, p.Lon)).ToList();
-        double cx = polygon.Average(p => p.X), cy = polygon.Average(p => p.Y);
-
-        var stns = stationLatLon.Select(s =>
-        {
-            var (x, y) = proj.ToLocal(s.Lat, s.Lon);
-            var heading = (Math.Atan2(cx - x, cy - y) * 180.0 / Math.PI + 360) % 360;
-            return new ArrayStation(x, y, heading);
-        }).ToArray();
-
-        return AreaModel.EvaluatePolygon(stns, LocalizationMethod.Fusion, new LocalizationParams(), polygon, GridRes).Coverage;
-    }
-
-    /// <summary>
-    /// Sweep station counts over the drawn polygon: place a perimeter ring, score CRLB coverage
-    /// per method, and pick the smallest count meeting the Fusion goal. Returns the table, the
-    /// recommended count, the per-count Fusion coverage, and a summary. Pure / off the UI thread.
-    /// </summary>
-    private static (List<CoverageRow> Rows, int RecommendedN, Dictionary<int, double> FusionByN, string Summary)
-        ComputePlan(IReadOnlyList<(double Lat, double Lon)> ring)
+    /// <summary>Localization sweep: perimeter ring + CRLB coverage per method; pick smallest N meeting the Fusion goal.</summary>
+    private static (List<CoverageRow> Rows, int RecommendedN, Dictionary<int, double> CoverageByN, string Summary)
+        ComputeLocalizationPlan(IReadOnlyList<(double Lat, double Lon)> ring, int maxStations)
     {
         var proj = new GeoProjection(ring.Average(p => p.Lat), ring.Average(p => p.Lon));
         var polygon = ring.Select(p => proj.ToLocal(p.Lat, p.Lon)).ToList();
         var prm = new LocalizationParams();
 
         var rows = new List<CoverageRow>();
-        var fusionByN = new Dictionary<int, double>();
-        int? bestFusionN = null;
-        for (var n = MinStations; n <= MaxStations; n++)
+        var coverageByN = new Dictionary<int, double>();
+        int? best = null;
+        for (var n = MinStations; n <= maxStations; n++)
         {
             var stns = PerimeterLayout.Ring(polygon, n);
             var t = AreaModel.EvaluatePolygon(stns, LocalizationMethod.Tdoa, prm, polygon, GridRes);
             var b = AreaModel.EvaluatePolygon(stns, LocalizationMethod.Bearing, prm, polygon, GridRes);
             var f = AreaModel.EvaluatePolygon(stns, LocalizationMethod.Fusion, prm, polygon, GridRes);
             rows.Add(new CoverageRow(n, Cell(t), Cell(b), Cell(f)));
-            fusionByN[n] = f.Coverage;
-            if (bestFusionN is null && f.Coverage >= CoverageGoal) bestFusionN = n;
+            coverageByN[n] = f.Coverage;
+            if (best is null && f.Coverage >= LocalizationGoal) best = n;
         }
 
-        var pickN = bestFusionN ?? MaxStations;
+        var pickN = best ?? maxStations;
+        var summary = best is null
+            ? $"No layout up to {maxStations} stations reaches {LocalizationGoal:P0} (Fusion). Showing {pickN}."
+            : $"Recommended: {pickN} stations — Fusion ≥ {LocalizationGoal:P0} coverage.";
+        return (rows, pickN, coverageByN, summary);
+    }
 
-        var summary = bestFusionN is null
-            ? $"No layout up to {MaxStations} stations reaches {CoverageGoal:P0} (Fusion). Showing {pickN}."
-            : $"Recommended: {pickN} stations — Fusion ≥ {CoverageGoal:P0} coverage.";
+    /// <summary>Detection sweep: greedy hemisphere-coverage spread; pick smallest N meeting the detection goal.</summary>
+    private static (List<DetectionRow> Rows, int RecommendedN, Dictionary<int, double> CoverageByN,
+                    List<(double Lat, double Lon, double HeadingDeg)> Greedy, string Summary)
+        ComputeDetectionPlan(IReadOnlyList<(double Lat, double Lon)> ring, int maxStations)
+    {
+        var proj = new GeoProjection(ring.Average(p => p.Lat), ring.Average(p => p.Lon));
+        var polygon = ring.Select(p => proj.ToLocal(p.Lat, p.Lon)).ToList();
+        var prm = new LocalizationParams();
 
-        return (rows, pickN, fusionByN, summary);
+        var (layout, coverageByCount) = DetectionLayout.GreedySweep(polygon, maxStations, prm, GridRes);
+
+        var rows = new List<DetectionRow>();
+        var coverageByN = new Dictionary<int, double>();
+        int? best = null;
+        for (var n = MinStations; n <= maxStations; n++)
+        {
+            var cov = n - 1 < coverageByCount.Length ? coverageByCount[n - 1]
+                    : coverageByCount.Length > 0 ? coverageByCount[^1] : 0.0;
+            rows.Add(new DetectionRow(n, $"{cov:P0}"));
+            coverageByN[n] = cov;
+            if (best is null && cov >= DetectionGoal) best = n;
+        }
+
+        var pickN = best ?? maxStations;
+        var greedy = layout
+            .Select(s => { var (lat, lon) = proj.ToGeo(s.X, s.Y); return (lat, lon, s.HeadingDeg); })
+            .ToList();
+
+        var summary = best is null
+            ? $"No layout up to {maxStations} stations reaches {DetectionGoal:P0} detection coverage. Showing {pickN}."
+            : $"Recommended: {pickN} stations — ≥{DetectionGoal:P0} detection coverage.";
+        return (rows, pickN, coverageByN, greedy, summary);
     }
 
     private static string Cell(AreaResult r) => r.FixCount == 0 ? "—" : $"{r.Coverage:P0}";

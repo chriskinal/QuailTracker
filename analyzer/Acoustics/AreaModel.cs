@@ -90,4 +90,43 @@ public static class AreaModel
             FixCount: fixes,
             MedianError: errors.Count == 0 ? 0 : errors[errors.Count / 2]);
     }
+
+    /// <summary>
+    /// Detection coverage over <paramref name="polygon"/>: the fraction of area within ≥1
+    /// station's audibility disc. Mics hear OMNIDIRECTIONALLY, so this is range-only (no
+    /// ±90° hemisphere — that's a bearing limit, not a detection one). <see cref="AreaResult.Coverage"/>
+    /// is the fraction; <see cref="AreaResult.FixCount"/> is the covered-cell count.
+    /// </summary>
+    public static AreaResult EvaluateDetectionPolygon(
+        IReadOnlyList<ArrayStation> stns, LocalizationParams p,
+        IReadOnlyList<(double X, double Y)> polygon, int gridRes)
+    {
+        var v = PolyUtil.Normalize(polygon);
+        if (v.Count < 3) return new AreaResult(0, 0, 0);
+        if (gridRes < 2) gridRes = 2;
+
+        double minX = v.Min(q => q.X), maxX = v.Max(q => q.X);
+        double minY = v.Min(q => q.Y), maxY = v.Max(q => q.Y);
+        var stepX = (maxX - minX) / (gridRes - 1);
+        var stepY = (maxY - minY) / (gridRes - 1);
+
+        int total = 0, covered = 0;
+        for (var iy = 0; iy < gridRes; iy++)
+        for (var ix = 0; ix < gridRes; ix++)
+        {
+            var x = minX + ix * stepX;
+            var y = minY + iy * stepY;
+            if (!PolyUtil.Contains(v, x, y)) continue;
+            total++;
+
+            foreach (var s in stns)
+                if (DetectionRange.Reaches(s.X, s.Y, x, y, p.DetectRadius))
+                {
+                    covered++;
+                    break;
+                }
+        }
+
+        return new AreaResult(total == 0 ? 0 : (double)covered / total, covered, 0);
+    }
 }
