@@ -51,6 +51,15 @@ public partial class DeploymentPlannerViewModel : ObservableObject
     /// <summary>Latest drawn study-area ring (WGS84, closed), or null when there's no usable polygon.</summary>
     private IReadOnlyList<(double Lat, double Lon)>? _currentRing;
 
+    /// <summary>Fusion coverage of the current planned ring — the baseline tweaks are measured against.</summary>
+    private double _optimalFusionCoverage;
+
+    /// <summary>Fusion coverage per station count from the last sweep (drives the baseline when N changes).</summary>
+    private Dictionary<int, double> _fusionByN = new();
+
+    /// <summary>Guards against re-placing while we set <see cref="SelectedRow"/> programmatically.</summary>
+    private bool _suppressRowSelect;
+
     [ObservableProperty]
     private string _statusMessage =
         "Click “Draw Area”, then tap the map to outline your study area. Double-tap to finish.";
@@ -61,10 +70,23 @@ public partial class DeploymentPlannerViewModel : ObservableObject
     [ObservableProperty]
     private string _planSummary = string.Empty;
 
+    /// <summary>Live "how far off optimal" readout shown after a station is dragged.</summary>
+    [ObservableProperty]
+    private string _tweakSummary = string.Empty;
+
     /// <summary>True once a usable polygon (≥3 corners) exists — gates the "Plan Stations" step.</summary>
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(PlanStationsCommand))]
     private bool _hasArea;
+
+    /// <summary>True once stations are placed — gates the "Move Stations" step.</summary>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(MoveStationsCommand))]
+    private bool _hasPlan;
+
+    /// <summary>Selected coverage-table row — picking a row re-places the layout at that station count.</summary>
+    [ObservableProperty]
+    private CoverageRow? _selectedRow;
 
     /// <summary>Coverage-per-method by station count, for the results table.</summary>
     public ObservableCollection<CoverageRow> CoverageRows { get; } = [];
@@ -73,6 +95,8 @@ public partial class DeploymentPlannerViewModel : ObservableObject
     {
         _mapService = mapService;
         _mapService.AreaChanged += OnAreaChanged;
+        _mapService.StationsMoved += OnStationsMoved;
+        _mapService.MoveStatus += msg => StatusMessage = msg;
     }
 
     public async Task InitializeMapAsync(MapControl mapControl)
@@ -106,16 +130,76 @@ public partial class DeploymentPlannerViewModel : ObservableObject
         if (ring is null) return;
 
         StatusMessage = "Computing station layout…";
-        var (rows, stations, summary) = await Task.Run(() => ComputePlan(ring));
+        var (rows, recommendedN, fusionByN, summary) = await Task.Run(() => ComputePlan(ring));
 
         CoverageRows.Clear();
         foreach (var r in rows) CoverageRows.Add(r);
-        PlanSummary = summary;
-        _mapService.ShowStations(stations);
-        StatusMessage = $"Placed {stations.Count} stations. Adjust the area and re-plan, or tweak placement next.";
+        _fusionByN = fusionByN;
+        PlanSummary = $"{summary} Click a row to place that many.";
+
+        // Select the recommended row (highlights it) without re-triggering placement, then place.
+        _suppressRowSelect = true;
+        SelectedRow = CoverageRows.FirstOrDefault(r => r.Stations == recommendedN);
+        _suppressRowSelect = false;
+        PlaceStations(recommendedN);
     }
 
     private bool CanPlanStations() => HasArea;
+
+    /// <summary>Selecting a coverage-table row re-places the ring at that station count.</summary>
+    partial void OnSelectedRowChanged(CoverageRow? value)
+    {
+        if (_suppressRowSelect || value is null) return;
+        PlaceStations(value.Stations);
+    }
+
+    /// <summary>Place a perimeter ring of <paramref name="n"/> stations and update the baseline + map.</summary>
+    private void PlaceStations(int n)
+    {
+        var ring = _currentRing;
+        if (ring is null || n < 3) return;
+
+        var proj = new GeoProjection(ring.Average(p => p.Lat), ring.Average(p => p.Lon));
+        var polygon = ring.Select(p => proj.ToLocal(p.Lat, p.Lon)).ToList();
+        var stations = PerimeterLayout.Ring(polygon, n)
+            .Select(s => { var (lat, lon) = proj.ToGeo(s.X, s.Y); return (lat, lon, s.HeadingDeg); })
+            .ToList();
+
+        _mapService.ShowStations(stations);
+        _mapService.FinishEditing();   // leave edit mode so stray taps don't extend the polygon
+        _optimalFusionCoverage = _fusionByN.TryGetValue(n, out var f) ? f : 0;
+        HasPlan = stations.Count >= 3;
+        TweakSummary = HasPlan
+            ? $"Optimal {n}-station layout: {_optimalFusionCoverage:P0} Fusion coverage. Click “Move Stations”, then tap a station and its real-world spot to see the cost."
+            : string.Empty;
+        StatusMessage = $"Placed {n} stations. Pick another row to change the count, or move them to real-world spots.";
+    }
+
+    [RelayCommand(CanExecute = nameof(CanMoveStations))]
+    private void MoveStations()
+    {
+        _mapService.MoveStations();
+        StatusMessage = "Tap a station to pick it up, then tap its new location — coverage vs. optimal updates live.";
+    }
+
+    private bool CanMoveStations() => HasPlan;
+
+    private void OnStationsMoved(IReadOnlyList<(double Lat, double Lon)> stations)
+    {
+        var ring = _currentRing;
+        if (ring is null || stations.Count < 3)
+        {
+            TweakSummary = "Need ≥3 stations for a fix.";
+            return;
+        }
+
+        var current = EvaluateFusionCoverage(ring, stations);
+        var deltaPts = (_optimalFusionCoverage - current) * 100.0;
+        var verdict = deltaPts <= 0.5 ? "as good as optimal"
+            : deltaPts <= 5 ? $"{deltaPts:F0} pts below optimal"
+            : $"{deltaPts:F0} pts below optimal — consider a better spot";
+        TweakSummary = $"Your layout: {current:P0} Fusion coverage ({verdict}; optimal {_optimalFusionCoverage:P0}).";
+    }
 
     private void OnAreaChanged(IReadOnlyList<(double Lat, double Lon)>? ring)
     {
@@ -142,18 +226,43 @@ public partial class DeploymentPlannerViewModel : ObservableObject
 
     private void ClearPlan()
     {
+        HasPlan = false;
+        TweakSummary = string.Empty;
+        _optimalFusionCoverage = 0;
+        _fusionByN = new();
         if (CoverageRows.Count == 0 && PlanSummary.Length == 0) return;
-        CoverageRows.Clear();
+        _suppressRowSelect = true;
+        CoverageRows.Clear();      // clears SelectedRow → guarded handler won't re-place
+        _suppressRowSelect = false;
         PlanSummary = string.Empty;
         _mapService.ClearStations();
     }
 
+    /// <summary>Fusion coverage for an arbitrary set of station positions (headings re-aimed at the area centroid).</summary>
+    private static double EvaluateFusionCoverage(
+        IReadOnlyList<(double Lat, double Lon)> ring, IReadOnlyList<(double Lat, double Lon)> stationLatLon)
+    {
+        if (stationLatLon.Count < 3) return 0;
+        var proj = new GeoProjection(ring.Average(p => p.Lat), ring.Average(p => p.Lon));
+        var polygon = ring.Select(p => proj.ToLocal(p.Lat, p.Lon)).ToList();
+        double cx = polygon.Average(p => p.X), cy = polygon.Average(p => p.Y);
+
+        var stns = stationLatLon.Select(s =>
+        {
+            var (x, y) = proj.ToLocal(s.Lat, s.Lon);
+            var heading = (Math.Atan2(cx - x, cy - y) * 180.0 / Math.PI + 360) % 360;
+            return new ArrayStation(x, y, heading);
+        }).ToArray();
+
+        return AreaModel.EvaluatePolygon(stns, LocalizationMethod.Fusion, new LocalizationParams(), polygon, GridRes).Coverage;
+    }
+
     /// <summary>
-    /// Sweep station counts over the drawn polygon: place a perimeter ring, score CRLB
-    /// coverage per method, pick the smallest count meeting the Fusion goal, and return the
-    /// table + chosen stations (WGS84 + inward heading) + a summary. Pure / off the UI thread.
+    /// Sweep station counts over the drawn polygon: place a perimeter ring, score CRLB coverage
+    /// per method, and pick the smallest count meeting the Fusion goal. Returns the table, the
+    /// recommended count, the per-count Fusion coverage, and a summary. Pure / off the UI thread.
     /// </summary>
-    private static (List<CoverageRow> Rows, List<(double Lat, double Lon, double HeadingDeg)> Stations, string Summary)
+    private static (List<CoverageRow> Rows, int RecommendedN, Dictionary<int, double> FusionByN, string Summary)
         ComputePlan(IReadOnlyList<(double Lat, double Lon)> ring)
     {
         var proj = new GeoProjection(ring.Average(p => p.Lat), ring.Average(p => p.Lon));
@@ -161,6 +270,7 @@ public partial class DeploymentPlannerViewModel : ObservableObject
         var prm = new LocalizationParams();
 
         var rows = new List<CoverageRow>();
+        var fusionByN = new Dictionary<int, double>();
         int? bestFusionN = null;
         for (var n = MinStations; n <= MaxStations; n++)
         {
@@ -169,23 +279,17 @@ public partial class DeploymentPlannerViewModel : ObservableObject
             var b = AreaModel.EvaluatePolygon(stns, LocalizationMethod.Bearing, prm, polygon, GridRes);
             var f = AreaModel.EvaluatePolygon(stns, LocalizationMethod.Fusion, prm, polygon, GridRes);
             rows.Add(new CoverageRow(n, Cell(t), Cell(b), Cell(f)));
+            fusionByN[n] = f.Coverage;
             if (bestFusionN is null && f.Coverage >= CoverageGoal) bestFusionN = n;
         }
 
         var pickN = bestFusionN ?? MaxStations;
-        var stations = PerimeterLayout.Ring(polygon, pickN)
-            .Select(s =>
-            {
-                var (lat, lon) = proj.ToGeo(s.X, s.Y);
-                return (lat, lon, s.HeadingDeg);
-            })
-            .ToList();
 
         var summary = bestFusionN is null
             ? $"No layout up to {MaxStations} stations reaches {CoverageGoal:P0} (Fusion). Showing {pickN}."
             : $"Recommended: {pickN} stations — Fusion ≥ {CoverageGoal:P0} coverage.";
 
-        return (rows, stations, summary);
+        return (rows, pickN, fusionByN, summary);
     }
 
     private static string Cell(AreaResult r) => r.FixCount == 0 ? "—" : $"{r.Coverage:P0}";

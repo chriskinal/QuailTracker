@@ -26,6 +26,10 @@
                             Classes="PrimaryButton"
                             Command="{Binding PlanStationsCommand}"
                             IsEnabled="{Binding HasArea}" />
+                    <Button Content="Move Stations"
+                            Classes="SecondaryButton"
+                            Command="{Binding MoveStationsCommand}"
+                            IsEnabled="{Binding HasPlan}" />
                 </StackPanel>
 
                 <TextBlock Grid.Column="2"
@@ -46,7 +50,7 @@
             </Border>
 
             <!-- Coverage results -->
-            <Grid Grid.Column="1" RowDefinitions="Auto,Auto,*">
+            <Grid Grid.Column="1" RowDefinitions="Auto,Auto,*,Auto">
                 <TextBlock Grid.Row="0"
                            Text="Coverage by station count"
                            FontWeight="SemiBold"
@@ -61,6 +65,7 @@
 
                 <DataGrid Grid.Row="2"
                           ItemsSource="{Binding CoverageRows}"
+                          SelectedItem="{Binding SelectedRow}"
                           IsReadOnly="True"
                           GridLinesVisibility="Horizontal"
                           BorderBrush="#E0E0E0"
@@ -75,6 +80,15 @@
                         <DataGridTextColumn Header="Fusion" Binding="{Binding Fusion}" Width="*" />
                     </DataGrid.Columns>
                 </DataGrid>
+
+                <Border Grid.Row="3"
+                        Classes="CardPanel"
+                        Margin="0,8,0,0"
+                        IsVisible="{Binding TweakSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                    <TextBlock Text="{Binding TweakSummary}"
+                               TextWrapping="Wrap"
+                               FontWeight="SemiBold" />
+                </Border>
             </Grid>
         </Grid>
 
