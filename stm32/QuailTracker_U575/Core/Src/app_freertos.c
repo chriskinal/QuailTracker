@@ -215,6 +215,11 @@ static uint32_t lastSpiPollTick = 0;
 /* ---- Live audio streaming state ---- */
 static volatile uint8_t streamActive = 0;
 static volatile uint8_t streamChannel = 0;  /* 0=L, 1=R */
+
+/* Set by SPI_CMD_GET_ERRLOG; the next non-streaming frame carries the error log. */
+static volatile uint8_t errlogRequested = 0;
+static void errLogFillPayload(spi_errlog_payload_t *p);
+_Static_assert(SPI_ERRLOG_ROWS == ERR_CODE_COUNT, "SPI_ERRLOG_ROWS must match ERR_CODE_COUNT");
 static uint32_t streamTailL = 0;   /* independent ring tail for left channel */
 static uint32_t streamTailR = 0;   /* independent ring tail for right channel */
 static uint32_t streamLastSpiTick = 0;  /* auto-stop timeout */
@@ -2315,14 +2320,20 @@ static void StartBridgeTask(void *argument)
             uint16_t txFlags = (HAL_GetTick() < 8000U) ? SPI_FLAG_BOOT : 0;
             spi_frame_build(&spi_tx_frame, &cfg, &dev, &health, solar_st, txFlags);
 
-            /* Fill the reserved region: audio while streaming, else OTA status
-             * while an A/B update is in progress (mutually exclusive). */
+            /* Fill the reserved region: audio while streaming, else an error-log
+             * snapshot when the web UI asked for one (mutually exclusive — audio
+             * wins, the request just retries). */
             if (streamActive) {
                 spi_audio_payload_t *ap = (spi_audio_payload_t *)spi_tx_frame._reserved;
                 ap->channel = streamChannel;
                 ap->num_samples = decimate_8k(ap->samples, 214);
                 ap->audio_active = (ap->num_samples > 0) ? 1 : 0;
                 /* Recompute CRC since we modified the frame */
+                spi_tx_frame.header.crc16 = spi_frame_crc(&spi_tx_frame);
+            } else if (errlogRequested) {
+                errlogRequested = 0;
+                errLogFillPayload((spi_errlog_payload_t *)spi_tx_frame._reserved);
+                spi_tx_frame.header.flags |= SPI_FLAG_ERRLOG;
                 spi_tx_frame.header.crc16 = spi_frame_crc(&spi_tx_frame);
             }
 
@@ -2406,6 +2417,9 @@ static void StartBridgeTask(void *argument)
                     healthReset();
                     printf("SPI cmd: health_reset (stats zeroed)\r\n");
                     diagLog("Health stats reset");
+                    break;
+                case SPI_CMD_GET_ERRLOG:
+                    errlogRequested = 1;   /* next non-streaming frame carries it */
                     break;
                 case SPI_CMD_REC_TOGGLE: {
                     extern volatile uint8_t sdFormatState;
@@ -2910,6 +2924,31 @@ void errLogDump(void)
         f_close(&f);
     }
     osMutexRelease(fileMtxHandle);
+}
+
+/* Pack the error log into the compact SPI payload for the web UI. Snapshots the
+ * per-code table and the most recent SPI_ERRLOG_RING ring events. */
+static void errLogFillPayload(spi_errlog_payload_t *p)
+{
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    p->totalEvents = errLogData.totalEvents;
+    p->ringHead    = errLogData.ringHead;
+    for (int i = 0; i < SPI_ERRLOG_ROWS; i++) {
+        p->rows[i].count    = errLogData.rows[i].count;
+        p->rows[i].firstUtc = errLogData.rows[i].firstUtc;
+        p->rows[i].lastUtc  = errLogData.rows[i].lastUtc;
+        p->rows[i].lastArg  = errLogData.rows[i].lastArg;
+    }
+    /* Most recent events, newest first: walk back from ringHead. */
+    for (int i = 0; i < SPI_ERRLOG_RING; i++) {
+        uint32_t idx = (errLogData.ringHead + ERR_RING_LEN - 1u - (uint32_t)i) % ERR_RING_LEN;
+        p->ring[i].code = errLogData.ring[idx].code;
+        p->ring[i].seq  = errLogData.ring[idx].seq;
+        p->ring[i].utc  = errLogData.ring[idx].utc;
+        p->ring[i].arg  = errLogData.ring[idx].arg;
+    }
+    __set_PRIMASK(primask);
 }
 
 /* Update battery/temp min/max — called from SHT30 periodic read */

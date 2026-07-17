@@ -37,7 +37,7 @@
 #include "spi_protocol.h"
 
 #define TAG "BRIDGE"
-#define ESP_FW_VERSION "0.5.16"
+#define ESP_FW_VERSION "0.5.17"
 
 static bool wifi_started = false;
 
@@ -278,6 +278,36 @@ static void ws_broadcast(const char *json)
     }
 }
 
+/* Build a compact JSON of the STM error-log snapshot and push it to the web.
+ * rows[] are index-aligned to the STM err_code_t enum; the web maps index→name.
+ * Format: {"errlog":{"total":N,"rows":[[count,first,last,arg],...],
+ *                     "ring":[[code,utc,arg],...]}}  (newest ring event first) */
+static void broadcast_errlog(const spi_errlog_payload_t *p)
+{
+    static char buf[2048];
+    int n = snprintf(buf, sizeof(buf), "{\"errlog\":{\"total\":%lu,\"rows\":[",
+                     (unsigned long)p->totalEvents);
+    for (int i = 0; i < SPI_ERRLOG_ROWS; i++) {
+        n += snprintf(buf + n, sizeof(buf) - n, "%s[%lu,%lu,%lu,%lu]",
+                      i ? "," : "",
+                      (unsigned long)p->rows[i].count,
+                      (unsigned long)p->rows[i].firstUtc,
+                      (unsigned long)p->rows[i].lastUtc,
+                      (unsigned long)p->rows[i].lastArg);
+    }
+    n += snprintf(buf + n, sizeof(buf) - n, "],\"ring\":[");
+    /* Only emit as many events as actually exist (ring may be partly empty). */
+    int ringN = (p->totalEvents < SPI_ERRLOG_RING) ? (int)p->totalEvents : SPI_ERRLOG_RING;
+    for (int i = 0; i < ringN; i++) {
+        n += snprintf(buf + n, sizeof(buf) - n, "%s[%u,%lu,%lu]",
+                      i ? "," : "",
+                      p->ring[i].code, (unsigned long)p->ring[i].utc,
+                      (unsigned long)p->ring[i].arg);
+    }
+    snprintf(buf + n, sizeof(buf) - n, "]}}");
+    ws_broadcast(buf);
+}
+
 /* ── Web Page (generated from src/web/index.html via xxd) ──────── */
 
 #include "web_data.h"
@@ -408,6 +438,7 @@ static void ws_process_command(const char *json)
     if (strstr(json, "dev_mode"))       { cmd_enqueue(SPI_CMD_DEV_MODE, NULL, 0); return; }
     if (strstr(json, "model_reload"))   { cmd_enqueue(SPI_CMD_MODEL_RELOAD, NULL, 0); return; }
     if (strstr(json, "health_reset"))   { cmd_enqueue(SPI_CMD_HEALTH_RESET, NULL, 0); return; }
+    if (strstr(json, "get_errlog"))     { cmd_enqueue(SPI_CMD_GET_ERRLOG, NULL, 0); return; }
 
     /* TZ refresh from browser. Heartbeat-style — updates RAM only, doesn't
      * bump cfg_seq, doesn't persist. STM32 picks up via SPI_CMD_SET_TZ; we
@@ -1492,6 +1523,11 @@ static void spi_task(void *arg)
                 if (rx->header.flags & SPI_FLAG_STATE_VALID) {
                     memcpy(&local_state, &rx->state, sizeof(spi_state_t));
                     new_spi_data = true;
+                }
+
+                /* Error-log snapshot (reply to SPI_CMD_GET_ERRLOG) → push to web. */
+                if (rx->header.flags & SPI_FLAG_ERRLOG) {
+                    broadcast_errlog((const spi_errlog_payload_t *)rx->_reserved);
                 }
 
                 /* Extract audio samples from reserved region */

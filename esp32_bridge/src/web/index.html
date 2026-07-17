@@ -164,6 +164,31 @@
             border-top: 1px solid #333;
         }
         .status-bar .dev-name { font-size: 12px; color: #aaa; }
+
+        /* Full-screen error-log overlay */
+        .errlog-overlay {
+            display: none; position: fixed; inset: 0; z-index: 1000;
+            background: #14181c; flex-direction: column;
+        }
+        .errlog-overlay.open { display: flex; }
+        .errlog-head {
+            display: flex; align-items: center; gap: 10px;
+            padding: 12px 16px; background: #1a1a1a; border-bottom: 1px solid #333;
+        }
+        .errlog-title { font-size: 18px; font-weight: 600; }
+        .errlog-total { color: #aaa; font-size: 13px; margin-right: auto; }
+        .errlog-body { flex: 1; overflow-y: auto; padding: 12px 16px; }
+        .errlog-sub { margin: 18px 0 6px; color: #9ab; font-size: 13px; }
+        .errlog-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .errlog-table th, .errlog-table td {
+            text-align: left; padding: 6px 8px; border-bottom: 1px solid #2a2f34;
+            white-space: nowrap;
+        }
+        .errlog-table th { color: #9ab; font-weight: 600; }
+        .errlog-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+        .errlog-table tr.zero td { color: #667; }
+        .errlog-table tr.hot td { color: #ffb4b4; }
+        .errlog-empty { color: #667; padding: 20px 8px; }
     </style>
 </head>
 <body>
@@ -268,11 +293,33 @@
                     <span class="hlth-lbl">Sys</span>
                     <span id="hlthSys">--</span>
                 </div>
-                <div class="row" style="margin-top:8px">
+                <div class="row" style="margin-top:8px; display:flex; gap:8px">
+                    <button class="btn" style="flex:1" onclick="openErrLog()">Error Log</button>
                     <button class="btn btn-red" style="flex:1"
                             onclick="if(confirm('Zero all health stats (boots, files, battery and temperature min/max)? Do this right before a deployment so the numbers have a known baseline.'))sendCmd('health_reset')">
                         Reset Stats
                     </button>
+                </div>
+            </div>
+
+            <!-- Full-screen error-log overlay -->
+            <div id="errLogOverlay" class="errlog-overlay">
+                <div class="errlog-head">
+                    <span class="errlog-title">Error Log</span>
+                    <span id="errLogTotal" class="errlog-total">--</span>
+                    <button class="btn" onclick="sendCmd('get_errlog')">Refresh</button>
+                    <button class="btn btn-red" onclick="closeErrLog()">Close</button>
+                </div>
+                <div class="errlog-body">
+                    <table class="errlog-table" id="errLogTable">
+                        <thead><tr><th>Error</th><th>Count</th><th>First</th><th>Last</th><th>Detail</th></tr></thead>
+                        <tbody id="errLogRows"></tbody>
+                    </table>
+                    <div class="errlog-sub">Recent events</div>
+                    <table class="errlog-table" id="errLogRingTable">
+                        <thead><tr><th>#</th><th>Error</th><th>Time</th><th>Detail</th></tr></thead>
+                        <tbody id="errLogRing"></tbody>
+                    </table>
                 </div>
             </div>
 
@@ -686,6 +733,54 @@
 
         function sendCmd(cmd) {
             if (ws && ws.readyState === 1) ws.send(JSON.stringify({ cmd: cmd }));
+        }
+
+        /* Error-log code names — index-aligned to the STM err_code_t enum. */
+        var errName = ['SHT30 read','I2C recover','ADC read','ADC recover',
+            'SPI2 txn','SPI2 recover','SD write retry','SD write fail',
+            'SD read retry','SD read fail','SD CRC','Rec restart','Rec abandon',
+            'GPS fix loss','Flash write'];
+
+        function openErrLog() {
+            document.getElementById('errLogOverlay').classList.add('open');
+            sendCmd('get_errlog');
+        }
+        function closeErrLog() {
+            document.getElementById('errLogOverlay').classList.remove('open');
+        }
+        function efmtT(u) {
+            if (!u) return '—';
+            return new Date(u * 1000).toISOString().slice(5, 16).replace('T', ' ') + 'Z';
+        }
+        function renderErrLog(e) {
+            document.getElementById('errLogTotal').textContent = e.total + ' events since reset';
+            var tb = document.getElementById('errLogRows'); tb.innerHTML = '';
+            (e.rows || []).forEach(function (r, i) {
+                var count = r[0];
+                var nm = errName[i] || ('code ' + i);
+                var tr = document.createElement('tr');
+                tr.className = count === 0 ? 'zero'
+                    : (/fail|abandon/i.test(nm) ? 'hot' : '');
+                tr.innerHTML = '<td>' + nm + '</td>' +
+                    '<td class="num">' + count + '</td>' +
+                    '<td>' + efmtT(r[1]) + '</td><td>' + efmtT(r[2]) + '</td>' +
+                    '<td class="num">' + (count ? r[3] : '') + '</td>';
+                tb.appendChild(tr);
+            });
+            var rb = document.getElementById('errLogRing'); rb.innerHTML = '';
+            var ring = e.ring || [];
+            if (!ring.length) {
+                rb.innerHTML = '<tr><td colspan="4" class="errlog-empty">No events recorded.</td></tr>';
+            } else {
+                ring.forEach(function (ev, i) {
+                    var tr = document.createElement('tr');
+                    tr.innerHTML = '<td>' + (i + 1) + '</td>' +
+                        '<td>' + (errName[ev[0]] || ('code ' + ev[0])) + '</td>' +
+                        '<td>' + efmtT(ev[1]) + '</td>' +
+                        '<td class="num">' + ev[2] + '</td>';
+                    rb.appendChild(tr);
+                });
+            }
         }
 
         function saveDetect() {
@@ -1157,6 +1252,9 @@
                 _lastMsg = Date.now();
               try {
                 var d = JSON.parse(ev.data);
+
+                /* Error-log snapshot (reply to get_errlog) */
+                if (d.errlog) { renderErrLog(d.errlog); return; }
 
                 /* STM32 watchdog: show the service banner when soft resets gave up;
                  * clear it as soon as live STM telemetry (e.g. battery) resumes. */

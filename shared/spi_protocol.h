@@ -35,6 +35,7 @@
 #define SPI_FLAG_CMD_PENDING   0x0002  /* command slot contains a command */
 #define SPI_FLAG_STATE_VALID   0x0004  /* state section is populated */
 #define SPI_FLAG_BOOT          0x0008  /* sender just booted */
+#define SPI_FLAG_ERRLOG        0x0010  /* _reserved carries spi_errlog_payload_t (STM→ESP) */
 
 /* ── Frame header (16 bytes) ─────────────────────────────────── */
 
@@ -73,6 +74,7 @@ typedef enum {
      *  updated only via the ESP ROM-bootloader flash. Not reused: an old ESP
      *  could still emit them.) */
     SPI_CMD_HEALTH_RESET   = 20,  /* zero all health stats, including bootCount */
+    SPI_CMD_GET_ERRLOG     = 21,  /* request the error table — STM replies with SPI_FLAG_ERRLOG */
 } spi_cmd_type_t;
 
 /* Payload for SPI_CMD_SET_TZ. Sent by ESP32 (browser-driven) so the device
@@ -299,6 +301,22 @@ typedef struct __attribute__((packed)) {
 } spi_audio_payload_t;
 
 _Static_assert(sizeof(spi_audio_payload_t) == 432, "spi_audio_payload_t must be 432 bytes");
+
+/* ── Error-log snapshot payload (shares _reserved; STM→ESP on request) ──
+ * Sent in place of audio when the ESP asks via SPI_CMD_GET_ERRLOG and the frame
+ * header has SPI_FLAG_ERRLOG set. rows[] mirrors err_row_t, ring[] err_event_t.
+ * SPI_ERRLOG_ROWS must equal ERR_CODE_COUNT on the STM (asserted there). */
+#define SPI_ERRLOG_ROWS  15
+#define SPI_ERRLOG_RING  14
+
+typedef struct __attribute__((packed)) {
+    uint32_t totalEvents;
+    uint32_t ringHead;
+    struct { uint32_t count, firstUtc, lastUtc, lastArg; } rows[SPI_ERRLOG_ROWS];  /* 240 */
+    struct { uint16_t code, seq; uint32_t utc, arg; }      ring[SPI_ERRLOG_RING];  /* 168 */
+} spi_errlog_payload_t;  /* 8 + 240 + 168 = 416 */
+
+_Static_assert(sizeof(spi_errlog_payload_t) <= 432, "errlog payload must fit in _reserved");
 
 /* ── Complete SPI frame (1024 bytes) ─────────────────────────── */
 
