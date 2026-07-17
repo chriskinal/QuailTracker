@@ -2331,7 +2331,12 @@ static void StartBridgeTask(void *argument)
                 /* Recompute CRC since we modified the frame */
                 spi_tx_frame.header.crc16 = spi_frame_crc(&spi_tx_frame);
             } else if (errlogRequested) {
-                errlogRequested = 0;
+                /* Send it on several consecutive frames (countdown), not just one:
+                 * a single frame dropped to a CRC mismatch — more likely exactly
+                 * when the SD/bus is misbehaving, i.e. when you most want the log —
+                 * would otherwise leave the web overlay blank until a manual retry.
+                 * The web render is idempotent, so repeats are harmless. */
+                errlogRequested--;
                 errLogFillPayload((spi_errlog_payload_t *)spi_tx_frame._reserved);
                 spi_tx_frame.header.flags |= SPI_FLAG_ERRLOG;
                 spi_tx_frame.header.crc16 = spi_frame_crc(&spi_tx_frame);
@@ -2419,7 +2424,7 @@ static void StartBridgeTask(void *argument)
                     diagLog("Health stats reset");
                     break;
                 case SPI_CMD_GET_ERRLOG:
-                    errlogRequested = 1;   /* next non-streaming frame carries it */
+                    errlogRequested = 6;   /* carry it on the next ~6 frames (drop-tolerant) */
                     break;
                 case SPI_CMD_REC_TOGGLE: {
                     extern volatile uint8_t sdFormatState;
