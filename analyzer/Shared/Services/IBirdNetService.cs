@@ -51,6 +51,13 @@ public interface IBirdNetService : IDisposable
     string? ModelPath { get; }
 
     /// <summary>
+    /// Files skipped in the last AnalyzeBatchAsync because they were completely
+    /// undecodable. Partially-corrupt files are analyzed up to their damaged
+    /// point and are not listed here.
+    /// </summary>
+    IReadOnlyList<string> LastRunSkippedFiles { get; }
+
+    /// <summary>
     /// Loads the BirdNet ONNX model from the specified path.
     /// Also searches for a BirdNET labels file (en_us.txt) near the model.
     /// </summary>
