@@ -356,7 +356,11 @@ osThreadId_t audioTaskHandle;
 const osThreadAttr_t audioTask_attributes = {
   .name = "audioTask",
   .priority = (osPriority_t) osPriorityAboveNormal,
-  .stack_size = 2048 * 4
+  /* 16 KB: the chunk-rotation path (chunkRecording → startRecording → f_expand /
+   * f_open → FatFS directory walk with the 512 B on-stack LFN buffer) runs on top
+   * of the audio DSP here. 8 KB overflowed at each rotation once f_expand was
+   * added (0.10.22) — the 0.10.17 field build had no f_expand and never faulted. */
+  .stack_size = 4096 * 4
 };
 /* Definitions for cliTask */
 osThreadId_t cliTaskHandle;
@@ -1307,30 +1311,35 @@ static void rtt_poll_puts(const char *s)
     SEGGER_RTT_Write(0, s, strlen(s));
 }
 
+/* Stash a stack-overflow/assert marker (survives reset), then self-heal reset
+ * instead of spinning until the ESP watchdog fires. checkResetCause() reports it
+ * on the next boot. */
+static __attribute__((noreturn)) void crash_stash_and_reset(void)
+{
+    TAMP->BKP0R = CRASH_MAGIC_STACKOF;
+    GPIOD->BSRR = GPIO_PIN_13;                         /* LED on */
+    for (volatile uint32_t i = 0; i < 40000000UL; i++) {}  /* ~1 s */
+    NVIC_SystemReset();
+    for (;;) {}
+}
+
 void vAssertCalled(const char *file, int line)
 {
     taskDISABLE_INTERRUPTS();
     char buf[80];
     snprintf(buf, sizeof(buf), "\r\n!!! ASSERT: %s:%d\r\n", file, line);
     rtt_poll_puts(buf);
-    /* Blink status LED (PD13) to signal fault */
-    for (;;) {
-        HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
-        for (volatile int i = 0; i < 500000; i++) {}
-    }
+    crash_stash_and_reset();
 }
 
 void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
 {
+    (void)xTask;
     taskDISABLE_INTERRUPTS();
     char buf[80];
     snprintf(buf, sizeof(buf), "\r\n!!! STACK OVERFLOW: %s\r\n", pcTaskName);
     rtt_poll_puts(buf);
-    /* Blink status LED (PD13) to signal fault */
-    for (;;) {
-        HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
-        for (volatile int i = 0; i < 500000; i++) {}
-    }
+    crash_stash_and_reset();
 }
 
 /* ========================= Inference Task ========================= */
@@ -2953,7 +2962,7 @@ void checkResetCause(void)
     uint32_t csr = RCC->CSR;   /* reset flags, sticky until RMVF */
     char m[96];
 
-    if (TAMP->BKP0R == 0xFA017C0DUL) {          /* hard fault last run */
+    if (TAMP->BKP0R == CRASH_MAGIC_FAULT) {     /* hard fault last run */
         uint32_t pc = TAMP->BKP2R, cfsr = TAMP->BKP1R, lr = TAMP->BKP4R;
         TAMP->BKP0R = 0;
         errLog(ERR_HARDFAULT, pc);
@@ -2961,6 +2970,11 @@ void checkResetCause(void)
                  (unsigned long)pc, (unsigned long)cfsr, (unsigned long)lr);
         diagLog(m);
         printf("RESET: %s\r\n", m);
+    } else if (TAMP->BKP0R == CRASH_MAGIC_STACKOF) {  /* stack overflow / assert */
+        TAMP->BKP0R = 0;
+        errLog(ERR_HARDFAULT, 0x57AC0F10UL);    /* recognizable sentinel arg */
+        diagLog("STACK OVERFLOW / ASSERT (self-reset)");
+        printf("RESET: stack overflow / assert\r\n");
     } else if (!(csr & RCC_CSR_BORRSTF)) {      /* warm reset, not a power-on */
         errLog(ERR_RESET, csr);
         snprintf(m, sizeof(m), "RESET (warm) RCC_CSR=0x%08lX", (unsigned long)csr);

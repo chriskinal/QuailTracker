@@ -55,6 +55,10 @@ void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
 #include "device_state.h"
+/* Crash markers stashed in TAMP->BKP0R before a self-reset, read by
+ * checkResetCause() on the next boot. */
+#define CRASH_MAGIC_FAULT    0xFA017C0DUL   /* hard fault (BKP1..4 = CFSR/PC/HFSR/LR) */
+#define CRASH_MAGIC_STACKOF  0x57AC0F10UL   /* FreeRTOS stack overflow / assert */
 wake_source_t enterStop2(uint32_t seconds);
 uint8_t sht30Read(void);   /* 1 = success; on 0, dev.env temp/hum are NOT valid */
 void I2C_Recover(void);
@@ -76,7 +80,7 @@ void rtcGetDate(uint8_t *day, uint8_t *month, uint16_t *year);
 #define SD_CD_GPIO_Port GPIOC
 
 /* USER CODE BEGIN Private defines */
-#define FW_VERSION "0.10.30"
+#define FW_VERSION "0.10.31"
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

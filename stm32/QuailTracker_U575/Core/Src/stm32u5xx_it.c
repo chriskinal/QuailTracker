@@ -88,7 +88,7 @@ static __attribute__((used, noreturn)) void hf_dump_and_spin(const char *tag, ui
     /* Stash the fault in TAMP backup registers (survive reset) so the next boot
      * can log it to the error log — a field unit has no J-Link to see the RTT
      * dump above. BKP0R magic marks "a fault happened". DBP was enabled at boot. */
-    TAMP->BKP0R = 0xFA017C0DUL;  /* "FAULT COD" magic */
+    TAMP->BKP0R = CRASH_MAGIC_FAULT;
     TAMP->BKP1R = cfsr;
     TAMP->BKP2R = frame[6];      /* faulting PC */
     TAMP->BKP3R = hfsr;
