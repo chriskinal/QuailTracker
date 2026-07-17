@@ -179,6 +179,10 @@ static uint32_t recPpsUtcTime = 0;  /* UTC of the edge BEFORE the anchor edge (a
 static uint32_t recPpsUtcDate = 0;
 static uint64_t recPpsAnchorSample = 0; /* recording-relative sample of the anchor PPS edge */
 
+/* Set when the current recording's file was pre-allocated via f_expand — the
+ * unwritten tail must be truncated off on close. See startRecording. */
+static uint8_t recPreallocated = 0;
+
 /* PPS-sample correlation for TDOA */
 static uint64_t recStartAbsSample = 0;   /* absolute sample when recording started */
 static uint64_t recPpsFirstSample = 0;   /* recording-relative sample at first PPS */
@@ -895,6 +899,35 @@ void startRecording(void)
         return;
     }
 
+    /* Pre-allocate the whole chunk as one contiguous block so the FAT chain and
+     * FSInfo are written ONCE here, not grown cluster-by-cluster on every write.
+     * That removes the per-second FAT/FSInfo rewrites that hammer a fixed region
+     * of the card — the wear pattern that likely killed the marginal field cards
+     * (see the 30-day field test). Only meaningful for time-bounded chunks; a
+     * chunkMinutes==0 continuous recording has no size to pre-allocate.
+     *
+     * Size = the WORST-CASE (uncompressed PCM) length of one chunk. FLAC comes
+     * in well under that and the unused tail is truncated on close; if input is
+     * pathologically incompressible and overruns, f_write just extends normally.
+     * f_expand needs a contiguous free run — on a fragmented/near-full card it
+     * returns FR_DENIED, and we fall back to ordinary allocation. Must run before
+     * any write (f_expand requires objsize==0). */
+    recPreallocated = 0;
+    extern uint8_t configGetChunkMinutes(void);
+    uint8_t chunkMin = configGetChunkMinutes();
+    if (chunkMin > 0) {
+        FSIZE_t expandBytes = (FSIZE_t)chunkMin * 60u
+                            * (FSIZE_t)(SAMPLE_RATE * 6)   /* stereo 24-bit PCM */
+                            + 64u * 1024u;                 /* header/seektable/metadata slack */
+        if (f_expand(&wavFile, expandBytes, 1) == FR_OK) {
+            recPreallocated = 1;
+        } else {
+            /* Non-fatal: record without pre-alloc (older churn behaviour). */
+            printf("f_expand skipped (no contiguous %lu KB) — normal alloc\r\n",
+                   (unsigned long)(expandBytes / 1024));
+        }
+    }
+
     /* Write placeholder header (will be finalized on stop) */
     if (dev.rec.format == REC_FMT_WAV) {
         WAV_WriteHeader(&wavFile, SAMPLE_RATE, 0);
@@ -954,6 +987,10 @@ void stopRecording(void)
         /* Append GUANO metadata chunk after audio data */
         writeGuanoChunk(&wavFile, totalDataBytes);
 
+        /* fptr is now at true EOF. Release the pre-allocated tail (f_expand left
+         * the file at full chunk size) before the f_size-based RIFF calc below. */
+        if (recPreallocated) f_truncate(&wavFile);
+
         /* Rewrite WAV header with actual audio data size */
         f_lseek(&wavFile, 0);
         WAV_WriteHeader(&wavFile, SAMPLE_RATE, totalDataBytes);
@@ -978,6 +1015,10 @@ void stopRecording(void)
             totalDataBytes += bw;
             flac_enc_notify_write(&flacEncoder, bw);
         }
+
+        /* fptr is now at end of the last audio frame = true EOF. Release the
+         * pre-allocated tail here, before seeking back to patch the header. */
+        if (recPreallocated) f_truncate(&wavFile);
 
         /* Rewrite STREAMINFO + SEEKTABLE + VORBIS_COMMENT at file offset 0 */
         f_lseek(&wavFile, 0);

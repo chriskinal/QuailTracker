@@ -269,6 +269,19 @@ static int32_t  hpfPrevInR  = 0;
 static int32_t  hpfPrevOutR = 0;
 static int32_t  lpfPrevOutR = 0;
 
+/* Recording file-sync cadence. f_sync flushes the dirty dirent (and, without
+ * f_expand, FAT/FSInfo) to the card; doing it every ~1 s rewrote a fixed metadata
+ * region ~2.6M times over the 30-day field test — the wear that likely killed the
+ * marginal cards. With f_expand pre-allocation the FAT/FSInfo churn is already
+ * gone; this interval throttles the remaining dirent rewrites. TRADEOFF: an
+ * unclean power loss forfeits up to this many ms of audio (full sectors are
+ * written continuously by f_write regardless; only the trailing partial sector +
+ * metadata wait for the sync). Clean stops (chunk rotation, window end, manual)
+ * always finalize fully. Tune here. */
+#define REC_SYNC_INTERVAL_MS  15000u
+static uint32_t recLastSyncTick = 0;
+static uint8_t  recSyncArmed    = 0;   /* 0 until the first write of a recording */
+
 /* Compute Q16 HPF alpha from cutoff frequency: alpha = e^(-2*pi*fc/fs) * 65536 */
 static uint32_t computeHpfAlpha(uint16_t fc) {
     if (fc == 0) return 0;
@@ -498,6 +511,9 @@ void StartAudioTask(void *argument)
      * The ISR copies DMA data into the ring immediately on each half-complete,
      * so no data is lost even if this task is blocked on f_sync for 100ms+. */
     if (isRecording) {
+      /* Arm the sync timer on the first pass of a new recording so the first
+       * flush lands one full interval in, not immediately after the open sync. */
+      if (!recSyncArmed) { recLastSyncTick = HAL_GetTick(); recSyncArmed = 1; }
       /* Wait for both L and R ring buffers to have data */
       while ((ringHead - ringTail) >= (AUDIO_BUF_SIZE / 2) &&
              (ringHeadR - ringTailR) >= (AUDIO_BUF_SIZE / 2)) {
@@ -706,9 +722,10 @@ void StartAudioTask(void *argument)
           }
           totalDataBytes += bw;
 
-          /* Sync every ~1 second (stereo: 2ch × 3 bytes × 48000 = 288000 bytes/sec) */
-          if ((totalDataBytes % (SAMPLE_RATE * 6)) < (uint32_t)(blockLen * 6)) {
+          /* Sync on a wall-clock interval (see REC_SYNC_INTERVAL_MS). */
+          if ((HAL_GetTick() - recLastSyncTick) >= REC_SYNC_INTERVAL_MS) {
             f_sync(&wavFile);
+            recLastSyncTick = HAL_GetTick();
           }
           osMutexRelease(fileMtxHandle);
         } else {
@@ -726,9 +743,10 @@ void StartAudioTask(void *argument)
             totalDataBytes += bw;
             flac_enc_notify_write(&flacEncoder, bw);
 
-            /* Sync every ~8 frames (~680ms) */
-            if ((flacEncoder.frameNumber % 8) == 0) {
+            /* Sync on a wall-clock interval (see REC_SYNC_INTERVAL_MS). */
+            if ((HAL_GetTick() - recLastSyncTick) >= REC_SYNC_INTERVAL_MS) {
               f_sync(&wavFile);
+              recLastSyncTick = HAL_GetTick();
             }
             osMutexRelease(fileMtxHandle);
           }
@@ -747,6 +765,7 @@ skip_write:
         (void)0; /* label requires a statement */
       }
     } else {
+      recSyncArmed = 0;   /* re-arm the sync timer for the next recording */
       /* Not recording -drain ring and track peak for live audio monitor.
        * Apply HPF to remove DC offset / LF noise (same as recording path)
        * using separate state so recording init doesn't conflict. */
@@ -1947,6 +1966,7 @@ float configGetSurveyLat(void) { return cfg.surveyLat; }
 float configGetSurveyLon(void) { return cfg.surveyLon; }
 float configGetSurveyAlt(void) { return cfg.surveyAlt; }
 uint16_t configGetMicHeading(void) { return cfg.micHeading; }
+uint8_t configGetChunkMinutes(void) { return cfg.chunkMinutes; }
 
 /* ========================= Survey-In ========================= */
 
