@@ -306,8 +306,8 @@ _Static_assert(sizeof(spi_audio_payload_t) == 432, "spi_audio_payload_t must be 
  * Sent in place of audio when the ESP asks via SPI_CMD_GET_ERRLOG and the frame
  * header has SPI_FLAG_ERRLOG set. rows[] mirrors err_row_t, ring[] err_event_t.
  * SPI_ERRLOG_ROWS must equal ERR_CODE_COUNT on the STM (asserted there). */
-#define SPI_ERRLOG_ROWS  15
-#define SPI_ERRLOG_RING  14
+#define SPI_ERRLOG_ROWS  17    /* == ERR_CODE_COUNT (asserted on STM) */
+#define SPI_ERRLOG_RING  12    /* 8 + 17*16 + 12*12 = 424 B, fits _reserved (432) */
 
 typedef struct __attribute__((packed)) {
     uint32_t totalEvents;

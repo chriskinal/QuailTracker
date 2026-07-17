@@ -146,6 +146,9 @@ typedef enum {
     ERR_REC_ABANDON,      /* recording paused: write-error budget spent */
     ERR_GPS_FIX_LOSS,     /* GPS lost a valid fix                       */
     ERR_FLASH_WRITE,      /* config/health flash write failed           */
+    ERR_HARDFAULT,        /* hard fault (arg = faulting PC)             */
+    ERR_RESET,            /* unexpected reset (arg = RCC reset flags)   */
+    /* Append new codes ABOVE — indices are persisted in flash, don't reorder. */
     ERR_CODE_COUNT
 } err_code_t;
 

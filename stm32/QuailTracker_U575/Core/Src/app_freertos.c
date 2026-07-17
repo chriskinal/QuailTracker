@@ -750,11 +750,13 @@ void StartAudioTask(void *argument)
           totalDataBytes += bw;
 
           /* Sync on a wall-clock interval (see REC_SYNC_INTERVAL_MS). */
-          if ((HAL_GetTick() - recLastSyncTick) >= REC_SYNC_INTERVAL_MS) {
+          if (isRecording &&
+              (HAL_GetTick() - recLastSyncTick) >= REC_SYNC_INTERVAL_MS) {
             f_sync(&wavFile);
             recLastSyncTick = HAL_GetTick();
           }
           osMutexRelease(fileMtxHandle);
+          if (!isRecording) break;   /* write failed → stop draining into a closed file */
         } else {
           /* FLAC encode -accumulates 8 calls into one 4096-sample block */
           uint32_t encoded = flac_enc_process_stereo(&flacEncoder, pcmBuffer, pcmBufferR, blockLen);
@@ -772,11 +774,13 @@ void StartAudioTask(void *argument)
             flac_enc_notify_write(&flacEncoder, bw);
 
             /* Sync on a wall-clock interval (see REC_SYNC_INTERVAL_MS). */
-            if ((HAL_GetTick() - recLastSyncTick) >= REC_SYNC_INTERVAL_MS) {
+            if (isRecording &&
+                (HAL_GetTick() - recLastSyncTick) >= REC_SYNC_INTERVAL_MS) {
               f_sync(&wavFile);
               recLastSyncTick = HAL_GetTick();
             }
             osMutexRelease(fileMtxHandle);
+            if (!isRecording) break;   /* write failed → stop draining into a closed file */
           }
         }
         /* Step 7: Check chunk duration — split file if elapsed */
@@ -2256,8 +2260,9 @@ static void StartBridgeTask(void *argument)
                  FW_VERSION, (unsigned long)health.bootCount,
                  (unsigned long)battReadMv());
         diagLog(msg);
-        /* Snapshot accumulated errors (from flash) into diag.log each boot — a
-         * single write, and a field-readable history when the SD is healthy. */
+        /* Record why the last run ended (fault / stall-reset) into the error log
+         * + diag, then snapshot the accumulated errors to diag.log. */
+        checkResetCause();
         errLogDump();
     }
 
@@ -2866,7 +2871,7 @@ static const char *const errName[ERR_CODE_COUNT] = {
     "SHT30_READ", "I2C_RECOVER", "ADC_READ", "ADC_RECOVER",
     "SPI2_TXN", "SPI2_RECOVER", "SD_WRITE_RETRY", "SD_WRITE_FAIL",
     "SD_READ_RETRY", "SD_READ_FAIL", "SD_CRC", "REC_RESTART",
-    "REC_ABANDON", "GPS_FIX_LOSS", "FLASH_WRITE",
+    "REC_ABANDON", "GPS_FIX_LOSS", "FLASH_WRITE", "HARDFAULT", "RESET",
 };
 
 static uint32_t errLogComputeCrc(const err_log_t *e)
@@ -2936,6 +2941,34 @@ void errLogDump(void)
         f_close(&f);
     }
     osMutexRelease(fileMtxHandle);
+}
+
+/* At boot, record why the LAST run ended — into the error log (viewable over
+ * WiFi) and diag.log. A hard fault stashed its registers in TAMP backup regs
+ * before self-resetting; other warm resets (ESP-watchdog NRST after a stall,
+ * software reboot) are inferred from RCC_CSR. A clean power-on (BOR) is skipped.
+ * Call once early, after healthLoad (so errLogData is live). */
+void checkResetCause(void)
+{
+    uint32_t csr = RCC->CSR;   /* reset flags, sticky until RMVF */
+    char m[96];
+
+    if (TAMP->BKP0R == 0xFA017C0DUL) {          /* hard fault last run */
+        uint32_t pc = TAMP->BKP2R, cfsr = TAMP->BKP1R, lr = TAMP->BKP4R;
+        TAMP->BKP0R = 0;
+        errLog(ERR_HARDFAULT, pc);
+        snprintf(m, sizeof(m), "HARDFAULT PC=0x%08lX CFSR=0x%08lX LR=0x%08lX",
+                 (unsigned long)pc, (unsigned long)cfsr, (unsigned long)lr);
+        diagLog(m);
+        printf("RESET: %s\r\n", m);
+    } else if (!(csr & RCC_CSR_BORRSTF)) {      /* warm reset, not a power-on */
+        errLog(ERR_RESET, csr);
+        snprintf(m, sizeof(m), "RESET (warm) RCC_CSR=0x%08lX", (unsigned long)csr);
+        diagLog(m);
+        printf("RESET: %s\r\n", m);
+    }
+
+    RCC->CSR |= RCC_CSR_RMVF;   /* clear so next boot's flags are fresh */
 }
 
 /* Pack the error log into the compact SPI payload for the web UI. Snapshots the
