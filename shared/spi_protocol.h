@@ -70,7 +70,9 @@ typedef enum {
     SPI_CMD_AUDIO_STREAM   = 15,
     SPI_CMD_SET_TZ         = 16,  /* RAM-only TZ refresh — see qt_spi_tz_payload_t */
     /* (17-19 were the dual-bank A/B OTA opcodes — removed; STM32 is single-bank,
-     *  updated only via the ESP ROM-bootloader flash.) */
+     *  updated only via the ESP ROM-bootloader flash. Not reused: an old ESP
+     *  could still emit them.) */
+    SPI_CMD_HEALTH_RESET   = 20,  /* zero all health stats, including bootCount */
 } spi_cmd_type_t;
 
 /* Payload for SPI_CMD_SET_TZ. Sent by ESP32 (browser-driven) so the device

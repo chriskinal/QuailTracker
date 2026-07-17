@@ -37,7 +37,7 @@
 #include "spi_protocol.h"
 
 #define TAG "BRIDGE"
-#define ESP_FW_VERSION "0.5.15"
+#define ESP_FW_VERSION "0.5.16"
 
 static bool wifi_started = false;
 
@@ -407,6 +407,7 @@ static void ws_process_command(const char *json)
     if (strstr(json, "schedule_off"))   { cmd_enqueue(SPI_CMD_SCHEDULE_OFF, NULL, 0); return; }
     if (strstr(json, "dev_mode"))       { cmd_enqueue(SPI_CMD_DEV_MODE, NULL, 0); return; }
     if (strstr(json, "model_reload"))   { cmd_enqueue(SPI_CMD_MODEL_RELOAD, NULL, 0); return; }
+    if (strstr(json, "health_reset"))   { cmd_enqueue(SPI_CMD_HEALTH_RESET, NULL, 0); return; }
 
     /* TZ refresh from browser. Heartbeat-style — updates RAM only, doesn't
      * bump cfg_seq, doesn't persist. STM32 picks up via SPI_CMD_SET_TZ; we

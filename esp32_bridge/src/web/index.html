@@ -268,6 +268,12 @@
                     <span class="hlth-lbl">Sys</span>
                     <span id="hlthSys">--</span>
                 </div>
+                <div class="row" style="margin-top:8px">
+                    <button class="btn btn-red" style="flex:1"
+                            onclick="if(confirm('Zero all health stats (boots, files, battery and temperature min/max)? Do this right before a deployment so the numbers have a known baseline.'))sendCmd('health_reset')">
+                        Reset Stats
+                    </button>
+                </div>
             </div>
 
             <!-- Solar -->

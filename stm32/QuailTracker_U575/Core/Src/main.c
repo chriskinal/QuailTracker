@@ -548,8 +548,11 @@ void writeFlacVorbisComment(FIL *fp)
             snprintf(tags[ntags++], 80, "MIC_HEADING=%u", (unsigned)hdg);
     }
 
-    /* Temperature and humidity from SHT30 */
-    {
+    /* Temperature and humidity from SHT30 — omitted entirely when the last read
+     * failed.  Emitting the stale value instead is what made all 171 files of
+     * the 30-day field test claim a constant 21.92 C / 99.67 %RH: absent tags
+     * are recoverable, plausible fabricated ones are not. */
+    if (dev.env.shtValid) {
         int32_t tW = sht30TempC100 / 100;
         int32_t tF = sht30TempC100 % 100;
         if (tF < 0) tF = -tF;
@@ -1039,6 +1042,11 @@ void stopRecording(void)
     }
 }
 
+/* Minimum window time left to bother opening another chunk. Below this the
+ * file would hold a couple of seconds of audio at best, and at ~0 it holds
+ * none at all — just a header. */
+#define CHUNK_MIN_TAIL_SECS  10u
+
 /* Split recording into a new file (chunk boundary).
  * Finalizes the current file and starts a new one seamlessly.
  * The ring buffer keeps filling during the swap so no audio is lost. */
@@ -1059,6 +1067,18 @@ void chunkRecording(void)
     /* Temporarily clear isRecording so stopRecording doesn't reset filename
      * used for logging, but we still need to finalize the file. */
     stopRecording();
+
+    /* Don't open a new chunk the recording window has no room for.  Reads the
+     * headroom published by powerScheduleCheck (~1 Hz) rather than evaluating
+     * the schedule here — this runs on the real-time audio task and
+     * schedule_evaluate() does solar trig.  Up to ~1 s stale, immaterial
+     * against a 10 s threshold.  schedArmed==0 (dev mode, no windows, manual)
+     * rotates chunks exactly as before. */
+    if (dev.pwr.schedArmed && dev.pwr.secsUntilWindowEnd < CHUNK_MIN_TAIL_SECS) {
+        printf("Chunk: window closing (%lus left) — not starting a new file\r\n",
+               (unsigned long)dev.pwr.secsUntilWindowEnd);
+        return;
+    }
 
     /* Immediately start a new recording with a fresh timestamp */
     startRecording();
@@ -1981,31 +2001,86 @@ static uint8_t sht30Crc(const uint8_t *data, uint8_t len)
     return crc;
 }
 
-/* Read SHT30 single-shot, high repeatability, no clock stretch.
- * Updates sht30TempC100 and sht30HumRH100.  Silently keeps old values on error. */
-void sht30Read(void)
+/* Recover I2C1 from a wedged bus.
+ *
+ * The SHT30 sits on the switched PERIPH rail (PD11).  Stop 2 entry takes
+ * PB6/PB7 to analog and cuts PD11, so the sensor is power-cycled with the bus
+ * floating; that can leave the peripheral's BUSY flag latched, after which
+ * every HAL_I2C_Master_Transmit fails forever.  MX_I2C1_Init runs only once at
+ * boot, so nothing ever cleared it — this is why the 30-day field test wrote
+ * one boot-time reading into all 171 files.
+ *
+ * Same remedy as SPI_Recover() in user_diskio.c: an RCC reset returns the
+ * peripheral to power-on defaults regardless of what state it was stuck in. */
+void I2C_Recover(void)
 {
-    uint8_t cmd[2] = { 0x24, 0x00 };
-    if (HAL_I2C_Master_Transmit(&hi2c1, 0x44 << 1, cmd, 2, 100) != HAL_OK)
-        return;
+    HAL_I2C_DeInit(&hi2c1);
+    __HAL_RCC_I2C1_FORCE_RESET();
+    HAL_Delay(1);
+    __HAL_RCC_I2C1_RELEASE_RESET();
+    MX_I2C1_Init();
+}
 
-    HAL_Delay(16);  /* 15 ms max for high repeatability */
+/* Read SHT30 single-shot, high repeatability, no clock stretch.
+ *
+ * Returns 1 and updates sht30TempC100/sht30HumRH100 on success.  Returns 0 on
+ * error and leaves dev.env.shtValid clear — callers MUST NOT emit the stored
+ * values in that case.  A previous version returned silently on every error
+ * path, so a dead sensor kept publishing its last good reading indefinitely;
+ * an entire 30-day deployment shipped a constant 21.92 C / 99.67 %RH. */
+uint8_t sht30Read(void)
+{
+    uint8_t ok = 0;
 
-    uint8_t rx[6];
-    if (HAL_I2C_Master_Receive(&hi2c1, 0x44 << 1, rx, 6, 100) != HAL_OK)
-        return;
+    do {
+        uint8_t cmd[2] = { 0x24, 0x00 };
+        if (HAL_I2C_Master_Transmit(&hi2c1, 0x44 << 1, cmd, 2, 100) != HAL_OK)
+            break;
 
-    /* Verify CRC on both words */
-    if (sht30Crc(rx, 2) != rx[2] || sht30Crc(rx + 3, 2) != rx[5])
-        return;
+        HAL_Delay(16);  /* 15 ms max for high repeatability */
 
-    uint16_t rawT = ((uint16_t)rx[0] << 8) | rx[1];
-    uint16_t rawH = ((uint16_t)rx[3] << 8) | rx[4];
+        uint8_t rx[6];
+        if (HAL_I2C_Master_Receive(&hi2c1, 0x44 << 1, rx, 6, 100) != HAL_OK)
+            break;
 
-    /* temp = -45 + 175 * rawT / 65535  →  in 0.01 °C units */
-    sht30TempC100 = (int16_t)(-4500 + (int32_t)17500 * rawT / 65535);
-    /* hum = 100 * rawH / 65535  →  in 0.01 %RH units */
-    sht30HumRH100 = (uint16_t)((uint32_t)10000 * rawH / 65535);
+        /* Verify CRC on both words */
+        if (sht30Crc(rx, 2) != rx[2] || sht30Crc(rx + 3, 2) != rx[5])
+            break;
+
+        uint16_t rawT = ((uint16_t)rx[0] << 8) | rx[1];
+        uint16_t rawH = ((uint16_t)rx[3] << 8) | rx[4];
+
+        /* temp = -45 + 175 * rawT / 65535  →  in 0.01 °C units */
+        sht30TempC100 = (int16_t)(-4500 + (int32_t)17500 * rawT / 65535);
+        /* hum = 100 * rawH / 65535  →  in 0.01 %RH units */
+        sht30HumRH100 = (uint16_t)((uint32_t)10000 * rawH / 65535);
+        ok = 1;
+    } while (0);
+
+    if (ok) {
+        if (dev.env.shtFailCount)
+            printf("SHT30: recovered after %lu failed reads\r\n",
+                   (unsigned long)dev.env.shtFailCount);
+        dev.env.shtFailCount = 0;
+        dev.env.shtValid = 1;
+        return 1;
+    }
+
+    dev.env.shtValid = 0;
+    dev.env.shtFailCount++;
+
+    /* Log the first failure and then rarely — a wedged bus fails every 5 s and
+     * would otherwise flood RTT for the whole deployment. */
+    if (dev.env.shtFailCount == 1 || (dev.env.shtFailCount % 720) == 0)
+        printf("SHT30: read FAILED (%lu consecutive)\r\n",
+               (unsigned long)dev.env.shtFailCount);
+
+    /* Two strikes, then reset the peripheral — covers the stuck-BUSY case
+     * without hammering the bus on a transient NACK. */
+    if (dev.env.shtFailCount >= 2)
+        I2C_Recover();
+
+    return 0;
 }
 
 static void MX_RTC_Init(void)

@@ -158,8 +158,10 @@ typedef struct {
 
     struct {
         uint32_t batteryMv;
-        int16_t  tempC100;        /* 0.01 °C units */
-        uint16_t humRH100;        /* 0.01 %RH units */
+        int16_t  tempC100;        /* 0.01 °C units — only valid if shtValid */
+        uint16_t humRH100;        /* 0.01 %RH units — only valid if shtValid */
+        uint8_t  shtValid;        /* 1 = tempC100/humRH100 are from a good read */
+        uint32_t shtFailCount;    /* consecutive failed reads (0 = last read OK) */
     } env;
 
     struct {
@@ -184,6 +186,12 @@ typedef struct {
         uint32_t gpsDutyCycleSec;       /* GPS wake interval during recording (0=off) */
         uint32_t userConnectedTick;     /* HAL tick of last user activity (SPI cmd / ESP wake) */
         uint16_t sleepIntentSecs;       /* >0 = about to Stop 2 for ~this long; reported to ESP as pwr_sleepSecs to gate its watchdog */
+        /* Published by powerScheduleCheck (CLI task, ~1 Hz) for readers that must
+         * not evaluate the schedule themselves: chunkRecording() runs on the
+         * real-time audio task and schedule_evaluate() does solar trig. Single
+         * writer, so volatile is sufficient. */
+        volatile uint8_t  schedArmed;          /* 1 = schedule armed and being evaluated */
+        volatile uint32_t secsUntilWindowEnd;  /* 0 = outside a window; only meaningful if schedArmed */
     } pwr;
 
     struct {
