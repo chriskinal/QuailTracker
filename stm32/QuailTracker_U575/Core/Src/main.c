@@ -2058,12 +2058,15 @@ uint32_t battReadMv(void)
 
     dev.env.battValid = 0;
     dev.env.adcFailCount++;
+    errLog(ERR_ADC_READ, dev.env.adcFailCount);
     /* Loud on the first failure, then rarely (battery is polled ~every 5 s). */
     if (dev.env.adcFailCount == 1 || (dev.env.adcFailCount % 720) == 0)
         printf("ADC1: battery read FAILED (%lu consecutive)\r\n",
                (unsigned long)dev.env.adcFailCount);
-    if (dev.env.adcFailCount >= 2)
+    if (dev.env.adcFailCount >= 2) {
+        errLog(ERR_ADC_RECOVER, 0);
         ADC_Recover();
+    }
     return batteryMv;  /* last known — caller checks dev.env.battValid */
 }
 
@@ -2170,6 +2173,7 @@ uint8_t sht30Read(void)
 
     dev.env.shtValid = 0;
     dev.env.shtFailCount++;
+    errLog(ERR_SHT30_READ, dev.env.shtFailCount);
 
     /* Log the first failure and then rarely — a wedged bus fails every 5 s and
      * would otherwise flood RTT for the whole deployment. */
@@ -2179,8 +2183,10 @@ uint8_t sht30Read(void)
 
     /* Two strikes, then reset the peripheral — covers the stuck-BUSY case
      * without hammering the bus on a transient NACK. */
-    if (dev.env.shtFailCount >= 2)
+    if (dev.env.shtFailCount >= 2) {
+        errLog(ERR_I2C_RECOVER, 0);
         I2C_Recover();
+    }
 
     return 0;
 }
@@ -2271,6 +2277,27 @@ void rtcGetDate(uint8_t *day, uint8_t *month, uint16_t *year)
     *day   = sDate.Date;
     *month = sDate.Month;
     *year  = 2000 + (uint16_t)sDate.Year;
+}
+
+/* RTC → UNIX epoch seconds (proleptic Gregorian). Returns 0 if the RTC has not
+ * been GPS-disciplined yet, so error timestamps are absolute where available. */
+uint32_t rtcEpochNow(void)
+{
+    if (!dev.pwr.rtcSynced) return 0;
+    uint8_t hh, mm, ss, dd, mo;
+    uint16_t yy;
+    rtcGetTime(&hh, &mm, &ss);
+    rtcGetDate(&dd, &mo, &yy);
+
+    static const uint16_t cumDays[12] = {0,31,59,90,120,151,181,212,243,273,304,334};
+    uint32_t y = yy;
+    uint32_t days = (y - 1970) * 365
+                  + (y - 1969) / 4 - (y - 1901) / 100 + (y - 1601) / 400
+                  + cumDays[(mo - 1u) % 12u]
+                  + (dd - 1u);
+    if (mo > 2 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0))
+        days += 1;   /* leap day already passed this year */
+    return days * 86400u + (uint32_t)hh * 3600u + (uint32_t)mm * 60u + ss;
 }
 
 wake_source_t enterStop2(uint32_t seconds)

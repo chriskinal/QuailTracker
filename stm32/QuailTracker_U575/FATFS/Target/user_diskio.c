@@ -317,9 +317,10 @@ static int SD_RxDataBlock(uint8_t *buf, uint16_t len)
     uint8_t crcLo = SPI_TxRx(0xFF);
     if (sdCrcEnabled) {
         uint16_t rxCrc = ((uint16_t)crcHi << 8) | crcLo;
-        if (rxCrc != sd_crc16(buf, len)) {
-            printf("SD_Rx CRC MISMATCH (got %04X calc %04X) — retryable\r\n",
-                   rxCrc, sd_crc16(buf, len));
+        uint16_t calc = sd_crc16(buf, len);
+        if (rxCrc != calc) {
+            errLog(ERR_SD_CRC, ((uint32_t)rxCrc << 16) | calc);
+            printf("SD_Rx CRC MISMATCH (got %04X calc %04X) — retryable\r\n", rxCrc, calc);
             return 0;   /* caller retries */
         }
     }
@@ -548,9 +549,11 @@ DRESULT USER_read (
             return RES_OK;
         }
         if (spiDead) break;   /* retries are futile on a dead bus */
+        errLog(ERR_SD_READ_RETRY, sector);
         printf("SD_read: retry %d/%d (LBA=%lu)\r\n",
                attempt + 1, SD_IO_RETRIES, (unsigned long)sector);
     }
+    errLog(ERR_SD_READ_FAIL, sector);
     printf("SD_read: FAILED after retries (LBA=%lu)\r\n", (unsigned long)sector);
     return RES_ERROR;
   /* USER CODE END READ */
@@ -629,6 +632,7 @@ DRESULT USER_write (
                        attempt + 1, (unsigned long)sector);
             return RES_OK;
         }
+        errLog(ERR_SD_WRITE_RETRY, sector);
         if (cmdFailNum)
             printf("SD_write: CMD%d resp=0x%02X LBA=%lu spiDead=%d (retry %d/%d)\r\n",
                    cmdFailNum, cmdResp, (unsigned long)sector, spiDead,
@@ -638,6 +642,7 @@ DRESULT USER_write (
                    (unsigned long)sector, attempt + 1, SD_IO_RETRIES);
         if (spiDead) break;   /* retries are futile on a dead bus */
     }
+    errLog(ERR_SD_WRITE_FAIL, sector);
     printf("SD_write: FAILED after retries LBA=%lu — block lost\r\n",
            (unsigned long)sector);
     return RES_ERROR;

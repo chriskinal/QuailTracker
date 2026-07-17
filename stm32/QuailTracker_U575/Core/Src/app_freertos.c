@@ -50,6 +50,9 @@
  * these top pages — and the config — survive a firmware update. */
 #define CONFIG_FLASH_ADDR 0x080FE000   /* last 8 KB page of the 1 MB part */
 
+#define ERRLOG_MAGIC       0x51544C47   /* "QTLG" */
+#define ERRLOG_VERSION     1
+#define ERRLOG_PAGE_OFFSET 256          /* errlog sits right after the 256 B health struct, same page */
 #define HEALTH_MAGIC       0x51544853   /* "QTHS" */
 #define HEALTH_VERSION     1
 #define HEALTH_FLASH_ADDR  0x080FC000   /* one page below config */
@@ -195,6 +198,7 @@ device_config_t cfg __attribute__((aligned(16)));
 
 /* Flash-persisted health statistics */
 health_stats_t health __attribute__((aligned(16)));
+err_log_t errLogData __attribute__((aligned(16)));   /* RAM error log; flash-backed with health */
 static uint32_t lastHealthSaveTick = 0;
 #define HEALTH_SAVE_INTERVAL_MS 300000  /* 5 minutes */
 static uint8_t prevGpsValid = 0;  /* for GPS fix loss detection */
@@ -250,6 +254,7 @@ static wake_source_t enterScheduledSleep(uint32_t seconds);
 /* Forward declarations for health functions */
 static void healthLoad(void);
 int healthSave(void);
+static uint32_t errLogComputeCrc(const err_log_t *e);
 void healthReset(void);
 /* Sentinel temperature meaning "no valid reading" — outside any real range and
  * outside int16_t, so it can never collide with a genuine tempC100. */
@@ -793,6 +798,7 @@ skip_write:
         recRestartPending = 0;
         if (recWriteErrRestarts < REC_WRITE_ERR_MAX_RESTARTS) {
           recWriteErrRestarts++;
+          errLog(ERR_REC_RESTART, recWriteErrRestarts);
           printf("REC: write-error recovery %u/%u — remount + new file\r\n",
                  recWriteErrRestarts, REC_WRITE_ERR_MAX_RESTARTS);
           extern FATFS USERFatFS;
@@ -812,6 +818,7 @@ skip_write:
             printf("REC: remount failed — recording paused until next window\r\n");
           }
         } else {
+          errLog(ERR_REC_ABANDON, 0);
           printf("REC: %u consecutive write errors — paused until next window\r\n",
                  REC_WRITE_ERR_MAX_RESTARTS);
         }
@@ -2244,6 +2251,9 @@ static void StartBridgeTask(void *argument)
                  FW_VERSION, (unsigned long)health.bootCount,
                  (unsigned long)battReadMv());
         diagLog(msg);
+        /* Snapshot accumulated errors (from flash) into diag.log each boot — a
+         * single write, and a field-readable history when the SD is healthy. */
+        errLogDump();
     }
 
     /* Main loop: SPI2 bridge to ESP32 + sensor reads + health saves */
@@ -2262,8 +2272,10 @@ static void StartBridgeTask(void *argument)
                                               : HEALTH_TEMP_INVALID);
             /* Track GPS fix losses */
             uint8_t curGpsValid = gpsData.valid;
-            if (prevGpsValid && !curGpsValid)
+            if (prevGpsValid && !curGpsValid) {
                 health.gpsFixLosses++;
+                errLog(ERR_GPS_FIX_LOSS, 0);
+            }
             prevGpsValid = curGpsValid;
             /* Refresh cached SD space */
             extern void sd_space_refresh(void);
@@ -2334,11 +2346,13 @@ static void StartBridgeTask(void *argument)
                  * the rest of the deployment. Recover after 2 strikes; don't hammer
                  * an RCC reset on a single transient. */
                 dev.comms.espReady = 0;
+                errLog(ERR_SPI2_TXN, (uint32_t)spiResult);
                 if (++spi2FailCount == 1 || (spi2FailCount % 240) == 0)
                     printf("SPI2: transaction FAILED (%lu consecutive, hal=%d)\r\n",
                            (unsigned long)spi2FailCount, (int)spiResult);
                 if (spi2FailCount >= 2) {
                     extern void SPI2_Recover(void);
+                    errLog(ERR_SPI2_RECOVER, 0);
                     SPI2_Recover();
                 }
             }
@@ -2732,6 +2746,7 @@ int configSave(void)
 
     /* config = 8 quad-words (128 bytes) in the inactive bank's top page */
     if (!flashWritePage(CONFIG_FLASH_ADDR, (const uint8_t *)&cfg, 8)) {
+        errLog(ERR_FLASH_WRITE, HAL_FLASH_GetError());
         printf("Config: Flash write FAILED (err=0x%lx)\r\n",
                (unsigned long)HAL_FLASH_GetError());
         return 0;
@@ -2755,6 +2770,16 @@ static int healthValid(const health_stats_t *h)
 
 static void healthLoad(void)
 {
+    /* Error log shares the health page (offset 256). Restore it if valid, else
+     * start empty — first boot on new firmware finds erased 0xFF there. */
+    const err_log_t *ef = (const err_log_t *)(HEALTH_FLASH_ADDR + ERRLOG_PAGE_OFFSET);
+    if (ef->magic == ERRLOG_MAGIC && ef->version == ERRLOG_VERSION &&
+        ef->crc32 == errLogComputeCrc(ef)) {
+        memcpy(&errLogData, ef, sizeof(errLogData));
+    } else {
+        memset(&errLogData, 0, sizeof(errLogData));
+    }
+
     /* Single-bank: health lives at one fixed top page that never moves. */
     const health_stats_t *flash = (const health_stats_t *)HEALTH_FLASH_ADDR;
     if (healthValid(flash)) {
@@ -2776,10 +2801,19 @@ static void healthLoad(void)
 int healthSave(void)
 {
     health.crc32 = healthComputeCrc(&health);
+    errLogData.magic = ERRLOG_MAGIC;
+    errLogData.version = ERRLOG_VERSION;
+    errLogData.crc32 = errLogComputeCrc(&errLogData);
 
-    /* health = 16 quad-words (256 bytes) in the inactive bank, one page below
-     * config. Retries once on the post-swap-boot transient (see flashWritePage). */
-    if (!flashWritePage(HEALTH_FLASH_ADDR, (const uint8_t *)&health, 16)) {
+    /* One page write carries BOTH structs: health at the page base (256 B) and
+     * the error log right after (offset 256). Same erase — the error log is free
+     * to persist, no extra flash wear. 1056 B = 66 quad-words. */
+    static uint8_t page[ERRLOG_PAGE_OFFSET + sizeof(err_log_t)] __attribute__((aligned(16)));
+    memcpy(page, &health, sizeof(health));
+    memcpy(page + ERRLOG_PAGE_OFFSET, &errLogData, sizeof(errLogData));
+
+    if (!flashWritePage(HEALTH_FLASH_ADDR, page, (int)(sizeof(page) / 16))) {
+        errLog(ERR_FLASH_WRITE, HAL_FLASH_GetError());  /* RAM-only; persists next save */
         printf("Health: Flash write FAILED (err=0x%lx)\r\n",
                (unsigned long)HAL_FLASH_GetError());
         return 0;
@@ -2803,7 +2837,79 @@ void healthReset(void)
     health.battMinMv = 0xFFFFFFFF;
     health.tempMinC100 = 32767;
     health.tempMaxC100 = -32768;
+    memset(&errLogData, 0, sizeof(errLogData));   /* clear the error log too */
     healthSave();
+}
+
+/* ========================= Structured Error Log ========================= */
+
+static const char *const errName[ERR_CODE_COUNT] = {
+    "SHT30_READ", "I2C_RECOVER", "ADC_READ", "ADC_RECOVER",
+    "SPI2_TXN", "SPI2_RECOVER", "SD_WRITE_RETRY", "SD_WRITE_FAIL",
+    "SD_READ_RETRY", "SD_READ_FAIL", "SD_CRC", "REC_RESTART",
+    "REC_ABANDON", "GPS_FIX_LOSS", "FLASH_WRITE",
+};
+
+static uint32_t errLogComputeCrc(const err_log_t *e)
+{
+    return crc32_compute((const uint8_t *)e, sizeof(err_log_t) - 4);
+}
+
+/* Record one error occurrence: bump the per-code row and push a ring event.
+ * Best-effort stats — IRQs briefly masked to keep the counters/ring index from
+ * tearing when called from different tasks (or the SD driver). Not for ISRs. */
+void errLog(uint16_t code, uint32_t arg)
+{
+    if (code >= ERR_CODE_COUNT) return;
+    uint32_t now = rtcEpochNow();
+
+    uint32_t primask = __get_PRIMASK();   /* preserve caller's IRQ state */
+    __disable_irq();
+    err_row_t *r = &errLogData.rows[code];
+    if (r->count == 0) r->firstUtc = now;
+    r->count++;
+    r->lastUtc = now;
+    r->lastArg = arg;
+
+    err_event_t *ev = &errLogData.ring[errLogData.ringHead % ERR_RING_LEN];
+    ev->code = code;
+    ev->seq  = (uint16_t)errLogData.totalEvents;
+    ev->utc  = now;
+    ev->arg  = arg;
+    errLogData.ringHead = (errLogData.ringHead + 1u) % ERR_RING_LEN;
+    errLogData.totalEvents++;
+    __set_PRIMASK(primask);
+}
+
+/* Append a snapshot of the error table (non-zero codes) + the recent ring to
+ * diag.log. One f_open — a single milestone write, NOT per-error. Safe to call
+ * from a task with the SD mounted (e.g. at boot). No-op if nothing logged. */
+void errLogDump(void)
+{
+    if (!sdMounted || errLogData.totalEvents == 0) return;
+    if (osMutexAcquire(fileMtxHandle, 200) != osOK) return;
+
+    FIL f;
+    if (f_open(&f, "logs/diag.log", FA_OPEN_APPEND | FA_WRITE) == FR_OK) {
+        UINT bw;
+        char line[128];
+        int n = snprintf(line, sizeof(line),
+                         "--- ERRORS (%lu events since reset) ---\n",
+                         (unsigned long)errLogData.totalEvents);
+        f_write(&f, line, n, &bw);
+        for (int c = 0; c < ERR_CODE_COUNT; c++) {
+            const err_row_t *r = &errLogData.rows[c];
+            if (r->count == 0) continue;
+            n = snprintf(line, sizeof(line),
+                         "  %-14s x%lu  first=%lu last=%lu arg=0x%lX\n",
+                         errName[c], (unsigned long)r->count,
+                         (unsigned long)r->firstUtc, (unsigned long)r->lastUtc,
+                         (unsigned long)r->lastArg);
+            f_write(&f, line, n, &bw);
+        }
+        f_close(&f);
+    }
+    osMutexRelease(fileMtxHandle);
 }
 
 /* Update battery/temp min/max — called from SHT30 periodic read */

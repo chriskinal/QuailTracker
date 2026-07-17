@@ -60,6 +60,9 @@ uint8_t sht30Read(void);   /* 1 = success; on 0, dev.env temp/hum are NOT valid 
 void I2C_Recover(void);
 void ADC_Recover(void);
 void SPI2_Recover(void);
+uint32_t rtcEpochNow(void);            /* RTC → UNIX epoch seconds; 0 if not synced */
+void errLog(uint16_t code, uint32_t arg);  /* record an error occurrence (err_code_t) */
+void errLogDump(void);                 /* append the error table + recent ring to diag.log */
 void rtcSyncFromGps(void);
 void rtcGetTime(uint8_t *hours, uint8_t *minutes, uint8_t *seconds);
 void rtcGetDate(uint8_t *day, uint8_t *month, uint16_t *year);
@@ -72,7 +75,7 @@ void rtcGetDate(uint8_t *day, uint8_t *month, uint16_t *year);
 #define SD_CD_GPIO_Port GPIOC
 
 /* USER CODE BEGIN Private defines */
-#define FW_VERSION "0.10.24"
+#define FW_VERSION "0.10.25"
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus
