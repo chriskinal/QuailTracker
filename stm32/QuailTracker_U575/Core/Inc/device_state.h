@@ -162,6 +162,8 @@ typedef struct {
         uint16_t humRH100;        /* 0.01 %RH units — only valid if shtValid */
         uint8_t  shtValid;        /* 1 = tempC100/humRH100 are from a good read */
         uint32_t shtFailCount;    /* consecutive failed reads (0 = last read OK) */
+        uint8_t  battValid;       /* 1 = batteryMv is from a good ADC read */
+        uint32_t adcFailCount;    /* consecutive failed battery reads (0 = last OK) */
     } env;
 
     struct {

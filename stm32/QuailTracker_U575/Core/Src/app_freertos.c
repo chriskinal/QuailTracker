@@ -2269,12 +2269,27 @@ static void StartBridgeTask(void *argument)
             HAL_GPIO_WritePin(SPI2_CS_PORT, SPI2_CS_PIN, GPIO_PIN_SET);
 
             /* Track ESP32 comms status */
+            static uint32_t spi2FailCount = 0;
             if (spiResult == HAL_OK) {
                 dev.comms.espReady = 1;
                 dev.comms.spiTransactions++;
                 dev.comms.lastSpiTick = HAL_GetTick();
                 if (streamActive)
                     streamLastSpiTick = HAL_GetTick();
+                spi2FailCount = 0;
+            } else {
+                /* Note → recover → continue: a wedged SPI2 (e.g. peer mid-transfer
+                 * at Stop 2 entry) would otherwise silently kill the ESP bridge for
+                 * the rest of the deployment. Recover after 2 strikes; don't hammer
+                 * an RCC reset on a single transient. */
+                dev.comms.espReady = 0;
+                if (++spi2FailCount == 1 || (spi2FailCount % 240) == 0)
+                    printf("SPI2: transaction FAILED (%lu consecutive, hal=%d)\r\n",
+                           (unsigned long)spi2FailCount, (int)spiResult);
+                if (spi2FailCount >= 2) {
+                    extern void SPI2_Recover(void);
+                    SPI2_Recover();
+                }
             }
 
             /* Process received frame — binary protocol */
@@ -2745,8 +2760,12 @@ void healthReset(void)
  * min/max still track, temperature is left alone. */
 void healthUpdateEnvironment(uint32_t battMv, int32_t tempC100)
 {
-    if (battMv < health.battMinMv) health.battMinMv = battMv;
-    if (battMv > health.battMaxMv) health.battMaxMv = battMv;
+    /* Only fold battery into min/max when the ADC read was good — a wedged ADC
+     * returns a stale value (dev.env.battValid==0) that would pin the extremes. */
+    if (dev.env.battValid) {
+        if (battMv < health.battMinMv) health.battMinMv = battMv;
+        if (battMv > health.battMaxMv) health.battMaxMv = battMv;
+    }
     if (tempC100 == HEALTH_TEMP_INVALID) return;
     if (tempC100 < health.tempMinC100) health.tempMinC100 = tempC100;
     if (tempC100 > health.tempMaxC100) health.tempMaxC100 = tempC100;

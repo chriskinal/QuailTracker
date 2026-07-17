@@ -1822,6 +1822,33 @@ static void MX_SPI2_Init(void)
         Error_Handler();
 }
 
+/* Recover SPI2 (ESP32 bridge) from a wedged state — the STM32U5 SPI state
+ * machine (TSIZE/CSTART/CSUSP/FIFO) can latch if the peer was mid-transfer when
+ * we entered Stop 2, or PB12's sleep repurposing as an EXTI wake input left it
+ * out of sync. Mirrors SPI_Recover() in user_diskio.c: an RCC reset returns the
+ * peripheral to power-on defaults unconditionally; the GPIO toggle re-syncs the
+ * pin mux. Init runs once at boot, so nothing else ever cleared this. PB12 stays
+ * a GPIO CS output and is left untouched. */
+void SPI2_Recover(void)
+{
+    __HAL_RCC_SPI2_FORCE_RESET();
+    __HAL_RCC_SPI2_RELEASE_RESET();
+
+    GPIO_InitTypeDef g = {0};
+    g.Pin = GPIO_PIN_13 | GPIO_PIN_14 | GPIO_PIN_15;
+    g.Mode = GPIO_MODE_INPUT;
+    g.Pull = GPIO_PULLUP;
+    HAL_GPIO_Init(GPIOB, &g);
+    HAL_Delay(1);
+    g.Mode = GPIO_MODE_AF_PP;
+    g.Pull = GPIO_NOPULL;
+    g.Speed = GPIO_SPEED_FREQ_HIGH;
+    g.Alternate = GPIO_AF5_SPI2;
+    HAL_GPIO_Init(GPIOB, &g);
+
+    HAL_SPI_Init(&hspi2);
+}
+
 /**
   * @brief GPIO Initialization Function
   * @param None
@@ -1998,12 +2025,46 @@ static void MX_ADC1_Init(void)
  * τ ≈ 2.5 µs into the ADC's S&H cap, so 68 cycles (1.7 µs at 40 MHz ADC
  * clock) doesn't let the cap settle and the reading comes in ~10% low.
  * 814 cycles (20.4 µs, ~8τ) settles to within 14-bit accuracy. */
+/* Recover ADC1 from a wedged/disabled state.
+ *
+ * ADC init + offset calibration run once at boot; the Stop 2 sleep/wake path
+ * never touches the ADC, and on STM32U5 Stop 2 can power down the ADC analog
+ * domain (ADEN/ADVREGEN state not guaranteed). A full DeInit + re-init restores
+ * the voltage regulator, calibration, and VDDA reference. Same recover pattern
+ * as SPI_Recover()/I2C_Recover(). NOTE: MX_ADC1_Init calls adcReadRaw (for
+ * VREFINT), so this must live OUTSIDE adcReadRaw to avoid recursion. */
+void ADC_Recover(void)
+{
+    HAL_ADC_DeInit(&hadc1);
+    MX_ADC1_Init();
+}
+
+/* Returns battery millivolts; sets dev.env.battValid. On a failed read it leaves
+ * battValid clear (callers MUST check it, not trust the returned last value) and
+ * self-heals the ADC after 2 strikes. A previous version silently kept the last
+ * batteryMv on failure — the same fail-silent trap as the SHT30 freeze. */
 uint32_t battReadMv(void)
 {
     uint32_t raw = adcReadRaw(ADC_CHANNEL_1, ADC_SAMPLETIME_814CYCLES);
-    if (raw > 0)
+    if (raw > 0) {
         batteryMv = (raw * vddaMv * 2) / 16383;
-    return batteryMv;
+        if (dev.env.adcFailCount)
+            printf("ADC1: recovered after %lu failed reads\r\n",
+                   (unsigned long)dev.env.adcFailCount);
+        dev.env.adcFailCount = 0;
+        dev.env.battValid = 1;
+        return batteryMv;
+    }
+
+    dev.env.battValid = 0;
+    dev.env.adcFailCount++;
+    /* Loud on the first failure, then rarely (battery is polled ~every 5 s). */
+    if (dev.env.adcFailCount == 1 || (dev.env.adcFailCount % 720) == 0)
+        printf("ADC1: battery read FAILED (%lu consecutive)\r\n",
+               (unsigned long)dev.env.adcFailCount);
+    if (dev.env.adcFailCount >= 2)
+        ADC_Recover();
+    return batteryMv;  /* last known — caller checks dev.env.battValid */
 }
 
 /* ---- I2C1 init (SHT30 on PB6/PB7) ---- */
@@ -2380,6 +2441,17 @@ wake_source_t enterStop2(uint32_t seconds)
     USART3->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
     (void)USART1->RDR;
     (void)USART3->RDR;
+
+    /* Fully re-establish USART3 (debug console) — the error-clear above handles
+     * the common case, but a boot-only peripheral disturbed by the PD8/PD9
+     * analog-during-sleep repurposing deserves a clean re-init. Do NOT call
+     * MX_USART3_UART_Init here: it Error_Handler()-hangs on failure, which would
+     * brick the unit on wake over a debug-only peripheral. Note-and-continue
+     * instead (printf still reaches RTT). USART1/GPS is re-established by
+     * gpsSetPower on the next power-on. RXNE IT is re-enabled below. */
+    HAL_UART_DeInit(&husart3);
+    if (HAL_UART_Init(&husart3) != HAL_OK)
+        printf("USART3: wake re-init failed — console degraded, continuing\r\n");
 
     /* Restore all NVIC interrupt enables (saved before sleep) */
     for (uint32_t i = 0; i < 8u; i++)
