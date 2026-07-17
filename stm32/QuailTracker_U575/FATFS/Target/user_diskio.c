@@ -84,6 +84,24 @@ static volatile DSTATUS Stat = STA_NOINIT;
 static uint8_t CardType;
 static uint8_t sdCrcEnabled = 0;   /* 1 once CMD59 turned on card-side CRC */
 
+/* SD command CRC7 (poly x^7+x^3+1). Returned already shifted into bits [7:1]
+ * with the stop bit (bit 0 = 1) — ready to send as the command CRC byte. Once
+ * CMD59 enables CRC, the card checks EVERY command's CRC, so all commands (not
+ * just CMD0/CMD8) must carry a real one. Verified: CMD0→0x95, CMD8→0x87. */
+static uint8_t sd_crc7_byte(const uint8_t *data, int len)
+{
+    uint8_t crc = 0;
+    for (int i = 0; i < len; i++) {
+        uint8_t b = data[i];
+        for (int j = 0; j < 8; j++) {
+            crc <<= 1;
+            if ((b ^ crc) & 0x80) crc ^= 0x09;
+            b <<= 1;
+        }
+    }
+    return (uint8_t)(((crc & 0x7F) << 1) | 1);
+}
+
 /* SD data-block CRC: CRC-16-CCITT (poly 0x1021, init 0x0000), MSB-first. */
 static uint16_t sd_crc16(const uint8_t *buf, uint16_t len)
 {
@@ -276,18 +294,18 @@ static uint8_t SD_SendCmd(uint8_t cmd, uint32_t arg)
         if (!SD_Select()) return 0xFF;
     }
 
-    /* Send command packet */
-    SPI_TxRx(0x40 | cmd);
-    SPI_TxRx((uint8_t)(arg >> 24));
-    SPI_TxRx((uint8_t)(arg >> 16));
-    SPI_TxRx((uint8_t)(arg >> 8));
-    SPI_TxRx((uint8_t)(arg));
-
-    /* CRC - required for CMD0 and CMD8 */
-    uint8_t crc = 0xFF;
-    if (cmd == CMD0) crc = 0x95;
-    if (cmd == CMD8) crc = 0x87;
-    SPI_TxRx(crc);
+    /* Send command packet with a real CRC7 over all 6-byte header. Required for
+     * CMD0/CMD8 always, and for EVERY command once CMD59 turns CRC checking on —
+     * the previous code sent a dummy 0xFF for everything else, so enabling CRC
+     * made the card reject CMD17/CMD24/etc. (mount read of LBA 0 failed). */
+    uint8_t pkt[5];
+    pkt[0] = (uint8_t)(0x40 | cmd);
+    pkt[1] = (uint8_t)(arg >> 24);
+    pkt[2] = (uint8_t)(arg >> 16);
+    pkt[3] = (uint8_t)(arg >> 8);
+    pkt[4] = (uint8_t)(arg);
+    for (int i = 0; i < 5; i++) SPI_TxRx(pkt[i]);
+    SPI_TxRx(sd_crc7_byte(pkt, 5));
 
     /* Skip stuff byte for CMD12 */
     if (cmd == CMD12) SPI_TxRx(0xFF);
