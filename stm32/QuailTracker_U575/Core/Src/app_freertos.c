@@ -2893,6 +2893,13 @@ void errLog(uint16_t code, uint32_t arg)
     errLogData.ringHead = (errLogData.ringHead + 1u) % ERR_RING_LEN;
     errLogData.totalEvents++;
     __set_PRIMASK(primask);
+
+    /* Mirror hard SD data-loss into the persisted health.sdErrors counter — it's
+     * already plumbed to the web "Since Last Visit" card ("N SD errors"), so this
+     * gives an at-a-glance card-health signal without opening the error log.
+     * Only losses (retries/CRC recovered fine and stay in the detailed table). */
+    if (code == ERR_SD_WRITE_FAIL || code == ERR_SD_READ_FAIL)
+        health.sdErrors++;
 }
 
 /* Append a snapshot of the error table (non-zero codes) + the recent ring to
