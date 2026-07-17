@@ -282,6 +282,14 @@ static int32_t  lpfPrevOutR = 0;
 static uint32_t recLastSyncTick = 0;
 static uint8_t  recSyncArmed    = 0;   /* 0 until the first write of a recording */
 
+/* Write-error recovery. The SD driver already retries a block; if a write still
+ * fails (card genuinely faulting), recover the PROCESS — remount + open a fresh
+ * file and keep recording — rather than lose the rest of the window. Bounded so a
+ * truly dead card can't spin; the budget resets each recording session. */
+#define REC_WRITE_ERR_MAX_RESTARTS  3
+static uint8_t recWriteErrRestarts = 0;
+static uint8_t recRestartPending   = 0;
+
 /* Compute Q16 HPF alpha from cutoff frequency: alpha = e^(-2*pi*fc/fs) * 65536 */
 static uint32_t computeHpfAlpha(uint16_t fc) {
     if (fc == 0) return 0;
@@ -502,9 +510,17 @@ void StartAudioTask(void *argument)
         actHolddown = 0; actGateOpen = 1;
         melAccumIdx = 0;
         mel_reset();
+        recRestartPending = 0;
         startRecording();
       }
-      else if (cmd == CMD_STOP_REC) stopRecording();
+      else if (cmd == CMD_STOP_REC) {
+        /* A clean stop ends the session — restore the write-error budget so the
+         * next window starts fresh. (Not reset on START: a recovery restart
+         * re-enters via CMD_START_REC and must keep spending the same budget.) */
+        recWriteErrRestarts = 0;
+        recRestartPending = 0;
+        stopRecording();
+      }
     }
 
     /* Drain ring buffer into encoder/file writer.
@@ -716,9 +732,10 @@ void StartAudioTask(void *argument)
           UINT bw;
           FRESULT fres = f_write(&wavFile, packed, blockLen * 6, &bw);
           if (fres != FR_OK) {
-            printf("f_write FAILED: %d at %lu bytes\r\n", fres, (unsigned long)totalDataBytes);
+            printf("f_write FAILED: %d at %lu bytes — recovering\r\n", fres, (unsigned long)totalDataBytes);
             f_close(&wavFile);
             isRecording = 0;
+            recRestartPending = 1;   /* handled in the not-recording branch */
           }
           totalDataBytes += bw;
 
@@ -736,9 +753,10 @@ void StartAudioTask(void *argument)
             UINT bw;
             FRESULT fres = f_write(&wavFile, flacEncoder.outBuf, encoded, &bw);
             if (fres != FR_OK) {
-              printf("f_write FAILED: %d at %lu bytes\r\n", fres, (unsigned long)totalDataBytes);
+              printf("f_write FAILED: %d at %lu bytes — recovering\r\n", fres, (unsigned long)totalDataBytes);
               f_close(&wavFile);
               isRecording = 0;
+              recRestartPending = 1;   /* handled in the not-recording branch */
             }
             totalDataBytes += bw;
             flac_enc_notify_write(&flacEncoder, bw);
@@ -766,6 +784,39 @@ skip_write:
       }
     } else {
       recSyncArmed = 0;   /* re-arm the sync timer for the next recording */
+
+      /* Recover from a write error: remount the card (runs SPI_Recover) and open
+       * a fresh file so recording continues, rather than losing the rest of the
+       * window. Bounded — a truly dead card stops after N and waits for the next
+       * window (CMD_START_REC resets the budget). */
+      if (recRestartPending) {
+        recRestartPending = 0;
+        if (recWriteErrRestarts < REC_WRITE_ERR_MAX_RESTARTS) {
+          recWriteErrRestarts++;
+          printf("REC: write-error recovery %u/%u — remount + new file\r\n",
+                 recWriteErrRestarts, REC_WRITE_ERR_MAX_RESTARTS);
+          extern FATFS USERFatFS;
+          extern char USERPath[];
+          extern void USER_disk_deinit(void);
+          osMutexAcquire(fileMtxHandle, osWaitForever);
+          f_mount(NULL, USERPath, 0);   /* unmount */
+          USER_disk_deinit();           /* force re-init → SPI_Recover on next mount */
+          sdMounted = 0;
+          if (f_mount(&USERFatFS, USERPath, 1) == FR_OK)
+            sdMounted = 1;
+          osMutexRelease(fileMtxHandle);
+          if (sdMounted) {
+            uint8_t c = CMD_START_REC;
+            osMessageQueuePut(audioCmdQueueHandle, &c, 0, 0);  /* re-enter via cmd path */
+          } else {
+            printf("REC: remount failed — recording paused until next window\r\n");
+          }
+        } else {
+          printf("REC: %u consecutive write errors — paused until next window\r\n",
+                 REC_WRITE_ERR_MAX_RESTARTS);
+        }
+      }
+
       /* Not recording -drain ring and track peak for live audio monitor.
        * Apply HPF to remove DC offset / LF noise (same as recording path)
        * using separate state so recording init doesn't conflict. */
