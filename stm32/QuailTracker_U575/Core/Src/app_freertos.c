@@ -175,7 +175,7 @@ extern int formatSD(void);
 
 /* Battery/SHT30 functions from main.c */
 extern uint32_t battReadMv(void);
-extern void sht30Read(void);
+extern uint8_t sht30Read(void);
 
 #define SURVEY_DURATION_MS  300000      /* 5 minutes */
 #define SURVEY_MIN_SATS     4           /* minimum satellites for valid fix */
@@ -247,6 +247,9 @@ static wake_source_t enterScheduledSleep(uint32_t seconds);
 static void healthLoad(void);
 int healthSave(void);
 void healthReset(void);
+/* Sentinel temperature meaning "no valid reading" — outside any real range and
+ * outside int16_t, so it can never collide with a genuine tempC100. */
+#define HEALTH_TEMP_INVALID  INT32_MIN
 void healthUpdateEnvironment(uint32_t battMv, int32_t tempC100);
 void healthUpdateRecStart(const char *filename);
 void healthUpdateRecStop(uint32_t bytes, uint32_t durationSecs);
@@ -1452,20 +1455,29 @@ static void detLogCsv(const char *species, float confidence,
         }
 
         /* Temperature and humidity from SHT30 */
-        int32_t tempWhole = sht30TempC100 / 100;
-        int32_t tempFrac  = sht30TempC100 % 100;
-        if (tempFrac < 0) tempFrac = -tempFrac;
-        uint32_t humWhole = sht30HumRH100 / 100;
-        uint32_t humFrac  = sht30HumRH100 % 100;
+        /* Temperature and humidity from SHT30 — left as empty CSV cells when the
+         * last read failed, rather than repeating a stale value (see sht30Read). */
+        char tempStr[12] = "";
+        char humStr[12]  = "";
+        if (dev.env.shtValid) {
+            int32_t tempWhole = sht30TempC100 / 100;
+            int32_t tempFrac  = sht30TempC100 % 100;
+            if (tempFrac < 0) tempFrac = -tempFrac;
+            uint32_t humWhole = sht30HumRH100 / 100;
+            uint32_t humFrac  = sht30HumRH100 % 100;
+            snprintf(tempStr, sizeof(tempStr), "%ld.%02ld",
+                     (long)tempWhole, (long)tempFrac);
+            snprintf(humStr, sizeof(humStr), "%lu.%02lu",
+                     (unsigned long)humWhole, (unsigned long)humFrac);
+        }
 
         /* FatFS f_printf doesn't support %f or %llu — use snprintf + f_puts */
         char line[224];
         snprintf(line, sizeof(line),
-                 "%s,%s,%.2f,%.6f,%.6f,%.1f,%ld.%02ld,%lu.%02lu,%s,%d,%llu\n",
+                 "%s,%s,%.2f,%.6f,%.6f,%.1f,%s,%s,%s,%d,%llu\n",
                  ts, species, (double)confidence,
                  (double)lat, (double)lon, (double)alt,
-                 (long)tempWhole, (long)tempFrac,
-                 (unsigned long)humWhole, (unsigned long)humFrac,
+                 tempStr, humStr,
                  cfg.stationId, ppsSynced ? 1 : 0,
                  (unsigned long long)windowStartSample);
         f_puts(line, &f);
@@ -2167,10 +2179,13 @@ static void StartBridgeTask(void *argument)
         /* Periodic SHT30 temperature/humidity read (~every 5s) */
         if ((HAL_GetTick() - lastSht30Tick) >= SHT30_INTERVAL_MS) {
             lastSht30Tick = HAL_GetTick();
-            sht30Read();
-            /* Update health min/max from latest readings */
+            uint8_t shtOk = sht30Read();
+            /* Update health min/max from latest readings.  Battery is always
+             * live; temperature only when the read succeeded, else a wedged
+             * sensor would pin tempMin/tempMax to one fabricated value. */
             uint32_t mv = battReadMv();
-            healthUpdateEnvironment(mv, (int32_t)sht30TempC100);
+            healthUpdateEnvironment(mv, shtOk ? (int32_t)sht30TempC100
+                                              : HEALTH_TEMP_INVALID);
             /* Track GPS fix losses */
             uint8_t curGpsValid = gpsData.valid;
             if (prevGpsValid && !curGpsValid)
@@ -2696,6 +2711,7 @@ void healthUpdateEnvironment(uint32_t battMv, int32_t tempC100)
 {
     if (battMv < health.battMinMv) health.battMinMv = battMv;
     if (battMv > health.battMaxMv) health.battMaxMv = battMv;
+    if (tempC100 == HEALTH_TEMP_INVALID) return;
     if (tempC100 < health.tempMinC100) health.tempMinC100 = tempC100;
     if (tempC100 > health.tempMaxC100) health.tempMaxC100 = tempC100;
 }

@@ -158,8 +158,10 @@ typedef struct {
 
     struct {
         uint32_t batteryMv;
-        int16_t  tempC100;        /* 0.01 °C units */
-        uint16_t humRH100;        /* 0.01 %RH units */
+        int16_t  tempC100;        /* 0.01 °C units — only valid if shtValid */
+        uint16_t humRH100;        /* 0.01 %RH units — only valid if shtValid */
+        uint8_t  shtValid;        /* 1 = tempC100/humRH100 are from a good read */
+        uint32_t shtFailCount;    /* consecutive failed reads (0 = last read OK) */
     } env;
 
     struct {
