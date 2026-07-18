@@ -164,24 +164,12 @@ volatile uint32_t dmaCallbackTick = 0;
 #define PPS_SYNC_MAX_AGE_MS 5000U
 
 /* Recording metadata — latched at start, used for GUANO at stop */
-static uint32_t recStartTime = 0;   /* RTC UTC at recording start (DATE/Timestamp) */
+static uint32_t recStartTime = 0;
 static uint32_t recStartDate = 0;
-static float    recStartLat = 0.0f; /* surveyed station position */
+static float    recStartLat = 0.0f;
 static float    recStartLon = 0.0f;
 static float    recStartAlt = 0.0f;
-static uint8_t  recHasPosition = 0; /* surveyed position available → write LOCATION */
-static uint8_t  recHasDate = 0;     /* RTC time available → write DATE/Timestamp */
-static uint8_t  recHasPpsSync = 0;  /* a PPS edge fired during this recording while GPS was
-                                     * freshly synced → PPS_SYNC_UTC/SAMPLE valid. Captured
-                                     * DURING recording (in the PPS ISR), not at file open —
-                                     * so a unit that locks mid-file still anchors. */
-static uint32_t recPpsUtcTime = 0;  /* UTC of the edge BEFORE the anchor edge (anchor = +1s) */
-static uint32_t recPpsUtcDate = 0;
-static uint64_t recPpsAnchorSample = 0; /* recording-relative sample of the anchor PPS edge */
-
-/* Set when the current recording's file was pre-allocated via f_expand — the
- * unwritten tail must be truncated off on close. See startRecording. */
-static uint8_t recPreallocated = 0;
+static uint8_t  recHasGps = 0;
 
 /* PPS-sample correlation for TDOA */
 static uint64_t recStartAbsSample = 0;   /* absolute sample when recording started */
@@ -340,8 +328,8 @@ void writeGuanoChunk(FIL *fp, uint32_t audioDataBytes)
     /* Required: GUANO version (must be first) */
     len += snprintf(buf + len, sizeof(buf) - len, "GUANO|Version: 1.0\n");
 
-    /* Recording timestamp from the RTC (UTC, GPS-disciplined) — every wake, no fix needed. */
-    if (recHasDate) {
+    /* GPS-dependent fields */
+    if (recHasGps) {
         /* Timestamp: ISO 8601 UTC */
         uint32_t dd = recStartDate / 10000;
         uint32_t mm = (recStartDate / 100) % 100;
@@ -353,11 +341,7 @@ void writeGuanoChunk(FIL *fp, uint32_t audioDataBytes)
                         "Timestamp: 20%02lu-%02lu-%02luT%02lu:%02lu:%02luZ\n",
                         (unsigned long)yy, (unsigned long)mm, (unsigned long)dd,
                         (unsigned long)hh, (unsigned long)mn, (unsigned long)ss);
-    }
 
-    /* Surveyed station position — written every recording, independent of GPS lock.
-     * (Position always comes from the deployment survey, never the live fix.) */
-    if (recHasPosition) {
         /* Loc Position: lat lon (decimal degrees, negative for S/W) */
         float lat = recStartLat, lon = recStartLon;
         int latNeg = (lat < 0); if (latNeg) lat = -lat;
@@ -411,28 +395,11 @@ void writeGuanoChunk(FIL *fp, uint32_t audioDataBytes)
                             "QuailTracker|Mic Heading: %u\n", (unsigned)hdg);
     }
 
-    /* PPS-sample correlation for TDOA. Sync Sample + Sync UTC are a matched pair
-     * (anchor edge captured mid-recording while GPS was freshly synced); written
-     * together or not at all. */
+    /* PPS-sample correlation for TDOA */
     if (recPpsEdgesInRec > 0) {
-        if (recHasPpsSync) {
-            uint32_t dd = recPpsUtcDate / 10000;
-            uint32_t mm = (recPpsUtcDate / 100) % 100;
-            uint32_t yy = recPpsUtcDate % 100;
-            uint32_t hh = recPpsUtcTime / 10000;
-            uint32_t mn = (recPpsUtcTime / 100) % 100;
-            uint32_t ss = (recPpsUtcTime % 100) + 1; /* anchor edge = previous edge + 1s */
-            if (ss >= 60) { ss = 0; mn++; }
-            if (mn >= 60) { mn = 0; hh++; }
-            if (hh >= 24) { hh = 0; }
-            len += snprintf(buf + len, sizeof(buf) - len,
-                            "QuailTracker|PPS Sync UTC: 20%02lu-%02lu-%02luT%02lu:%02lu:%02luZ\n",
-                            (unsigned long)yy, (unsigned long)mm, (unsigned long)dd,
-                            (unsigned long)hh, (unsigned long)mn, (unsigned long)ss);
-            len += snprintf(buf + len, sizeof(buf) - len,
-                            "QuailTracker|PPS Sync Sample: %lu\n",
-                            (unsigned long)recPpsAnchorSample);
-        }
+        len += snprintf(buf + len, sizeof(buf) - len,
+                        "QuailTracker|PPS Sync Sample: %lu\n",
+                        (unsigned long)recPpsFirstSample);
         len += snprintf(buf + len, sizeof(buf) - len,
                         "QuailTracker|PPS Edges: %lu\n",
                         (unsigned long)recPpsEdgesInRec);
@@ -508,8 +475,7 @@ void writeFlacVorbisComment(FIL *fp)
     char tags[16][80];
     int ntags = 0;
 
-    /* DATE from the RTC (UTC, GPS-disciplined) — every wake, no fix needed. */
-    if (recHasDate) {
+    if (recHasGps) {
         uint32_t dd = recStartDate / 10000;
         uint32_t mm = (recStartDate / 100) % 100;
         uint32_t yy = recStartDate % 100;
@@ -520,10 +486,7 @@ void writeFlacVorbisComment(FIL *fp)
                  "DATE=20%02lu-%02lu-%02luT%02lu:%02lu:%02luZ",
                  (unsigned long)yy, (unsigned long)mm, (unsigned long)dd,
                  (unsigned long)hh, (unsigned long)mn, (unsigned long)ss);
-    }
 
-    /* LOCATION from the deployment survey — written every recording, never the live fix. */
-    if (recHasPosition) {
         float lat = recStartLat, lon = recStartLon, alt = recStartAlt;
         int latNeg = (lat < 0); if (latNeg) lat = -lat;
         int lonNeg = (lon < 0); if (lonNeg) lon = -lon;
@@ -552,11 +515,8 @@ void writeFlacVorbisComment(FIL *fp)
             snprintf(tags[ntags++], 80, "MIC_HEADING=%u", (unsigned)hdg);
     }
 
-    /* Temperature and humidity from SHT30 — omitted entirely when the last read
-     * failed.  Emitting the stale value instead is what made all 171 files of
-     * the 30-day field test claim a constant 21.92 C / 99.67 %RH: absent tags
-     * are recoverable, plausible fabricated ones are not. */
-    if (dev.env.shtValid) {
+    /* Temperature and humidity from SHT30 */
+    {
         int32_t tW = sht30TempC100 / 100;
         int32_t tF = sht30TempC100 % 100;
         if (tF < 0) tF = -tF;
@@ -569,18 +529,16 @@ void writeFlacVorbisComment(FIL *fp)
 
     /* PPS-sample correlation for TDOA */
     if (recPpsEdgesInRec > 0) {
-        /* The anchor edge's UTC = recPpsUtcTime + 1 second (recPpsUtcTime is the
-         * UTC of the edge BEFORE the anchor edge; RMC lags the pulse ~300ms).
-         * SAMPLE and UTC are a matched pair — both written, or neither — and are
-         * captured during recording, so a mid-file GPS lock still anchors.
-         * Independent of DATE/LOCATION, which are always written. */
-        if (recHasPpsSync) {
-            uint32_t dd = recPpsUtcDate / 10000;
-            uint32_t mm = (recPpsUtcDate / 100) % 100;
-            uint32_t yy = recPpsUtcDate % 100;
-            uint32_t hh = recPpsUtcTime / 10000;
-            uint32_t mn = (recPpsUtcTime / 100) % 100;
-            uint32_t ss = (recPpsUtcTime % 100) + 1;
+        /* UTC time of first PPS edge = recStartTime + 1 second
+         * (recStartTime is the UTC of the PPS edge BEFORE recording started;
+         *  the first PPS during recording is the next whole second) */
+        if (recHasGps) {
+            uint32_t dd = recStartDate / 10000;
+            uint32_t mm = (recStartDate / 100) % 100;
+            uint32_t yy = recStartDate % 100;
+            uint32_t hh = recStartTime / 10000;
+            uint32_t mn = (recStartTime / 100) % 100;
+            uint32_t ss = (recStartTime % 100) + 1;
             if (ss >= 60) { ss = 0; mn++; }
             if (mn >= 60) { mn = 0; hh++; }
             if (hh >= 24) { hh = 0; } /* date rollover not handled — rare edge case */
@@ -588,9 +546,9 @@ void writeFlacVorbisComment(FIL *fp)
                      "PPS_SYNC_UTC=20%02lu-%02lu-%02luT%02lu:%02lu:%02luZ",
                      (unsigned long)yy, (unsigned long)mm, (unsigned long)dd,
                      (unsigned long)hh, (unsigned long)mn, (unsigned long)ss);
-            snprintf(tags[ntags++], 80,
-                     "PPS_SYNC_SAMPLE=%lu", (unsigned long)recPpsAnchorSample);
         }
+        snprintf(tags[ntags++], 80,
+                 "PPS_SYNC_SAMPLE=%lu", (unsigned long)recPpsFirstSample);
         snprintf(tags[ntags++], 80,
                  "PPS_EDGES=%lu", (unsigned long)recPpsEdgesInRec);
         if (recPpsEdgesInRec >= 2) {
@@ -828,65 +786,42 @@ void startRecording(void)
                  (unsigned long)fileCounter, deviceStationId, ext);
     }
 
-    /* Latch metadata for this recording. Three INDEPENDENT sources — the prior
-     * bug bundled them all behind a fresh PPS lock, so the first file after each
-     * wake (GPS not yet locked) lost position AND date, even though neither needs
-     * a live fix:
-     *
-     *   1. POSITION  — always the surveyed station position (the whole point of the
-     *      deployment survey). Never the instantaneous GPS fix; falls back to a live
-     *      fix only when no survey is stored.
-     *   2. DATE      — from the RTC (UTC, kept current by the GPS duty-cycle), so it
-     *      matches the filename and is present every wake without a lock.
-     *   3. PPS_SYNC  — only this needs a FRESH PPS lock. ppsSynced is sticky and
-     *      ppsUtc* freeze on lock loss, so without a freshness check a stale/day-off
-     *      UTC gets written; >PPS_SYNC_MAX_AGE_MS old means not locked now → omit
-     *      ONLY PPS_SYNC_UTC (sample/edges/rate still describe this file's PPS). */
-    if (configGetSurveyCount() > 0) {
-        recStartLat = configGetSurveyLat();
-        recStartLon = configGetSurveyLon();
-        recStartAlt = configGetSurveyAlt();
-        recHasPosition = 1;
-    } else if (ppsSynced && ppsUtcDate != 0 &&
-               (HAL_GetTick() - ppsSyncTick) < PPS_SYNC_MAX_AGE_MS) {
-        recStartLat = ppsLatitude;
-        recStartLon = ppsLongitude;
-        recStartAlt = ppsAltitude;
-        recHasPosition = 1;
+    /* Latch GPS state for GUANO metadata.
+     * Prefer surveyed position (sub-meter accuracy) over instantaneous fix.
+     * Gate on a FRESH PPS sync: ppsSynced is a sticky latch and ppsUtc* freeze
+     * when GPS loses lock, so without a freshness check a stale/wrong UTC gets
+     * written as PPS_SYNC_UTC — observed in the field as day-off timestamps and
+     * identical syncs carried across consecutive chunks. When locked, RMC (and
+     * thus ppsSyncTick) updates every second; >PPS_SYNC_MAX_AGE_MS old means
+     * GPS isn't locked now, so omit all GPS-derived metadata for this file. */
+    if (ppsSynced && ppsUtcDate != 0 &&
+        (HAL_GetTick() - ppsSyncTick) < PPS_SYNC_MAX_AGE_MS) {
+        recStartTime = ppsUtcTime;
+        recStartDate = ppsUtcDate;
+
+        if (configGetSurveyCount() > 0) {
+            recStartLat = configGetSurveyLat();
+            recStartLon = configGetSurveyLon();
+            recStartAlt = configGetSurveyAlt();
+        } else {
+            recStartLat  = ppsLatitude;
+            recStartLon  = ppsLongitude;
+            recStartAlt  = ppsAltitude;
+        }
+        recHasGps = 1;
     } else {
-        recHasPosition = 0;
+        recHasGps = 0;
     }
 
-    if (dev.pwr.rtcSynced) {
-        uint8_t rH, rM, rS, rD, rMo;
-        uint16_t rY;
-        rtcGetTime(&rH, &rM, &rS);
-        rtcGetDate(&rD, &rMo, &rY);
-        recStartDate = (uint32_t)rD * 10000u + (uint32_t)rMo * 100u + (uint32_t)(rY % 100);
-        recStartTime = (uint32_t)rH * 10000u + (uint32_t)rM * 100u + (uint32_t)rS;
-        recHasDate = 1;
-    } else {
-        recHasDate = 0;
-    }
-
-    /* PPS_SYNC anchor is captured DURING recording by the PPS ISR (the first edge
-     * that fires while GPS is freshly synced), NOT snapshotted here — a unit that
-     * only locks part-way into the file would otherwise lose PPS_SYNC_UTC for the
-     * whole recording. Just reset the anchor state; the ISR fills it in.
-     *
-     * Latch absolute sample position too. Disable PPS EXTI while writing the 64-bit
-     * values — the ISR reads/writes them and a torn 64-bit access would garble the
-     * sample positions. */
+    /* Latch absolute sample position for PPS-sample correlation (TDOA).
+     * Disable PPS EXTI while writing 64-bit values — the ISR reads them
+     * and a torn 64-bit write would produce garbage sample positions. */
     HAL_NVIC_DisableIRQ(EXTI8_IRQn);
     __DSB();
     recStartAbsSample = audioAbsSampleNow();
     recPpsEdgesInRec = 0;
     recPpsFirstSample = 0;
     recPpsLastSample = 0;
-    recHasPpsSync = 0;
-    recPpsAnchorSample = 0;
-    recPpsUtcTime = 0;
-    recPpsUtcDate = 0;
     HAL_NVIC_EnableIRQ(EXTI8_IRQn);
 
     strncpy(recFilename, fname, sizeof(recFilename) - 1);
@@ -897,35 +832,6 @@ void startRecording(void)
         printf("f_open FAILED: %d\r\n", fres);
         recFilename[0] = '\0';
         return;
-    }
-
-    /* Pre-allocate the whole chunk as one contiguous block so the FAT chain and
-     * FSInfo are written ONCE here, not grown cluster-by-cluster on every write.
-     * That removes the per-second FAT/FSInfo rewrites that hammer a fixed region
-     * of the card — the wear pattern that likely killed the marginal field cards
-     * (see the 30-day field test). Only meaningful for time-bounded chunks; a
-     * chunkMinutes==0 continuous recording has no size to pre-allocate.
-     *
-     * Size = the WORST-CASE (uncompressed PCM) length of one chunk. FLAC comes
-     * in well under that and the unused tail is truncated on close; if input is
-     * pathologically incompressible and overruns, f_write just extends normally.
-     * f_expand needs a contiguous free run — on a fragmented/near-full card it
-     * returns FR_DENIED, and we fall back to ordinary allocation. Must run before
-     * any write (f_expand requires objsize==0). */
-    recPreallocated = 0;
-    extern uint8_t configGetChunkMinutes(void);
-    uint8_t chunkMin = configGetChunkMinutes();
-    if (chunkMin > 0) {
-        FSIZE_t expandBytes = (FSIZE_t)chunkMin * 60u
-                            * (FSIZE_t)(SAMPLE_RATE * 6)   /* stereo 24-bit PCM */
-                            + 64u * 1024u;                 /* header/seektable/metadata slack */
-        if (f_expand(&wavFile, expandBytes, 1) == FR_OK) {
-            recPreallocated = 1;
-        } else {
-            /* Non-fatal: record without pre-alloc (older churn behaviour). */
-            printf("f_expand skipped (no contiguous %lu KB) — normal alloc\r\n",
-                   (unsigned long)(expandBytes / 1024));
-        }
     }
 
     /* Write placeholder header (will be finalized on stop) */
@@ -987,10 +893,6 @@ void stopRecording(void)
         /* Append GUANO metadata chunk after audio data */
         writeGuanoChunk(&wavFile, totalDataBytes);
 
-        /* fptr is now at true EOF. Release the pre-allocated tail (f_expand left
-         * the file at full chunk size) before the f_size-based RIFF calc below. */
-        if (recPreallocated) f_truncate(&wavFile);
-
         /* Rewrite WAV header with actual audio data size */
         f_lseek(&wavFile, 0);
         WAV_WriteHeader(&wavFile, SAMPLE_RATE, totalDataBytes);
@@ -1015,10 +917,6 @@ void stopRecording(void)
             totalDataBytes += bw;
             flac_enc_notify_write(&flacEncoder, bw);
         }
-
-        /* fptr is now at end of the last audio frame = true EOF. Release the
-         * pre-allocated tail here, before seeking back to patch the header. */
-        if (recPreallocated) f_truncate(&wavFile);
 
         /* Rewrite STREAMINFO + SEEKTABLE + VORBIS_COMMENT at file offset 0 */
         f_lseek(&wavFile, 0);
@@ -1083,11 +981,6 @@ void stopRecording(void)
     }
 }
 
-/* Minimum window time left to bother opening another chunk. Below this the
- * file would hold a couple of seconds of audio at best, and at ~0 it holds
- * none at all — just a header. */
-#define CHUNK_MIN_TAIL_SECS  10u
-
 /* Split recording into a new file (chunk boundary).
  * Finalizes the current file and starts a new one seamlessly.
  * The ring buffer keeps filling during the swap so no audio is lost. */
@@ -1108,18 +1001,6 @@ void chunkRecording(void)
     /* Temporarily clear isRecording so stopRecording doesn't reset filename
      * used for logging, but we still need to finalize the file. */
     stopRecording();
-
-    /* Don't open a new chunk the recording window has no room for.  Reads the
-     * headroom published by powerScheduleCheck (~1 Hz) rather than evaluating
-     * the schedule here — this runs on the real-time audio task and
-     * schedule_evaluate() does solar trig.  Up to ~1 s stale, immaterial
-     * against a 10 s threshold.  schedArmed==0 (dev mode, no windows, manual)
-     * rotates chunks exactly as before. */
-    if (dev.pwr.schedArmed && dev.pwr.secsUntilWindowEnd < CHUNK_MIN_TAIL_SECS) {
-        printf("Chunk: window closing (%lus left) — not starting a new file\r\n",
-               (unsigned long)dev.pwr.secsUntilWindowEnd);
-        return;
-    }
 
     /* Immediately start a new recording with a fresh timestamp */
     startRecording();
@@ -1822,33 +1703,6 @@ static void MX_SPI2_Init(void)
         Error_Handler();
 }
 
-/* Recover SPI2 (ESP32 bridge) from a wedged state — the STM32U5 SPI state
- * machine (TSIZE/CSTART/CSUSP/FIFO) can latch if the peer was mid-transfer when
- * we entered Stop 2, or PB12's sleep repurposing as an EXTI wake input left it
- * out of sync. Mirrors SPI_Recover() in user_diskio.c: an RCC reset returns the
- * peripheral to power-on defaults unconditionally; the GPIO toggle re-syncs the
- * pin mux. Init runs once at boot, so nothing else ever cleared this. PB12 stays
- * a GPIO CS output and is left untouched. */
-void SPI2_Recover(void)
-{
-    __HAL_RCC_SPI2_FORCE_RESET();
-    __HAL_RCC_SPI2_RELEASE_RESET();
-
-    GPIO_InitTypeDef g = {0};
-    g.Pin = GPIO_PIN_13 | GPIO_PIN_14 | GPIO_PIN_15;
-    g.Mode = GPIO_MODE_INPUT;
-    g.Pull = GPIO_PULLUP;
-    HAL_GPIO_Init(GPIOB, &g);
-    HAL_Delay(1);
-    g.Mode = GPIO_MODE_AF_PP;
-    g.Pull = GPIO_NOPULL;
-    g.Speed = GPIO_SPEED_FREQ_HIGH;
-    g.Alternate = GPIO_AF5_SPI2;
-    HAL_GPIO_Init(GPIOB, &g);
-
-    HAL_SPI_Init(&hspi2);
-}
-
 /**
   * @brief GPIO Initialization Function
   * @param None
@@ -2025,49 +1879,12 @@ static void MX_ADC1_Init(void)
  * τ ≈ 2.5 µs into the ADC's S&H cap, so 68 cycles (1.7 µs at 40 MHz ADC
  * clock) doesn't let the cap settle and the reading comes in ~10% low.
  * 814 cycles (20.4 µs, ~8τ) settles to within 14-bit accuracy. */
-/* Recover ADC1 from a wedged/disabled state.
- *
- * ADC init + offset calibration run once at boot; the Stop 2 sleep/wake path
- * never touches the ADC, and on STM32U5 Stop 2 can power down the ADC analog
- * domain (ADEN/ADVREGEN state not guaranteed). A full DeInit + re-init restores
- * the voltage regulator, calibration, and VDDA reference. Same recover pattern
- * as SPI_Recover()/I2C_Recover(). NOTE: MX_ADC1_Init calls adcReadRaw (for
- * VREFINT), so this must live OUTSIDE adcReadRaw to avoid recursion. */
-void ADC_Recover(void)
-{
-    HAL_ADC_DeInit(&hadc1);
-    MX_ADC1_Init();
-}
-
-/* Returns battery millivolts; sets dev.env.battValid. On a failed read it leaves
- * battValid clear (callers MUST check it, not trust the returned last value) and
- * self-heals the ADC after 2 strikes. A previous version silently kept the last
- * batteryMv on failure — the same fail-silent trap as the SHT30 freeze. */
 uint32_t battReadMv(void)
 {
     uint32_t raw = adcReadRaw(ADC_CHANNEL_1, ADC_SAMPLETIME_814CYCLES);
-    if (raw > 0) {
+    if (raw > 0)
         batteryMv = (raw * vddaMv * 2) / 16383;
-        if (dev.env.adcFailCount)
-            printf("ADC1: recovered after %lu failed reads\r\n",
-                   (unsigned long)dev.env.adcFailCount);
-        dev.env.adcFailCount = 0;
-        dev.env.battValid = 1;
-        return batteryMv;
-    }
-
-    dev.env.battValid = 0;
-    dev.env.adcFailCount++;
-    errLog(ERR_ADC_READ, dev.env.adcFailCount);
-    /* Loud on the first failure, then rarely (battery is polled ~every 5 s). */
-    if (dev.env.adcFailCount == 1 || (dev.env.adcFailCount % 720) == 0)
-        printf("ADC1: battery read FAILED (%lu consecutive)\r\n",
-               (unsigned long)dev.env.adcFailCount);
-    if (dev.env.adcFailCount >= 2) {
-        errLog(ERR_ADC_RECOVER, 0);
-        ADC_Recover();
-    }
-    return batteryMv;  /* last known — caller checks dev.env.battValid */
+    return batteryMv;
 }
 
 /* ---- I2C1 init (SHT30 on PB6/PB7) ---- */
@@ -2106,89 +1923,31 @@ static uint8_t sht30Crc(const uint8_t *data, uint8_t len)
     return crc;
 }
 
-/* Recover I2C1 from a wedged bus.
- *
- * The SHT30 sits on the switched PERIPH rail (PD11).  Stop 2 entry takes
- * PB6/PB7 to analog and cuts PD11, so the sensor is power-cycled with the bus
- * floating; that can leave the peripheral's BUSY flag latched, after which
- * every HAL_I2C_Master_Transmit fails forever.  MX_I2C1_Init runs only once at
- * boot, so nothing ever cleared it — this is why the 30-day field test wrote
- * one boot-time reading into all 171 files.
- *
- * Same remedy as SPI_Recover() in user_diskio.c: an RCC reset returns the
- * peripheral to power-on defaults regardless of what state it was stuck in. */
-void I2C_Recover(void)
-{
-    HAL_I2C_DeInit(&hi2c1);
-    __HAL_RCC_I2C1_FORCE_RESET();
-    HAL_Delay(1);
-    __HAL_RCC_I2C1_RELEASE_RESET();
-    MX_I2C1_Init();
-}
-
 /* Read SHT30 single-shot, high repeatability, no clock stretch.
- *
- * Returns 1 and updates sht30TempC100/sht30HumRH100 on success.  Returns 0 on
- * error and leaves dev.env.shtValid clear — callers MUST NOT emit the stored
- * values in that case.  A previous version returned silently on every error
- * path, so a dead sensor kept publishing its last good reading indefinitely;
- * an entire 30-day deployment shipped a constant 21.92 C / 99.67 %RH. */
-uint8_t sht30Read(void)
+ * Updates sht30TempC100 and sht30HumRH100.  Silently keeps old values on error. */
+void sht30Read(void)
 {
-    uint8_t ok = 0;
+    uint8_t cmd[2] = { 0x24, 0x00 };
+    if (HAL_I2C_Master_Transmit(&hi2c1, 0x44 << 1, cmd, 2, 100) != HAL_OK)
+        return;
 
-    do {
-        uint8_t cmd[2] = { 0x24, 0x00 };
-        if (HAL_I2C_Master_Transmit(&hi2c1, 0x44 << 1, cmd, 2, 100) != HAL_OK)
-            break;
+    HAL_Delay(16);  /* 15 ms max for high repeatability */
 
-        HAL_Delay(16);  /* 15 ms max for high repeatability */
+    uint8_t rx[6];
+    if (HAL_I2C_Master_Receive(&hi2c1, 0x44 << 1, rx, 6, 100) != HAL_OK)
+        return;
 
-        uint8_t rx[6];
-        if (HAL_I2C_Master_Receive(&hi2c1, 0x44 << 1, rx, 6, 100) != HAL_OK)
-            break;
+    /* Verify CRC on both words */
+    if (sht30Crc(rx, 2) != rx[2] || sht30Crc(rx + 3, 2) != rx[5])
+        return;
 
-        /* Verify CRC on both words */
-        if (sht30Crc(rx, 2) != rx[2] || sht30Crc(rx + 3, 2) != rx[5])
-            break;
+    uint16_t rawT = ((uint16_t)rx[0] << 8) | rx[1];
+    uint16_t rawH = ((uint16_t)rx[3] << 8) | rx[4];
 
-        uint16_t rawT = ((uint16_t)rx[0] << 8) | rx[1];
-        uint16_t rawH = ((uint16_t)rx[3] << 8) | rx[4];
-
-        /* temp = -45 + 175 * rawT / 65535  →  in 0.01 °C units */
-        sht30TempC100 = (int16_t)(-4500 + (int32_t)17500 * rawT / 65535);
-        /* hum = 100 * rawH / 65535  →  in 0.01 %RH units */
-        sht30HumRH100 = (uint16_t)((uint32_t)10000 * rawH / 65535);
-        ok = 1;
-    } while (0);
-
-    if (ok) {
-        if (dev.env.shtFailCount)
-            printf("SHT30: recovered after %lu failed reads\r\n",
-                   (unsigned long)dev.env.shtFailCount);
-        dev.env.shtFailCount = 0;
-        dev.env.shtValid = 1;
-        return 1;
-    }
-
-    dev.env.shtValid = 0;
-    dev.env.shtFailCount++;
-    errLog(ERR_SHT30_READ, dev.env.shtFailCount);
-
-    /* Log the first failure and then rarely — a wedged bus fails every 5 s and
-     * would otherwise flood RTT for the whole deployment. */
-    if (dev.env.shtFailCount == 1 || (dev.env.shtFailCount % 720) == 0)
-        printf("SHT30: read FAILED (%lu consecutive)\r\n",
-               (unsigned long)dev.env.shtFailCount);
-
-    /* Two strikes, then reset the peripheral — covers the stuck-BUSY case
-     * without hammering the bus on a transient NACK. */
-    if (dev.env.shtFailCount >= 2) {
-        errLog(ERR_I2C_RECOVER, 0);
-        I2C_Recover();
-    }
-
-    return 0;
+    /* temp = -45 + 175 * rawT / 65535  →  in 0.01 °C units */
+    sht30TempC100 = (int16_t)(-4500 + (int32_t)17500 * rawT / 65535);
+    /* hum = 100 * rawH / 65535  →  in 0.01 %RH units */
+    sht30HumRH100 = (uint16_t)((uint32_t)10000 * rawH / 65535);
 }
 
 static void MX_RTC_Init(void)
@@ -2277,27 +2036,6 @@ void rtcGetDate(uint8_t *day, uint8_t *month, uint16_t *year)
     *day   = sDate.Date;
     *month = sDate.Month;
     *year  = 2000 + (uint16_t)sDate.Year;
-}
-
-/* RTC → UNIX epoch seconds (proleptic Gregorian). Returns 0 if the RTC has not
- * been GPS-disciplined yet, so error timestamps are absolute where available. */
-uint32_t rtcEpochNow(void)
-{
-    if (!dev.pwr.rtcSynced) return 0;
-    uint8_t hh, mm, ss, dd, mo;
-    uint16_t yy;
-    rtcGetTime(&hh, &mm, &ss);
-    rtcGetDate(&dd, &mo, &yy);
-
-    static const uint16_t cumDays[12] = {0,31,59,90,120,151,181,212,243,273,304,334};
-    uint32_t y = yy;
-    uint32_t days = (y - 1970) * 365
-                  + (y - 1969) / 4 - (y - 1901) / 100 + (y - 1601) / 400
-                  + cumDays[(mo - 1u) % 12u]
-                  + (dd - 1u);
-    if (mo > 2 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0))
-        days += 1;   /* leap day already passed this year */
-    return days * 86400u + (uint32_t)hh * 3600u + (uint32_t)mm * 60u + ss;
 }
 
 wake_source_t enterStop2(uint32_t seconds)
@@ -2469,17 +2207,6 @@ wake_source_t enterStop2(uint32_t seconds)
     (void)USART1->RDR;
     (void)USART3->RDR;
 
-    /* Fully re-establish USART3 (debug console) — the error-clear above handles
-     * the common case, but a boot-only peripheral disturbed by the PD8/PD9
-     * analog-during-sleep repurposing deserves a clean re-init. Do NOT call
-     * MX_USART3_UART_Init here: it Error_Handler()-hangs on failure, which would
-     * brick the unit on wake over a debug-only peripheral. Note-and-continue
-     * instead (printf still reaches RTT). USART1/GPS is re-established by
-     * gpsSetPower on the next power-on. RXNE IT is re-enabled below. */
-    HAL_UART_DeInit(&husart3);
-    if (HAL_UART_Init(&husart3) != HAL_OK)
-        printf("USART3: wake re-init failed — console degraded, continuing\r\n");
-
     /* Restore all NVIC interrupt enables (saved before sleep) */
     for (uint32_t i = 0; i < 8u; i++)
         NVIC->ISER[i] = nvic_iser_save[i];
@@ -2609,18 +2336,6 @@ void HAL_GPIO_EXTI_Rising_Callback(uint16_t GPIO_Pin)
                 recPpsFirstSample = recSample;
             recPpsLastSample = recSample;
             recPpsEdgesInRec++;
-
-            /* Anchor the first edge that fires while GPS is freshly synced. This
-             * edge's UTC = ppsUtcTime + 1s (RMC lags ~300ms, so ppsUtcTime is the
-             * PREVIOUS edge's second). Captured here, mid-recording, so locking
-             * after the file opened still yields a valid TDOA anchor. */
-            if (!recHasPpsSync && ppsSynced && ppsUtcDate != 0 &&
-                (HAL_GetTick() - ppsSyncTick) < PPS_SYNC_MAX_AGE_MS) {
-                recPpsAnchorSample = recSample;
-                recPpsUtcTime = ppsUtcTime;
-                recPpsUtcDate = ppsUtcDate;
-                recHasPpsSync = 1;
-            }
         }
     }
 }

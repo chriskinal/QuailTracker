@@ -84,21 +84,7 @@ static __attribute__((used, noreturn)) void hf_dump_and_spin(const char *tag, ui
     hf_puts("R2="); hf_hex32(frame[2]); hf_puts(" R3="); hf_hex32(frame[3]); hf_puts("\r\n");
     hf_puts("R12="); hf_hex32(frame[4]); hf_puts("\r\n");
     GPIOD->BSRR = GPIO_PIN_13;  /* status LED on (PD13) */
-
-    /* Stash the fault in TAMP backup registers (survive reset) so the next boot
-     * can log it to the error log — a field unit has no J-Link to see the RTT
-     * dump above. BKP0R magic marks "a fault happened". DBP was enabled at boot. */
-    TAMP->BKP0R = CRASH_MAGIC_FAULT;
-    TAMP->BKP1R = cfsr;
-    TAMP->BKP2R = frame[6];      /* faulting PC */
-    TAMP->BKP3R = hfsr;
-    TAMP->BKP4R = frame[5];      /* LR */
-
-    /* Brief on-LED for a bench operator, then self-heal reset instead of
-     * spinning 30 s until the ESP watchdog fires — recover the process. */
-    for (volatile uint32_t i = 0; i < 40000000UL; i++) { }  /* ~1 s at 160 MHz */
-    NVIC_SystemReset();
-    for (;;) { }  /* unreachable */
+    for (;;) { }
 }
 #define HF_DUMP(tag) do {                                            \
     uint32_t *frame;                                                 \

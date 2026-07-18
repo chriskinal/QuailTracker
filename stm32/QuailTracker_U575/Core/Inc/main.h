@@ -55,19 +55,8 @@ void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
 #include "device_state.h"
-/* Crash markers stashed in TAMP->BKP0R before a self-reset, read by
- * checkResetCause() on the next boot. */
-#define CRASH_MAGIC_FAULT    0xFA017C0DUL   /* hard fault (BKP1..4 = CFSR/PC/HFSR/LR) */
-#define CRASH_MAGIC_STACKOF  0x57AC0F10UL   /* FreeRTOS stack overflow / assert */
 wake_source_t enterStop2(uint32_t seconds);
-uint8_t sht30Read(void);   /* 1 = success; on 0, dev.env temp/hum are NOT valid */
-void I2C_Recover(void);
-void ADC_Recover(void);
-void SPI2_Recover(void);
-uint32_t rtcEpochNow(void);            /* RTC → UNIX epoch seconds; 0 if not synced */
-void errLog(uint16_t code, uint32_t arg);  /* record an error occurrence (err_code_t) */
-void errLogDump(void);                 /* append the error table + recent ring to diag.log */
-void checkResetCause(void);            /* log why the last run ended (fault / warm reset) */
+void sht30Read(void);
 void rtcSyncFromGps(void);
 void rtcGetTime(uint8_t *hours, uint8_t *minutes, uint8_t *seconds);
 void rtcGetDate(uint8_t *day, uint8_t *month, uint16_t *year);
@@ -80,7 +69,7 @@ void rtcGetDate(uint8_t *day, uint8_t *month, uint16_t *year);
 #define SD_CD_GPIO_Port GPIOC
 
 /* USER CODE BEGIN Private defines */
-#define FW_VERSION "0.10.31"
+#define FW_VERSION "0.10.17"
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

@@ -50,9 +50,6 @@
  * these top pages — and the config — survive a firmware update. */
 #define CONFIG_FLASH_ADDR 0x080FE000   /* last 8 KB page of the 1 MB part */
 
-#define ERRLOG_MAGIC       0x51544C47   /* "QTLG" */
-#define ERRLOG_VERSION     1
-#define ERRLOG_PAGE_OFFSET 256          /* errlog sits right after the 256 B health struct, same page */
 #define HEALTH_MAGIC       0x51544853   /* "QTHS" */
 #define HEALTH_VERSION     1
 #define HEALTH_FLASH_ADDR  0x080FC000   /* one page below config */
@@ -178,7 +175,7 @@ extern int formatSD(void);
 
 /* Battery/SHT30 functions from main.c */
 extern uint32_t battReadMv(void);
-extern uint8_t sht30Read(void);
+extern void sht30Read(void);
 
 #define SURVEY_DURATION_MS  300000      /* 5 minutes */
 #define SURVEY_MIN_SATS     4           /* minimum satellites for valid fix */
@@ -198,7 +195,6 @@ device_config_t cfg __attribute__((aligned(16)));
 
 /* Flash-persisted health statistics */
 health_stats_t health __attribute__((aligned(16)));
-err_log_t errLogData __attribute__((aligned(16)));   /* RAM error log; flash-backed with health */
 static uint32_t lastHealthSaveTick = 0;
 #define HEALTH_SAVE_INTERVAL_MS 300000  /* 5 minutes */
 static uint8_t prevGpsValid = 0;  /* for GPS fix loss detection */
@@ -215,11 +211,6 @@ static uint32_t lastSpiPollTick = 0;
 /* ---- Live audio streaming state ---- */
 static volatile uint8_t streamActive = 0;
 static volatile uint8_t streamChannel = 0;  /* 0=L, 1=R */
-
-/* Set by SPI_CMD_GET_ERRLOG; the next non-streaming frame carries the error log. */
-static volatile uint8_t errlogRequested = 0;
-static void errLogFillPayload(spi_errlog_payload_t *p);
-_Static_assert(SPI_ERRLOG_ROWS == ERR_CODE_COUNT, "SPI_ERRLOG_ROWS must match ERR_CODE_COUNT");
 static uint32_t streamTailL = 0;   /* independent ring tail for left channel */
 static uint32_t streamTailR = 0;   /* independent ring tail for right channel */
 static uint32_t streamLastSpiTick = 0;  /* auto-stop timeout */
@@ -230,10 +221,6 @@ static uint32_t streamLastSpiTick = 0;  /* auto-stop timeout */
 #define GPS_FIX_TIMEOUT_MS         15000 /* max wait for GPS fix during duty cycle */
 #define OTA_SELF_CONFIRM_MS        20000 /* uptime after which a trial image self-confirms (not bricked) */
 #define SCHEDULE_CHECK_INTERVAL_MS 1000  /* how often to evaluate schedule */
-#define GPS_WARMUP_SEC                90  /* wake GPS this many seconds before a recording
-                                           * window so it acquires a fix before recording —
-                                           * Stop 2 cuts GPS_VCC, so this lead is spent awake.
-                                           * The 0.10.19 mid-file anchor is the safety net. */
 #define USER_CONNECTED_IDLE_MS    300000 /* 5 min: backstop only — STM stays awake after an
                                           * ESP wake until SPI idle IF the live client count
                                           * is unavailable (ESP silent). Real presence wins. */
@@ -259,11 +246,7 @@ static wake_source_t enterScheduledSleep(uint32_t seconds);
 /* Forward declarations for health functions */
 static void healthLoad(void);
 int healthSave(void);
-static uint32_t errLogComputeCrc(const err_log_t *e);
 void healthReset(void);
-/* Sentinel temperature meaning "no valid reading" — outside any real range and
- * outside int16_t, so it can never collide with a genuine tempC100. */
-#define HEALTH_TEMP_INVALID  INT32_MIN
 void healthUpdateEnvironment(uint32_t battMv, int32_t tempC100);
 void healthUpdateRecStart(const char *filename);
 void healthUpdateRecStop(uint32_t bytes, uint32_t durationSecs);
@@ -278,27 +261,6 @@ static uint32_t lpfAlpha   = 0;   /* computed from bpfHigh, Q16 */
 static int32_t  hpfPrevInR  = 0;
 static int32_t  hpfPrevOutR = 0;
 static int32_t  lpfPrevOutR = 0;
-
-/* Recording file-sync cadence. f_sync flushes the dirty dirent (and, without
- * f_expand, FAT/FSInfo) to the card; doing it every ~1 s rewrote a fixed metadata
- * region ~2.6M times over the 30-day field test — the wear that likely killed the
- * marginal cards. With f_expand pre-allocation the FAT/FSInfo churn is already
- * gone; this interval throttles the remaining dirent rewrites. TRADEOFF: an
- * unclean power loss forfeits up to this many ms of audio (full sectors are
- * written continuously by f_write regardless; only the trailing partial sector +
- * metadata wait for the sync). Clean stops (chunk rotation, window end, manual)
- * always finalize fully. Tune here. */
-#define REC_SYNC_INTERVAL_MS  15000u
-static uint32_t recLastSyncTick = 0;
-static uint8_t  recSyncArmed    = 0;   /* 0 until the first write of a recording */
-
-/* Write-error recovery. The SD driver already retries a block; if a write still
- * fails (card genuinely faulting), recover the PROCESS — remount + open a fresh
- * file and keep recording — rather than lose the rest of the window. Bounded so a
- * truly dead card can't spin; the budget resets each recording session. */
-#define REC_WRITE_ERR_MAX_RESTARTS  3
-static uint8_t recWriteErrRestarts = 0;
-static uint8_t recRestartPending   = 0;
 
 /* Compute Q16 HPF alpha from cutoff frequency: alpha = e^(-2*pi*fc/fs) * 65536 */
 static uint32_t computeHpfAlpha(uint16_t fc) {
@@ -356,11 +318,7 @@ osThreadId_t audioTaskHandle;
 const osThreadAttr_t audioTask_attributes = {
   .name = "audioTask",
   .priority = (osPriority_t) osPriorityAboveNormal,
-  /* 16 KB: the chunk-rotation path (chunkRecording → startRecording → f_expand /
-   * f_open → FatFS directory walk with the 512 B on-stack LFN buffer) runs on top
-   * of the audio DSP here. 8 KB overflowed at each rotation once f_expand was
-   * added (0.10.22) — the 0.10.17 field build had no f_expand and never faulted. */
-  .stack_size = 4096 * 4
+  .stack_size = 2048 * 4
 };
 /* Definitions for cliTask */
 osThreadId_t cliTaskHandle;
@@ -524,26 +482,15 @@ void StartAudioTask(void *argument)
         actHolddown = 0; actGateOpen = 1;
         melAccumIdx = 0;
         mel_reset();
-        recRestartPending = 0;
         startRecording();
       }
-      else if (cmd == CMD_STOP_REC) {
-        /* A clean stop ends the session — restore the write-error budget so the
-         * next window starts fresh. (Not reset on START: a recovery restart
-         * re-enters via CMD_START_REC and must keep spending the same budget.) */
-        recWriteErrRestarts = 0;
-        recRestartPending = 0;
-        stopRecording();
-      }
+      else if (cmd == CMD_STOP_REC) stopRecording();
     }
 
     /* Drain ring buffer into encoder/file writer.
      * The ISR copies DMA data into the ring immediately on each half-complete,
      * so no data is lost even if this task is blocked on f_sync for 100ms+. */
     if (isRecording) {
-      /* Arm the sync timer on the first pass of a new recording so the first
-       * flush lands one full interval in, not immediately after the open sync. */
-      if (!recSyncArmed) { recLastSyncTick = HAL_GetTick(); recSyncArmed = 1; }
       /* Wait for both L and R ring buffers to have data */
       while ((ringHead - ringTail) >= (AUDIO_BUF_SIZE / 2) &&
              (ringHeadR - ringTailR) >= (AUDIO_BUF_SIZE / 2)) {
@@ -746,21 +693,17 @@ void StartAudioTask(void *argument)
           UINT bw;
           FRESULT fres = f_write(&wavFile, packed, blockLen * 6, &bw);
           if (fres != FR_OK) {
-            printf("f_write FAILED: %d at %lu bytes — recovering\r\n", fres, (unsigned long)totalDataBytes);
+            printf("f_write FAILED: %d at %lu bytes\r\n", fres, (unsigned long)totalDataBytes);
             f_close(&wavFile);
             isRecording = 0;
-            recRestartPending = 1;   /* handled in the not-recording branch */
           }
           totalDataBytes += bw;
 
-          /* Sync on a wall-clock interval (see REC_SYNC_INTERVAL_MS). */
-          if (isRecording &&
-              (HAL_GetTick() - recLastSyncTick) >= REC_SYNC_INTERVAL_MS) {
+          /* Sync every ~1 second (stereo: 2ch × 3 bytes × 48000 = 288000 bytes/sec) */
+          if ((totalDataBytes % (SAMPLE_RATE * 6)) < (uint32_t)(blockLen * 6)) {
             f_sync(&wavFile);
-            recLastSyncTick = HAL_GetTick();
           }
           osMutexRelease(fileMtxHandle);
-          if (!isRecording) break;   /* write failed → stop draining into a closed file */
         } else {
           /* FLAC encode -accumulates 8 calls into one 4096-sample block */
           uint32_t encoded = flac_enc_process_stereo(&flacEncoder, pcmBuffer, pcmBufferR, blockLen);
@@ -769,22 +712,18 @@ void StartAudioTask(void *argument)
             UINT bw;
             FRESULT fres = f_write(&wavFile, flacEncoder.outBuf, encoded, &bw);
             if (fres != FR_OK) {
-              printf("f_write FAILED: %d at %lu bytes — recovering\r\n", fres, (unsigned long)totalDataBytes);
+              printf("f_write FAILED: %d at %lu bytes\r\n", fres, (unsigned long)totalDataBytes);
               f_close(&wavFile);
               isRecording = 0;
-              recRestartPending = 1;   /* handled in the not-recording branch */
             }
             totalDataBytes += bw;
             flac_enc_notify_write(&flacEncoder, bw);
 
-            /* Sync on a wall-clock interval (see REC_SYNC_INTERVAL_MS). */
-            if (isRecording &&
-                (HAL_GetTick() - recLastSyncTick) >= REC_SYNC_INTERVAL_MS) {
+            /* Sync every ~8 frames (~680ms) */
+            if ((flacEncoder.frameNumber % 8) == 0) {
               f_sync(&wavFile);
-              recLastSyncTick = HAL_GetTick();
             }
             osMutexRelease(fileMtxHandle);
-            if (!isRecording) break;   /* write failed → stop draining into a closed file */
           }
         }
         /* Step 7: Check chunk duration — split file if elapsed */
@@ -801,42 +740,6 @@ skip_write:
         (void)0; /* label requires a statement */
       }
     } else {
-      recSyncArmed = 0;   /* re-arm the sync timer for the next recording */
-
-      /* Recover from a write error: remount the card (runs SPI_Recover) and open
-       * a fresh file so recording continues, rather than losing the rest of the
-       * window. Bounded — a truly dead card stops after N and waits for the next
-       * window (CMD_START_REC resets the budget). */
-      if (recRestartPending) {
-        recRestartPending = 0;
-        if (recWriteErrRestarts < REC_WRITE_ERR_MAX_RESTARTS) {
-          recWriteErrRestarts++;
-          errLog(ERR_REC_RESTART, recWriteErrRestarts);
-          printf("REC: write-error recovery %u/%u — remount + new file\r\n",
-                 recWriteErrRestarts, REC_WRITE_ERR_MAX_RESTARTS);
-          extern FATFS USERFatFS;
-          extern char USERPath[];
-          extern void USER_disk_deinit(void);
-          osMutexAcquire(fileMtxHandle, osWaitForever);
-          f_mount(NULL, USERPath, 0);   /* unmount */
-          USER_disk_deinit();           /* force re-init → SPI_Recover on next mount */
-          sdMounted = 0;
-          if (f_mount(&USERFatFS, USERPath, 1) == FR_OK)
-            sdMounted = 1;
-          osMutexRelease(fileMtxHandle);
-          if (sdMounted) {
-            uint8_t c = CMD_START_REC;
-            osMessageQueuePut(audioCmdQueueHandle, &c, 0, 0);  /* re-enter via cmd path */
-          } else {
-            printf("REC: remount failed — recording paused until next window\r\n");
-          }
-        } else {
-          errLog(ERR_REC_ABANDON, 0);
-          printf("REC: %u consecutive write errors — paused until next window\r\n",
-                 REC_WRITE_ERR_MAX_RESTARTS);
-        }
-      }
-
       /* Not recording -drain ring and track peak for live audio monitor.
        * Apply HPF to remove DC offset / LF noise (same as recording path)
        * using separate state so recording init doesn't conflict. */
@@ -1311,35 +1214,30 @@ static void rtt_poll_puts(const char *s)
     SEGGER_RTT_Write(0, s, strlen(s));
 }
 
-/* Stash a stack-overflow/assert marker (survives reset), then self-heal reset
- * instead of spinning until the ESP watchdog fires. checkResetCause() reports it
- * on the next boot. */
-static __attribute__((noreturn)) void crash_stash_and_reset(void)
-{
-    TAMP->BKP0R = CRASH_MAGIC_STACKOF;
-    GPIOD->BSRR = GPIO_PIN_13;                         /* LED on */
-    for (volatile uint32_t i = 0; i < 40000000UL; i++) {}  /* ~1 s */
-    NVIC_SystemReset();
-    for (;;) {}
-}
-
 void vAssertCalled(const char *file, int line)
 {
     taskDISABLE_INTERRUPTS();
     char buf[80];
     snprintf(buf, sizeof(buf), "\r\n!!! ASSERT: %s:%d\r\n", file, line);
     rtt_poll_puts(buf);
-    crash_stash_and_reset();
+    /* Blink status LED (PD13) to signal fault */
+    for (;;) {
+        HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
+        for (volatile int i = 0; i < 500000; i++) {}
+    }
 }
 
 void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
 {
-    (void)xTask;
     taskDISABLE_INTERRUPTS();
     char buf[80];
     snprintf(buf, sizeof(buf), "\r\n!!! STACK OVERFLOW: %s\r\n", pcTaskName);
     rtt_poll_puts(buf);
-    crash_stash_and_reset();
+    /* Blink status LED (PD13) to signal fault */
+    for (;;) {
+        HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
+        for (volatile int i = 0; i < 500000; i++) {}
+    }
 }
 
 /* ========================= Inference Task ========================= */
@@ -1553,29 +1451,21 @@ static void detLogCsv(const char *species, float confidence,
             alt = cfg.surveyAlt;
         }
 
-        /* Temperature and humidity from SHT30 — left as empty CSV cells when the
-         * last read failed, rather than repeating a stale value (see sht30Read). */
-        char tempStr[12] = "";
-        char humStr[12]  = "";
-        if (dev.env.shtValid) {
-            int32_t tempWhole = sht30TempC100 / 100;
-            int32_t tempFrac  = sht30TempC100 % 100;
-            if (tempFrac < 0) tempFrac = -tempFrac;
-            uint32_t humWhole = sht30HumRH100 / 100;
-            uint32_t humFrac  = sht30HumRH100 % 100;
-            snprintf(tempStr, sizeof(tempStr), "%ld.%02ld",
-                     (long)tempWhole, (long)tempFrac);
-            snprintf(humStr, sizeof(humStr), "%lu.%02lu",
-                     (unsigned long)humWhole, (unsigned long)humFrac);
-        }
+        /* Temperature and humidity from SHT30 */
+        int32_t tempWhole = sht30TempC100 / 100;
+        int32_t tempFrac  = sht30TempC100 % 100;
+        if (tempFrac < 0) tempFrac = -tempFrac;
+        uint32_t humWhole = sht30HumRH100 / 100;
+        uint32_t humFrac  = sht30HumRH100 % 100;
 
         /* FatFS f_printf doesn't support %f or %llu — use snprintf + f_puts */
         char line[224];
         snprintf(line, sizeof(line),
-                 "%s,%s,%.2f,%.6f,%.6f,%.1f,%s,%s,%s,%d,%llu\n",
+                 "%s,%s,%.2f,%.6f,%.6f,%.1f,%ld.%02ld,%lu.%02lu,%s,%d,%llu\n",
                  ts, species, (double)confidence,
                  (double)lat, (double)lon, (double)alt,
-                 tempStr, humStr,
+                 (long)tempWhole, (long)tempFrac,
+                 (unsigned long)humWhole, (unsigned long)humFrac,
                  cfg.stationId, ppsSynced ? 1 : 0,
                  (unsigned long long)windowStartSample);
         f_puts(line, &f);
@@ -2042,7 +1932,6 @@ float configGetSurveyLat(void) { return cfg.surveyLat; }
 float configGetSurveyLon(void) { return cfg.surveyLon; }
 float configGetSurveyAlt(void) { return cfg.surveyAlt; }
 uint16_t configGetMicHeading(void) { return cfg.micHeading; }
-uint8_t configGetChunkMinutes(void) { return cfg.chunkMinutes; }
 
 /* ========================= Survey-In ========================= */
 
@@ -2269,10 +2158,6 @@ static void StartBridgeTask(void *argument)
                  FW_VERSION, (unsigned long)health.bootCount,
                  (unsigned long)battReadMv());
         diagLog(msg);
-        /* Record why the last run ended (fault / stall-reset) into the error log
-         * + diag, then snapshot the accumulated errors to diag.log. */
-        checkResetCause();
-        errLogDump();
     }
 
     /* Main loop: SPI2 bridge to ESP32 + sensor reads + health saves */
@@ -2282,19 +2167,14 @@ static void StartBridgeTask(void *argument)
         /* Periodic SHT30 temperature/humidity read (~every 5s) */
         if ((HAL_GetTick() - lastSht30Tick) >= SHT30_INTERVAL_MS) {
             lastSht30Tick = HAL_GetTick();
-            uint8_t shtOk = sht30Read();
-            /* Update health min/max from latest readings.  Battery is always
-             * live; temperature only when the read succeeded, else a wedged
-             * sensor would pin tempMin/tempMax to one fabricated value. */
+            sht30Read();
+            /* Update health min/max from latest readings */
             uint32_t mv = battReadMv();
-            healthUpdateEnvironment(mv, shtOk ? (int32_t)sht30TempC100
-                                              : HEALTH_TEMP_INVALID);
+            healthUpdateEnvironment(mv, (int32_t)sht30TempC100);
             /* Track GPS fix losses */
             uint8_t curGpsValid = gpsData.valid;
-            if (prevGpsValid && !curGpsValid) {
+            if (prevGpsValid && !curGpsValid)
                 health.gpsFixLosses++;
-                errLog(ERR_GPS_FIX_LOSS, 0);
-            }
             prevGpsValid = curGpsValid;
             /* Refresh cached SD space */
             extern void sd_space_refresh(void);
@@ -2334,25 +2214,14 @@ static void StartBridgeTask(void *argument)
             uint16_t txFlags = (HAL_GetTick() < 8000U) ? SPI_FLAG_BOOT : 0;
             spi_frame_build(&spi_tx_frame, &cfg, &dev, &health, solar_st, txFlags);
 
-            /* Fill the reserved region: audio while streaming, else an error-log
-             * snapshot when the web UI asked for one (mutually exclusive — audio
-             * wins, the request just retries). */
+            /* Fill the reserved region: audio while streaming, else OTA status
+             * while an A/B update is in progress (mutually exclusive). */
             if (streamActive) {
                 spi_audio_payload_t *ap = (spi_audio_payload_t *)spi_tx_frame._reserved;
                 ap->channel = streamChannel;
                 ap->num_samples = decimate_8k(ap->samples, 214);
                 ap->audio_active = (ap->num_samples > 0) ? 1 : 0;
                 /* Recompute CRC since we modified the frame */
-                spi_tx_frame.header.crc16 = spi_frame_crc(&spi_tx_frame);
-            } else if (errlogRequested) {
-                /* Send it on several consecutive frames (countdown), not just one:
-                 * a single frame dropped to a CRC mismatch — more likely exactly
-                 * when the SD/bus is misbehaving, i.e. when you most want the log —
-                 * would otherwise leave the web overlay blank until a manual retry.
-                 * The web render is idempotent, so repeats are harmless. */
-                errlogRequested--;
-                errLogFillPayload((spi_errlog_payload_t *)spi_tx_frame._reserved);
-                spi_tx_frame.header.flags |= SPI_FLAG_ERRLOG;
                 spi_tx_frame.header.crc16 = spi_frame_crc(&spi_tx_frame);
             }
 
@@ -2362,29 +2231,12 @@ static void StartBridgeTask(void *argument)
             HAL_GPIO_WritePin(SPI2_CS_PORT, SPI2_CS_PIN, GPIO_PIN_SET);
 
             /* Track ESP32 comms status */
-            static uint32_t spi2FailCount = 0;
             if (spiResult == HAL_OK) {
                 dev.comms.espReady = 1;
                 dev.comms.spiTransactions++;
                 dev.comms.lastSpiTick = HAL_GetTick();
                 if (streamActive)
                     streamLastSpiTick = HAL_GetTick();
-                spi2FailCount = 0;
-            } else {
-                /* Note → recover → continue: a wedged SPI2 (e.g. peer mid-transfer
-                 * at Stop 2 entry) would otherwise silently kill the ESP bridge for
-                 * the rest of the deployment. Recover after 2 strikes; don't hammer
-                 * an RCC reset on a single transient. */
-                dev.comms.espReady = 0;
-                errLog(ERR_SPI2_TXN, (uint32_t)spiResult);
-                if (++spi2FailCount == 1 || (spi2FailCount % 240) == 0)
-                    printf("SPI2: transaction FAILED (%lu consecutive, hal=%d)\r\n",
-                           (unsigned long)spi2FailCount, (int)spiResult);
-                if (spi2FailCount >= 2) {
-                    extern void SPI2_Recover(void);
-                    errLog(ERR_SPI2_RECOVER, 0);
-                    SPI2_Recover();
-                }
             }
 
             /* Process received frame — binary protocol */
@@ -2432,14 +2284,6 @@ static void StartBridgeTask(void *argument)
 
                 /* Dispatch command */
                 switch (cmd) {
-                case SPI_CMD_HEALTH_RESET:
-                    healthReset();
-                    printf("SPI cmd: health_reset (stats zeroed)\r\n");
-                    diagLog("Health stats reset");
-                    break;
-                case SPI_CMD_GET_ERRLOG:
-                    errlogRequested = 6;   /* carry it on the next ~6 frames (drop-tolerant) */
-                    break;
                 case SPI_CMD_REC_TOGGLE: {
                     extern volatile uint8_t sdFormatState;
                     if (sdFormatState != 0) {
@@ -2779,7 +2623,6 @@ int configSave(void)
 
     /* config = 8 quad-words (128 bytes) in the inactive bank's top page */
     if (!flashWritePage(CONFIG_FLASH_ADDR, (const uint8_t *)&cfg, 8)) {
-        errLog(ERR_FLASH_WRITE, HAL_FLASH_GetError());
         printf("Config: Flash write FAILED (err=0x%lx)\r\n",
                (unsigned long)HAL_FLASH_GetError());
         return 0;
@@ -2803,16 +2646,6 @@ static int healthValid(const health_stats_t *h)
 
 static void healthLoad(void)
 {
-    /* Error log shares the health page (offset 256). Restore it if valid, else
-     * start empty — first boot on new firmware finds erased 0xFF there. */
-    const err_log_t *ef = (const err_log_t *)(HEALTH_FLASH_ADDR + ERRLOG_PAGE_OFFSET);
-    if (ef->magic == ERRLOG_MAGIC && ef->version == ERRLOG_VERSION &&
-        ef->crc32 == errLogComputeCrc(ef)) {
-        memcpy(&errLogData, ef, sizeof(errLogData));
-    } else {
-        memset(&errLogData, 0, sizeof(errLogData));
-    }
-
     /* Single-bank: health lives at one fixed top page that never moves. */
     const health_stats_t *flash = (const health_stats_t *)HEALTH_FLASH_ADDR;
     if (healthValid(flash)) {
@@ -2834,19 +2667,10 @@ static void healthLoad(void)
 int healthSave(void)
 {
     health.crc32 = healthComputeCrc(&health);
-    errLogData.magic = ERRLOG_MAGIC;
-    errLogData.version = ERRLOG_VERSION;
-    errLogData.crc32 = errLogComputeCrc(&errLogData);
 
-    /* One page write carries BOTH structs: health at the page base (256 B) and
-     * the error log right after (offset 256). Same erase — the error log is free
-     * to persist, no extra flash wear. 1056 B = 66 quad-words. */
-    static uint8_t page[ERRLOG_PAGE_OFFSET + sizeof(err_log_t)] __attribute__((aligned(16)));
-    memcpy(page, &health, sizeof(health));
-    memcpy(page + ERRLOG_PAGE_OFFSET, &errLogData, sizeof(errLogData));
-
-    if (!flashWritePage(HEALTH_FLASH_ADDR, page, (int)(sizeof(page) / 16))) {
-        errLog(ERR_FLASH_WRITE, HAL_FLASH_GetError());  /* RAM-only; persists next save */
+    /* health = 16 quad-words (256 bytes) in the inactive bank, one page below
+     * config. Retries once on the post-swap-boot transient (see flashWritePage). */
+    if (!flashWritePage(HEALTH_FLASH_ADDR, (const uint8_t *)&health, 16)) {
         printf("Health: Flash write FAILED (err=0x%lx)\r\n",
                (unsigned long)HAL_FLASH_GetError());
         return 0;
@@ -2855,173 +2679,23 @@ int healthSave(void)
     return 1;
 }
 
-/* Zero every health stat, bootCount included, and persist immediately.
- *
- * bootCount is deliberately NOT preserved: the whole point is to establish a
- * known baseline before a deployment. The 30-day field test shipped with a
- * bootCount of unknown origin, which made it useless as evidence for whether
- * units had been resetting — an absolute counter with no zero point measures
- * nothing. */
 void healthReset(void)
 {
+    uint32_t boots = health.bootCount;  /* preserve boot count across resets */
     memset(&health, 0, sizeof(health));
     health.magic = HEALTH_MAGIC;
     health.version = HEALTH_VERSION;
+    health.bootCount = boots;
     health.battMinMv = 0xFFFFFFFF;
     health.tempMinC100 = 32767;
     health.tempMaxC100 = -32768;
-    memset(&errLogData, 0, sizeof(errLogData));   /* clear the error log too */
-    healthSave();
-}
-
-/* ========================= Structured Error Log ========================= */
-
-static const char *const errName[ERR_CODE_COUNT] = {
-    "SHT30_READ", "I2C_RECOVER", "ADC_READ", "ADC_RECOVER",
-    "SPI2_TXN", "SPI2_RECOVER", "SD_WRITE_RETRY", "SD_WRITE_FAIL",
-    "SD_READ_RETRY", "SD_READ_FAIL", "SD_CRC", "REC_RESTART",
-    "REC_ABANDON", "GPS_FIX_LOSS", "FLASH_WRITE", "HARDFAULT", "RESET",
-};
-
-static uint32_t errLogComputeCrc(const err_log_t *e)
-{
-    return crc32_compute((const uint8_t *)e, sizeof(err_log_t) - 4);
-}
-
-/* Record one error occurrence: bump the per-code row and push a ring event.
- * Best-effort stats — IRQs briefly masked to keep the counters/ring index from
- * tearing when called from different tasks (or the SD driver). Not for ISRs. */
-void errLog(uint16_t code, uint32_t arg)
-{
-    if (code >= ERR_CODE_COUNT) return;
-    uint32_t now = rtcEpochNow();
-
-    uint32_t primask = __get_PRIMASK();   /* preserve caller's IRQ state */
-    __disable_irq();
-    err_row_t *r = &errLogData.rows[code];
-    if (r->count == 0) r->firstUtc = now;
-    r->count++;
-    r->lastUtc = now;
-    r->lastArg = arg;
-
-    err_event_t *ev = &errLogData.ring[errLogData.ringHead % ERR_RING_LEN];
-    ev->code = code;
-    ev->seq  = (uint16_t)errLogData.totalEvents;
-    ev->utc  = now;
-    ev->arg  = arg;
-    errLogData.ringHead = (errLogData.ringHead + 1u) % ERR_RING_LEN;
-    errLogData.totalEvents++;
-    __set_PRIMASK(primask);
-
-    /* Mirror hard SD data-loss into the persisted health.sdErrors counter — it's
-     * already plumbed to the web "Since Last Visit" card ("N SD errors"), so this
-     * gives an at-a-glance card-health signal without opening the error log.
-     * Only losses (retries/CRC recovered fine and stay in the detailed table). */
-    if (code == ERR_SD_WRITE_FAIL || code == ERR_SD_READ_FAIL)
-        health.sdErrors++;
-}
-
-/* Append a snapshot of the error table (non-zero codes) + the recent ring to
- * diag.log. One f_open — a single milestone write, NOT per-error. Safe to call
- * from a task with the SD mounted (e.g. at boot). No-op if nothing logged. */
-void errLogDump(void)
-{
-    if (!sdMounted || errLogData.totalEvents == 0) return;
-    if (osMutexAcquire(fileMtxHandle, 200) != osOK) return;
-
-    FIL f;
-    if (f_open(&f, "logs/diag.log", FA_OPEN_APPEND | FA_WRITE) == FR_OK) {
-        UINT bw;
-        char line[128];
-        int n = snprintf(line, sizeof(line),
-                         "--- ERRORS (%lu events since reset) ---\n",
-                         (unsigned long)errLogData.totalEvents);
-        f_write(&f, line, n, &bw);
-        for (int c = 0; c < ERR_CODE_COUNT; c++) {
-            const err_row_t *r = &errLogData.rows[c];
-            if (r->count == 0) continue;
-            n = snprintf(line, sizeof(line),
-                         "  %-14s x%lu  first=%lu last=%lu arg=0x%lX\n",
-                         errName[c], (unsigned long)r->count,
-                         (unsigned long)r->firstUtc, (unsigned long)r->lastUtc,
-                         (unsigned long)r->lastArg);
-            f_write(&f, line, n, &bw);
-        }
-        f_close(&f);
-    }
-    osMutexRelease(fileMtxHandle);
-}
-
-/* At boot, record why the LAST run ended — into the error log (viewable over
- * WiFi) and diag.log. A hard fault stashed its registers in TAMP backup regs
- * before self-resetting; other warm resets (ESP-watchdog NRST after a stall,
- * software reboot) are inferred from RCC_CSR. A clean power-on (BOR) is skipped.
- * Call once early, after healthLoad (so errLogData is live). */
-void checkResetCause(void)
-{
-    uint32_t csr = RCC->CSR;   /* reset flags, sticky until RMVF */
-    char m[96];
-
-    if (TAMP->BKP0R == CRASH_MAGIC_FAULT) {     /* hard fault last run */
-        uint32_t pc = TAMP->BKP2R, cfsr = TAMP->BKP1R, lr = TAMP->BKP4R;
-        TAMP->BKP0R = 0;
-        errLog(ERR_HARDFAULT, pc);
-        snprintf(m, sizeof(m), "HARDFAULT PC=0x%08lX CFSR=0x%08lX LR=0x%08lX",
-                 (unsigned long)pc, (unsigned long)cfsr, (unsigned long)lr);
-        diagLog(m);
-        printf("RESET: %s\r\n", m);
-    } else if (TAMP->BKP0R == CRASH_MAGIC_STACKOF) {  /* stack overflow / assert */
-        TAMP->BKP0R = 0;
-        errLog(ERR_HARDFAULT, 0x57AC0F10UL);    /* recognizable sentinel arg */
-        diagLog("STACK OVERFLOW / ASSERT (self-reset)");
-        printf("RESET: stack overflow / assert\r\n");
-    } else if (!(csr & RCC_CSR_BORRSTF)) {      /* warm reset, not a power-on */
-        errLog(ERR_RESET, csr);
-        snprintf(m, sizeof(m), "RESET (warm) RCC_CSR=0x%08lX", (unsigned long)csr);
-        diagLog(m);
-        printf("RESET: %s\r\n", m);
-    }
-
-    RCC->CSR |= RCC_CSR_RMVF;   /* clear so next boot's flags are fresh */
-}
-
-/* Pack the error log into the compact SPI payload for the web UI. Snapshots the
- * per-code table and the most recent SPI_ERRLOG_RING ring events. */
-static void errLogFillPayload(spi_errlog_payload_t *p)
-{
-    uint32_t primask = __get_PRIMASK();
-    __disable_irq();
-    p->totalEvents = errLogData.totalEvents;
-    p->ringHead    = errLogData.ringHead;
-    for (int i = 0; i < SPI_ERRLOG_ROWS; i++) {
-        p->rows[i].count    = errLogData.rows[i].count;
-        p->rows[i].firstUtc = errLogData.rows[i].firstUtc;
-        p->rows[i].lastUtc  = errLogData.rows[i].lastUtc;
-        p->rows[i].lastArg  = errLogData.rows[i].lastArg;
-    }
-    /* Most recent events, newest first: walk back from ringHead. */
-    for (int i = 0; i < SPI_ERRLOG_RING; i++) {
-        uint32_t idx = (errLogData.ringHead + ERR_RING_LEN - 1u - (uint32_t)i) % ERR_RING_LEN;
-        p->ring[i].code = errLogData.ring[idx].code;
-        p->ring[i].seq  = errLogData.ring[idx].seq;
-        p->ring[i].utc  = errLogData.ring[idx].utc;
-        p->ring[i].arg  = errLogData.ring[idx].arg;
-    }
-    __set_PRIMASK(primask);
 }
 
 /* Update battery/temp min/max — called from SHT30 periodic read */
-/* Pass HEALTH_TEMP_INVALID for tempC100 when the SHT30 read failed — battery
- * min/max still track, temperature is left alone. */
 void healthUpdateEnvironment(uint32_t battMv, int32_t tempC100)
 {
-    /* Only fold battery into min/max when the ADC read was good — a wedged ADC
-     * returns a stale value (dev.env.battValid==0) that would pin the extremes. */
-    if (dev.env.battValid) {
-        if (battMv < health.battMinMv) health.battMinMv = battMv;
-        if (battMv > health.battMaxMv) health.battMaxMv = battMv;
-    }
-    if (tempC100 == HEALTH_TEMP_INVALID) return;
+    if (battMv < health.battMinMv) health.battMinMv = battMv;
+    if (battMv > health.battMaxMv) health.battMaxMv = battMv;
     if (tempC100 < health.tempMinC100) health.tempMinC100 = tempC100;
     if (tempC100 > health.tempMaxC100) health.tempMaxC100 = tempC100;
 }
@@ -3125,10 +2799,8 @@ static void powerEnterRecord(void)
         osMutexRelease(fileMtxHandle);
     }
 
-    /* Start GPS duty cycle. If the warm-up lead already powered the GPS, leave it
-     * on — re-powering clears the freshly-acquired fix/PPS latch and throws away
-     * the warm-up. */
-    if (!gpsPowered) gpsSetPower(1);
+    /* Start GPS duty cycle */
+    gpsSetPower(1);
     lastGpsDutyTick = HAL_GetTick();
     gpsDutyActive = 0;
 
@@ -3224,10 +2896,7 @@ static uint8_t scheduleArmed(void)
 /* Main schedule check — called every second from CLI task */
 static void powerScheduleCheck(void)
 {
-    if (!scheduleArmed()) {
-        dev.pwr.schedArmed = 0;
-        return;
-    }
+    if (!scheduleArmed()) return;
 
     /* Read current time from RTC */
     uint8_t hh, mm, ss;
@@ -3262,12 +2931,6 @@ static void powerScheduleCheck(void)
     /* Evaluate schedule */
     schedule_result_t sched = schedule_evaluate(&cfg, nowMinUTC,
                                                  day, month, year, lat, lon);
-
-    /* Publish window headroom for chunkRecording() — see device_state.h.
-     * Value first, then the armed flag, so a reader that sees armed sees a
-     * value that was already written. */
-    dev.pwr.secsUntilWindowEnd = sched.shouldRecord ? sched.secsUntilEnd : 0;
-    dev.pwr.schedArmed = 1;
 
     power_state_t curState = dev.pwr.state;
 
@@ -3339,38 +3002,23 @@ static void powerScheduleCheck(void)
          * a time, exit only on shouldRecord transition or USER_CONNECTED. */
         uint32_t loopIter = 0;
         for (;;) {
-            /* secsUntilNext is whole-minute granularity (drops the seconds), so
-             * subtract the elapsed seconds to land on the window's :00 second.
-             *
-             * Two regimes: far out, deep-sleep (GPS off) until the warm-up point;
-             * within GPS_WARMUP_SEC of the window, stay AWAKE with the GPS powered
-             * so it acquires a fix and we track PPS/RMC before recording starts.
-             * (Stop 2 cuts GPS_VCC — see enterStop2 — so warm-up can't be slept
-             * through.) This puts the PPS anchor at ~sample 0 instead of ~20 s in. */
-            uint32_t secsToWindow = (sched.secsUntilNext > ss) ? (sched.secsUntilNext - ss) : 0;
-            wake_source_t ws = WAKE_RTC;
+            /* secsUntilNext is whole-minute granularity (derived from nowMinUTC,
+             * which drops the seconds), so subtract the seconds already elapsed in
+             * the current minute — otherwise we wake up to ~59s into the window and
+             * clip its start. This lands the wake on the window's :00 second. */
+            uint32_t sleepSec = sched.secsUntilNext;
+            sleepSec = (sleepSec > ss) ? (sleepSec - ss) : 0;
+            if (sleepSec < 5)     sleepSec = 5;      /* floor: skip a pointless ~0s Stop 2 */
+            if (sleepSec > 65000) sleepSec = 65000;  /* RTC wake-timer max */
 
-            if (secsToWindow > GPS_WARMUP_SEC) {
-                uint32_t sleepSec = secsToWindow - GPS_WARMUP_SEC;
-                if (sleepSec < 5)     sleepSec = 5;      /* floor: skip a pointless ~0s Stop 2 */
-                if (sleepSec > 65000) sleepSec = 65000;  /* RTC wake-timer max */
+            printf("PWR: sleep iter=%lu rtc=%02u:%02u:%02u sleepSec=%lu nextWindow=%lu\r\n",
+                   (unsigned long)loopIter, hh, mm, ss,
+                   (unsigned long)sleepSec,
+                   (unsigned long)sched.secsUntilNext);
 
-                printf("PWR: sleep iter=%lu rtc=%02u:%02u:%02u sleepSec=%lu nextWindow=%lu\r\n",
-                       (unsigned long)loopIter, hh, mm, ss,
-                       (unsigned long)sleepSec,
-                       (unsigned long)sched.secsUntilNext);
-
-                ws = enterScheduledSleep(sleepSec);
-                printf("\r\nPWR: Woke from Stop 2 (%s)\r\n",
-                       ws == WAKE_ESP32 ? "ESP32" : "RTC");
-            } else {
-                if (!gpsPowered) {
-                    gpsSetPower(1);   /* pre-warm: acquire a fix before the window opens */
-                    printf("PWR: GPS warm-up ON (%lus to window)\r\n",
-                           (unsigned long)secsToWindow);
-                }
-                osDelay(1000);  /* stay awake; the GPS/NMEA task tracks the fix */
-            }
+            wake_source_t ws = enterScheduledSleep(sleepSec);
+            printf("\r\nPWR: Woke from Stop 2 (%s)\r\n",
+                   ws == WAKE_ESP32 ? "ESP32" : "RTC");
 
             if (ws == WAKE_ESP32) {
                 /* User connected. Stay awake until idle timeout. Inline

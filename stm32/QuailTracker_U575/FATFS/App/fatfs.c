@@ -46,15 +46,6 @@ DWORD get_fattime(void)
   uint32_t mn = (dev.gps.ppsUtcTime / 100) % 100;
   uint32_t ss = dev.gps.ppsUtcTime % 100;
 
-  /* The GPS emits its cold-start default date 311200 (31/12/00) before it has
-   * a real fix. That is nonzero, so the ppsUtcDate check above passes it
-   * through and it packs to a bogus "Dec 31 2000" dirent stamp (seen on
-   * 20260708_114704 in the 30-day field data). yy==0 is unreachable for any
-   * real date this decade, so reject it along with any out-of-range field. */
-  if (yy == 0 || mm < 1 || mm > 12 || dd < 1 || dd > 31 ||
-      hh > 23 || mn > 59 || ss > 59)
-    return 0;
-
   /* FatFS packed time: bits [31:25]=year-1980, [24:21]=month, [20:16]=day,
    *                         [15:11]=hour, [10:5]=min, [4:0]=sec/2 */
   return ((DWORD)(yy + 20) << 25) | ((DWORD)mm << 21) | ((DWORD)dd << 16) |

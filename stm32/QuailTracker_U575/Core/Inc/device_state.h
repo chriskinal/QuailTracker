@@ -125,65 +125,6 @@ typedef struct __attribute__((packed, aligned(16))) {
 
 _Static_assert(sizeof(health_stats_t) == 256, "health_stats_t must be 256 bytes");
 
-/* ---- Structured error log ----------------------------------------------
- * A per-code aggregate table plus a ring buffer of recent events. Lives in RAM
- * (survives Stop 2), persisted alongside health in the same flash-page write
- * (no extra erase cycles), restored at boot. Richer than a bare counter and
- * bounded — no unbounded growth. See errLog()/errLogDump() in app_freertos.c. */
-typedef enum {
-    ERR_SHT30_READ = 0,   /* SHT30 read failed (I2C)                    */
-    ERR_I2C_RECOVER,      /* I2C1 bus reset performed                   */
-    ERR_ADC_READ,         /* battery ADC read failed                    */
-    ERR_ADC_RECOVER,      /* ADC re-init performed                      */
-    ERR_SPI2_TXN,         /* ESP bridge SPI transaction failed (arg=HAL)*/
-    ERR_SPI2_RECOVER,     /* SPI2 bus reset performed                   */
-    ERR_SD_WRITE_RETRY,   /* SD write block retried (arg=LBA)           */
-    ERR_SD_WRITE_FAIL,    /* SD write block lost after retries (arg=LBA)*/
-    ERR_SD_READ_RETRY,    /* SD read block retried (arg=LBA)            */
-    ERR_SD_READ_FAIL,     /* SD read block lost after retries (arg=LBA) */
-    ERR_SD_CRC,           /* SD data-block CRC mismatch caught          */
-    ERR_REC_RESTART,      /* recording recovered via remount            */
-    ERR_REC_ABANDON,      /* recording paused: write-error budget spent */
-    ERR_GPS_FIX_LOSS,     /* GPS lost a valid fix                       */
-    ERR_FLASH_WRITE,      /* config/health flash write failed           */
-    ERR_HARDFAULT,        /* hard fault (arg = faulting PC)             */
-    ERR_RESET,            /* unexpected reset (arg = RCC reset flags)   */
-    /* Append new codes ABOVE — indices are persisted in flash, don't reorder. */
-    ERR_CODE_COUNT
-} err_code_t;
-
-#define ERR_CODE_MAX  24    /* rows[] fixed size — struct stays stable as codes grow */
-#define ERR_RING_LEN  32    /* recent-event ring depth */
-
-_Static_assert(ERR_CODE_COUNT <= ERR_CODE_MAX, "too many error codes for ERR_CODE_MAX");
-
-typedef struct {
-    uint32_t count;     /* occurrences since last reset                 */
-    uint32_t firstUtc;  /* epoch s of first occurrence (0 = pre-RTC-sync)*/
-    uint32_t lastUtc;   /* epoch s of most recent                       */
-    uint32_t lastArg;   /* context: LBA / HAL status / fail count / ... */
-} err_row_t;
-
-typedef struct {
-    uint16_t code;      /* err_code_t                                   */
-    uint16_t seq;       /* low 16 bits of totalEvents (ordering)        */
-    uint32_t utc;       /* epoch s (0 = pre-RTC-sync)                   */
-    uint32_t arg;       /* context                                      */
-} err_event_t;
-
-typedef struct {
-    uint32_t   magic;
-    uint32_t   version;
-    uint32_t   totalEvents;          /* monotonic across all codes      */
-    uint32_t   ringHead;             /* next ring slot to write         */
-    err_row_t  rows[ERR_CODE_MAX];   /* 24 × 16 = 384                   */
-    err_event_t ring[ERR_RING_LEN];  /* 32 × 12 = 384                   */
-    uint8_t    _pad[12];
-    uint32_t   crc32;
-} err_log_t;
-
-_Static_assert(sizeof(err_log_t) == 800, "err_log_t must be 800 bytes (16-aligned)");
-
 /* ---- Consolidated runtime device state ---- */
 typedef struct {
     struct {
@@ -217,12 +158,8 @@ typedef struct {
 
     struct {
         uint32_t batteryMv;
-        int16_t  tempC100;        /* 0.01 °C units — only valid if shtValid */
-        uint16_t humRH100;        /* 0.01 %RH units — only valid if shtValid */
-        uint8_t  shtValid;        /* 1 = tempC100/humRH100 are from a good read */
-        uint32_t shtFailCount;    /* consecutive failed reads (0 = last read OK) */
-        uint8_t  battValid;       /* 1 = batteryMv is from a good ADC read */
-        uint32_t adcFailCount;    /* consecutive failed battery reads (0 = last OK) */
+        int16_t  tempC100;        /* 0.01 °C units */
+        uint16_t humRH100;        /* 0.01 %RH units */
     } env;
 
     struct {
@@ -247,12 +184,6 @@ typedef struct {
         uint32_t gpsDutyCycleSec;       /* GPS wake interval during recording (0=off) */
         uint32_t userConnectedTick;     /* HAL tick of last user activity (SPI cmd / ESP wake) */
         uint16_t sleepIntentSecs;       /* >0 = about to Stop 2 for ~this long; reported to ESP as pwr_sleepSecs to gate its watchdog */
-        /* Published by powerScheduleCheck (CLI task, ~1 Hz) for readers that must
-         * not evaluate the schedule themselves: chunkRecording() runs on the
-         * real-time audio task and schedule_evaluate() does solar trig. Single
-         * writer, so volatile is sufficient. */
-        volatile uint8_t  schedArmed;          /* 1 = schedule armed and being evaluated */
-        volatile uint32_t secsUntilWindowEnd;  /* 0 = outside a window; only meaningful if schedArmed */
     } pwr;
 
     struct {
