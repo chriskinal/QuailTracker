@@ -1192,6 +1192,16 @@ int main(void)
   printf("  STM32U575  v%s  [FreeRTOS]\r\n", FW_VERSION);
   printf("  SYSCLK: %lu MHz\r\n",
          (unsigned long)(HAL_RCC_GetSysClockFreq() / 1000000UL));
+  /* Silicon revision — cross-reference ES0499 errata applicability. The Stop2/
+   * Stop3 wake errata (ICACHE line corruption on exit; hang on a wakeup landing
+   * just before entry) affect earlier cuts and are fixed on the Die482 cut 3.3 /
+   * rev "U" enhancement. DEV_ID reads 0x482 for STM32U575/585. */
+  {
+      uint32_t idcode = DBGMCU->IDCODE;
+      printf("  Silicon: DEV_ID=0x%03lX REV_ID=0x%04lX\r\n",
+             (unsigned long)(idcode & 0xFFFU),
+             (unsigned long)((idcode >> 16) & 0xFFFFU));
+  }
   printf("================================================\r\n");
 
   /* ADC1 — battery voltage on PC0 / IN1 */
@@ -2207,14 +2217,31 @@ wake_source_t enterStop2(uint32_t seconds)
     EXTI->RPR1 = 0xFFFFFFFFu;              /* clear all rising pending  */
     EXTI->FPR1 = 0xFFFFFFFFu;              /* clear all falling pending */
     espWakePulseSeen = 0;                  /* reset before sleep */
+
+    /* ES0499 erratum workaround (Stop2/Stop3 exit): the first instruction fetch
+     * or data read from a 128-bit cache line after wake is corrupted if that
+     * line was the last accessed before entry — a prime cause of post-wake hard
+     * faults / garbage. Disable ICACHE across Stop2 so post-wake fetches are
+     * uncached (correct); it is re-enabled + invalidated on resume below.
+     * (DCACHE is not enabled on this build, so only ICACHE needs this.)
+     * __DSB() completes pending memory ops before sleep; __ISB() flushes the
+     * pipeline after the cache-disable. */
+    HAL_ICACHE_Disable();
     __DSB();
     __ISB();
 
     /* Enter Stop 2 */
     HAL_PWREx_EnterSTOP2Mode(PWR_STOPENTRY_WFI);
 
-    /* --- CPU resumes here after RTC or EXTI12 wake-up ---
-     * Note: by the time we get here, the EXTI12 IRQ handler has already
+    /* --- CPU resumes here after RTC or EXTI12 wake-up --- */
+
+    /* Re-enable + invalidate ICACHE (disabled before Stop2 per the ES0499
+     * cache-corruption workaround). Do it first so subsequent code runs cached;
+     * __ISB() flushes the pipeline so execution continues coherently. */
+    HAL_ICACHE_Enable();
+    __ISB();
+
+    /* Note: by the time we get here, the EXTI12 IRQ handler has already
      * run and cleared EXTI->FPR1 bit 12. We rely on espWakePulseSeen
      * which is set by HAL_GPIO_EXTI_Falling_Callback. */
     wake_source_t wakeSource = espWakePulseSeen ? WAKE_ESP32 : WAKE_RTC;
