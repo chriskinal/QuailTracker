@@ -2230,6 +2230,15 @@ wake_source_t enterStop2(uint32_t seconds)
     __DSB();
     __ISB();
 
+    /* ES0499 erratum workaround (rev W is affected): the device can HANG if a
+     * wakeup event is asserted in the few cycles before Stop2/Stop3 entry — the
+     * exact case of an ESP CS-wake pulse (WiFi connect) landing as we enter Stop.
+     * Mask interrupts across the entry: WFI still wakes on a pending enabled IRQ
+     * even with PRIMASK set, but the handler is deferred until PRIMASK is
+     * restored on the far side, closing the entry race. */
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+
     /* Enter Stop 2 */
     HAL_PWREx_EnterSTOP2Mode(PWR_STOPENTRY_WFI);
 
@@ -2241,9 +2250,15 @@ wake_source_t enterStop2(uint32_t seconds)
     HAL_ICACHE_Enable();
     __ISB();
 
-    /* Note: by the time we get here, the EXTI12 IRQ handler has already
-     * run and cleared EXTI->FPR1 bit 12. We rely on espWakePulseSeen
-     * which is set by HAL_GPIO_EXTI_Falling_Callback. */
+    /* Restore interrupts (masked across entry for the wakeup-race erratum). The
+     * pending RTC/EXTI12 wake handler runs now — only those two IRQs are enabled
+     * in the NVIC at this point, so nothing else fires. __ISB() so the deferred
+     * handler is taken before we read the flag it sets. */
+    __set_PRIMASK(primask);
+    __ISB();
+
+    /* The EXTI12 falling callback (just run) sets espWakePulseSeen and cleared
+     * EXTI->FPR1 bit 12; an RTC wake leaves it clear. */
     wake_source_t wakeSource = espWakePulseSeen ? WAKE_ESP32 : WAKE_RTC;
 
     /* Restore PLL / 160MHz system clock */
