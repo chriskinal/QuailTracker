@@ -10,32 +10,38 @@ Only the `.ioc` is tracked. Everything CubeMX generates next to it is gitignored
 ## Provenance
 
 The original `/Users/chris/Code/Qt_U575VGT6` was lost in a disk crash and was
-never committed. This `.ioc` was rebuilt on 2026-09-19 from firmware v0.10.20:
+never committed. On 2026-09-19 this `.ioc` was rebuilt from firmware v0.10.20:
 `main.c` (`SystemClock_Config`, `MX_*_Init`), `stm32u5xx_hal_msp.c`,
 `stm32u5xx_it.c`, `app_freertos.c`, `FreeRTOSConfig.h`, and the pin table in
-`hardware/stm32u575_pinout.md`.
-
-It was hand-written, so CubeMX has not validated it yet. On first open, check
-the items below and then save once, so CubeMX rewrites the file in its own
-canonical form.
+`hardware/stm32u575_pinout.md`. It was then checked field by field in the
+CubeMX UI and saved by CubeMX, so it opens with no warnings.
 
 If CubeMX offers to migrate to a newer FW_U5 package, choose **Continue**.
 The repo's HAL drivers are from FW_U5 V1.8.0 (HAL 1.6.2), so generated init
 code has to target that same HAL. To move to a newer package, update
 `Drivers/` in the firmware first, then migrate this `.ioc` to match.
 
-## Check in the CubeMX UI on first open
+## Where things live in the UI
 
-- **MDF1:** the pin-mode and filter key names were guessed. Confirm:
-  - SITF0 is set to LF master SPI mode with clock source CCK0, on PD3 (SDI0) and PE9 (CCK0).
-  - Filter0 uses bitstream 0 rising edge (L) and Filter1 uses bitstream 0 falling edge (R).
-  - Both filters: Sinc4, decimation 64, HPF at 0.000625·Fpcm, SYNC_CONT mode, TRGO trigger.
-  - Proc clock divider is 52 and the output clock (CCK0) is enabled.
-- **RCC:** turn on MSI auto-calibration (MSIS PLL mode locked to LSE). The code
-  calls `HAL_RCCEx_EnableMSIPLLMode()`, and the audio sample rate depends on it.
-- **NVIC:** RTC_IRQn runs at priority 0, the same as the code. CubeMX may flag
-  this because priority 0 is above the FreeRTOS syscall threshold (5). That's
-  acceptable because the RTC ISR makes no RTOS calls.
+- **MDF1:** listed under Computing. Mode panel:
+  - Instance 0: DFLT0 plus SITF0, with Common Clock 0 as the clock source.
+  - Instance 1: DFLT1 only, with SITF1 disabled. It reads SITF0's bitstream
+    on the falling front.
+  - Common Clocks: CCK0 only. It has to be enabled here before
+    "Output Clock Activation" can be turned on.
+- **MSI auto-calibration:** RCC → Parameter Settings → "MSIS/MSIK Auto
+  Calibration" = MSIS.
+- **GPDMA priority labels:** "High" = `DMA_LOW_PRIORITY_HIGH_WEIGHT`, which is
+  what the firmware uses. "Low" is the low-weight variant.
+- **RTC IRQ at priority 0:** requires unchecking "Uses FreeRTOS functions".
+
+## Known differences from the firmware (deliberate)
+
+- **MDF1 output-clock trigger edge** (Common Parameters → Trigger Edge) is
+  Falling. The firmware uses Rising, but CubeMX greys Rising out. TRGO is a
+  single pulse, so either edge works.
+- **MDF1 filter gain** is 6, the runtime value that `main()` sets before
+  starting acquisition. `MX_MDF1_Init` itself initializes the gain to 0.
 
 ## Not modelled here (these live in USER CODE only)
 
