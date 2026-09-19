@@ -15,7 +15,7 @@ C5270988 is the non-SMPS variant — uses internal LDO, no external inductor.
 | Function | GPIO | LQFP100 Pin | AF | Peripheral | Notes |
 |----------|------|-------------|-----|------------|-------|
 | PDM Mic Clock | PE9 | 38 | AF6 | MDF1_CCK0 | Clock out to both IM72D128 mics |
-| PDM Mic Data | PD3 | 84 | AF6 | MDF1_SDI0 | Data in from both mics (L=falling, R=rising) |
+| PDM Mic Data | PD3 | 84 | AF6 | MDF1_SDI0 | Data in from both mics (L=rising, R=falling) |
 | GPS UART TX | PA9 | 68 | AF7 | USART1_TX | To ATGM336H RXD (pin 3) |
 | GPS UART RX | PA10 | 69 | AF7 | USART1_RX | From ATGM336H TXD (pin 2) |
 | ESP32 SPI SCK | PB13 | 52 | AF5 | SPI2_SCK | To ESP32-C3 GPIO4 |
@@ -100,8 +100,11 @@ enabling simultaneous L/R capture from two PDM mics on one data line.
 
 - PE9 (MDF1_CCK0, AF6): PDM clock output, shared by both mics
 - PD3 (MDF1_SDI0, AF6): PDM data input, carries interleaved L/R bitstream
-- Filter0: BITSTREAM0_FALLING = Left mic (L/R pin → GND)
-- Filter1: BITSTREAM0_RISING = Right mic (L/R pin → VDD)
+- Filter0: BITSTREAM0_RISING = Left mic (PCB silkscreen "Left", L/R pin → GND)
+- Filter1: BITSTREAM0_FALLING = Right mic (PCB silkscreen "Right", L/R pin → VDD)
+- This edge mapping was validated on the bench against the silkscreen and is the
+  opposite of the IM72D128 datasheet's nominal L/R convention. `MX_MDF1_Init`
+  in `main.c` is authoritative.
 - Both filters: Sinc4, decimation 64, HPF enabled, 48kHz per channel
 
 Pin mapping confirmed by CubeMX for STM32U575VGT6 LQFP-100.
