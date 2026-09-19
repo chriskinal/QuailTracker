@@ -80,7 +80,7 @@ flowchart TB
     end
 
     subgraph Storage["Storage"]
-        SD["MicroSD Card<br/>32 GB Class 10"]
+        SD["MicroSD Card<br/>32 GB High-Endurance"]
     end
 
     subgraph Environment["Environment Sensor"]
@@ -257,7 +257,7 @@ The SHT30 module shares the I2C bus with the ES7243E ADC, using address 0x44 (ES
 | 5 | I2S ADC | ES7243E 24-bit (3.3V native) | 1 | $0.24 | $0.24 |
 | 6 | Temp/Humidity Sensor | SHT30 External Module (via J5) | 1 | $2.50 | $2.50 |
 | 7 | MicroSD Socket | TF-015 push-push | 1 | $0.08 | $0.08 |
-| 8 | MicroSD Card | 32GB Class 10 | 1 | $4.00 | $4.00 |
+| 8 | MicroSD Card | 32GB high-endurance/industrial (see [board_build.md](../Guides/board_build.md)) | 1 | $12.00 | $12.00 |
 | 9 | Voltage Regulator | HT7333 LDO, 3.3V 250mA | 1 | $0.04 | $0.04 |
 | 10 | Battery Connector | JST PH 2-pin SMT | 1 | $0.10 | $0.10 |
 | 11 | P-FET Power Switch | SI2301 SOT-23 | 1 | $0.02 | $0.02 |
@@ -265,7 +265,7 @@ The SHT30 module shares the I2C bus with the ES7243E ADC, using address 0x44 (ES
 | 13 | Capacitors | Assorted (see LCSC BOM) | 1 | $0.15 | $0.15 |
 | 14 | Resistors | 2.2kΩ (mic bias), 4.7kΩ (I2C pull-ups) | 3 | $0.01 | $0.03 |
 | 6a | SHT30 Connector | 4-pin header for J5 | 1 | $0.05 | $0.05 |
-| | | | | **Total:** | **$35.45** |
+| | | | | **Total:** | **$43.45** |
 
 ### 4.2 LCSC Parts BOM (for JLCPCB Assembly)
 
