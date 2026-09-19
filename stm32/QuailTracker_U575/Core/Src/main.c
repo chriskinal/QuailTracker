@@ -1230,17 +1230,6 @@ int main(void)
 
   setvbuf(stdout, NULL, _IONBF, 0);
 
-  /* SPI2 ping-pong test with ESP32-C3 bridge */
-  {
-      uint8_t tx[64] = {0}, rx[64] = {0};
-      memcpy(tx, "PING", 4);
-      HAL_GPIO_WritePin(GPIOD, GPIO_PIN_0, GPIO_PIN_RESET);  /* CS low */
-      HAL_StatusTypeDef s = HAL_SPI_TransmitReceive(&hspi2, tx, rx, 64, 1000);
-      HAL_GPIO_WritePin(GPIOD, GPIO_PIN_0, GPIO_PIN_SET);    /* CS high */
-      printf("SPI2 test: %s (RX: \"%.*s\")\r\n",
-             s == HAL_OK ? "OK" : "FAIL", 8, (char *)rx);
-  }
-
   printf("\r\n\r\n");
   printf("================================================\r\n");
   printf("  QuailTracker U575 - PDM Audio Recorder\r\n");
