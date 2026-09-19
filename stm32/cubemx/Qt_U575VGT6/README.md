@@ -19,6 +19,11 @@ It was hand-written, so CubeMX has not validated it yet. On first open, check
 the items below and then save once, so CubeMX rewrites the file in its own
 canonical form.
 
+If CubeMX offers to migrate to a newer FW_U5 package, choose **Continue**.
+The repo's HAL drivers are from FW_U5 V1.8.0 (HAL 1.6.2), so generated init
+code has to target that same HAL. To move to a newer package, update
+`Drivers/` in the firmware first, then migrate this `.ioc` to match.
+
 ## Check in the CubeMX UI on first open
 
 - **MDF1:** the pin-mode and filter key names were guessed. Confirm:
