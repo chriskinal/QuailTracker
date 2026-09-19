@@ -1,0 +1,5 @@
+# Only the .ioc and docs are tracked; everything CubeMX generates is scratch.
+*
+!.gitignore
+!*.ioc
+!README.md
