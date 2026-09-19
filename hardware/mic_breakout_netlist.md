@@ -26,7 +26,7 @@ Cross-reference: `mic_breakout_bom.csv`
 | 1 | DATA | PDM data output |
 | 2 | VDD | Power supply (1.62–3.6V) |
 | 3 | CLK | PDM clock input |
-| 4 | SEL | Channel select (GND=left/falling edge, VDD=right/rising edge) |
+| 4 | SEL | Channel select (datasheet: GND=left/falling edge, VDD=right/rising edge — see note below) |
 | 5 | GND | Ground |
 
 ---
@@ -41,8 +41,14 @@ Three-pad jumper to select L/R channel:
                MIC1.4 (SEL)
 ```
 
-- **Primary board:** Bridge center to GND pad → left channel (data on falling clock edge)
-- **Secondary board:** Bridge center to VDD pad → right channel (data on rising clock edge)
+- **Primary board:** Bridge center to GND pad → left channel (silkscreen "Left")
+- **Secondary board:** Bridge center to VDD pad → right channel (silkscreen "Right")
+
+**Clock edge:** the edges above are the IM72D128 datasheet's nominal convention.
+Bench testing against the PCB silkscreen showed the opposite, so the firmware
+samples the GND-side ("Left") mic on the **rising** edge and the VDD-side
+("Right") mic on the **falling** edge. `MX_MDF1_Init` in `stm32/.../main.c` is
+authoritative; see the MDF1 section of `stm32u575_pinout.md`.
 
 ---
 
