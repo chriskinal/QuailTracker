@@ -57,6 +57,19 @@ Three places you'll buy from:
 - **Amazon** — ESP32-C3 Super Mini module, SHT30 module, active GPS
   ceramic-patch antenna with U.FL pigtail, 5V/2W solar panel, and the
   2.54 mm pin header strips for the through-hole headers.
+- **MicroSD card** — 32–64 GB, high-endurance or industrial grade.
+  Don't cheap out here: a station writes audio continuously for months,
+  and in the long-term field test bad cards silently corrupted ~35% of
+  files before the firmware started verifying CRCs (STM 0.10.19). The
+  [Great microSD Card Survey](https://www.bahjeez.com/the-great-microsd-card-survey/)
+  measured name-brand cards averaging 5,373 overwrite cycles to first
+  error, off-brand 2,258, and fake flash 1,503, with industrial grades
+  well ahead of consumer ones. SanDisk High Endurance, Samsung PRO
+  Endurance, or Kingston Industrial are safe picks. Avoid no-name cards
+  and suspiciously cheap high capacities — same counterfeit problem as
+  the cells below. Verify a new card end-to-end (`f3write`/`f3read`, or
+  h2testw on Windows) before it goes in the field, and keep an eye on
+  the SD error count in the web UI's Health tab afterward.
 - **Battery** — 1S2P 18650 pack, ~6800 mAh. Buy individual cells from a
   reputable distributor (IMR Batteries, Liion Wholesale, 18650 Battery
   Store) — Samsung 30Q or 35E are good picks. Avoid generic Amazon
