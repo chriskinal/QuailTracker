@@ -37,7 +37,7 @@ pio run --target upload    # flash via J-Link
 
 ## Development Notes
 
-- CubeMX reference project at `stm32/cubemx/Qt_U575VGT6/Qt_U575VGT6.ioc` — generate there (output is gitignored), copy init code into real project. Never generate into `stm32/QuailTracker_U575/` (its `.ioc` is a stale Nucleo-ZIT prototype)
+- CubeMX reference project at `stm32/cubemx/Qt_U575VGT6/Qt_U575VGT6.ioc` — generate there (output is gitignored), copy init code into real project. Never generate into `stm32/QuailTracker_U575/`
 - CubeMX wipes `Middlewares/` on code gen — restore FatFS from git after each generation
 - `pio run -t clean` when changes don't appear (PlatformIO caches .o files)
 - UART init MUST come before ADF1 init or Error_Handler silently hangs
