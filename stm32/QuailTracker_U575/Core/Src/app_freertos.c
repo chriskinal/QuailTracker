@@ -175,7 +175,7 @@ extern int formatSD(void);
 
 /* Battery/SHT30 functions from main.c */
 extern uint32_t battReadMv(void);
-extern void sht30Read(void);
+extern uint8_t sht30Read(void);
 
 #define SURVEY_DURATION_MS  300000      /* 5 minutes */
 #define SURVEY_MIN_SATS     4           /* minimum satellites for valid fix */
@@ -221,10 +221,6 @@ static uint32_t streamLastSpiTick = 0;  /* auto-stop timeout */
 #define GPS_FIX_TIMEOUT_MS         15000 /* max wait for GPS fix during duty cycle */
 #define OTA_SELF_CONFIRM_MS        20000 /* uptime after which a trial image self-confirms (not bricked) */
 #define SCHEDULE_CHECK_INTERVAL_MS 1000  /* how often to evaluate schedule */
-#define GPS_WARMUP_SEC                90  /* wake GPS this many seconds before a recording
-                                           * window so it acquires a fix before recording —
-                                           * Stop 2 cuts GPS_VCC, so this lead is spent awake.
-                                           * The 0.10.19 mid-file anchor is the safety net. */
 #define USER_CONNECTED_IDLE_MS    300000 /* 5 min: backstop only — STM stays awake after an
                                           * ESP wake until SPI idle IF the live client count
                                           * is unavailable (ESP silent). Real presence wins. */
@@ -251,6 +247,9 @@ static wake_source_t enterScheduledSleep(uint32_t seconds);
 static void healthLoad(void);
 int healthSave(void);
 void healthReset(void);
+/* Sentinel temperature meaning "no valid reading" — outside any real range and
+ * outside int16_t, so it can never collide with a genuine tempC100. */
+#define HEALTH_TEMP_INVALID  INT32_MIN
 void healthUpdateEnvironment(uint32_t battMv, int32_t tempC100);
 void healthUpdateRecStart(const char *filename);
 void healthUpdateRecStop(uint32_t bytes, uint32_t durationSecs);
@@ -1456,20 +1455,29 @@ static void detLogCsv(const char *species, float confidence,
         }
 
         /* Temperature and humidity from SHT30 */
-        int32_t tempWhole = sht30TempC100 / 100;
-        int32_t tempFrac  = sht30TempC100 % 100;
-        if (tempFrac < 0) tempFrac = -tempFrac;
-        uint32_t humWhole = sht30HumRH100 / 100;
-        uint32_t humFrac  = sht30HumRH100 % 100;
+        /* Temperature and humidity from SHT30 — left as empty CSV cells when the
+         * last read failed, rather than repeating a stale value (see sht30Read). */
+        char tempStr[12] = "";
+        char humStr[12]  = "";
+        if (dev.env.shtValid) {
+            int32_t tempWhole = sht30TempC100 / 100;
+            int32_t tempFrac  = sht30TempC100 % 100;
+            if (tempFrac < 0) tempFrac = -tempFrac;
+            uint32_t humWhole = sht30HumRH100 / 100;
+            uint32_t humFrac  = sht30HumRH100 % 100;
+            snprintf(tempStr, sizeof(tempStr), "%ld.%02ld",
+                     (long)tempWhole, (long)tempFrac);
+            snprintf(humStr, sizeof(humStr), "%lu.%02lu",
+                     (unsigned long)humWhole, (unsigned long)humFrac);
+        }
 
         /* FatFS f_printf doesn't support %f or %llu — use snprintf + f_puts */
         char line[224];
         snprintf(line, sizeof(line),
-                 "%s,%s,%.2f,%.6f,%.6f,%.1f,%ld.%02ld,%lu.%02lu,%s,%d,%llu\n",
+                 "%s,%s,%.2f,%.6f,%.6f,%.1f,%s,%s,%s,%d,%llu\n",
                  ts, species, (double)confidence,
                  (double)lat, (double)lon, (double)alt,
-                 (long)tempWhole, (long)tempFrac,
-                 (unsigned long)humWhole, (unsigned long)humFrac,
+                 tempStr, humStr,
                  cfg.stationId, ppsSynced ? 1 : 0,
                  (unsigned long long)windowStartSample);
         f_puts(line, &f);
@@ -2171,10 +2179,13 @@ static void StartBridgeTask(void *argument)
         /* Periodic SHT30 temperature/humidity read (~every 5s) */
         if ((HAL_GetTick() - lastSht30Tick) >= SHT30_INTERVAL_MS) {
             lastSht30Tick = HAL_GetTick();
-            sht30Read();
-            /* Update health min/max from latest readings */
+            uint8_t shtOk = sht30Read();
+            /* Update health min/max from latest readings.  Battery is always
+             * live; temperature only when the read succeeded, else a wedged
+             * sensor would pin tempMin/tempMax to one fabricated value. */
             uint32_t mv = battReadMv();
-            healthUpdateEnvironment(mv, (int32_t)sht30TempC100);
+            healthUpdateEnvironment(mv, shtOk ? (int32_t)sht30TempC100
+                                              : HEALTH_TEMP_INVALID);
             /* Track GPS fix losses */
             uint8_t curGpsValid = gpsData.valid;
             if (prevGpsValid && !curGpsValid)
@@ -2700,6 +2711,7 @@ void healthUpdateEnvironment(uint32_t battMv, int32_t tempC100)
 {
     if (battMv < health.battMinMv) health.battMinMv = battMv;
     if (battMv > health.battMaxMv) health.battMaxMv = battMv;
+    if (tempC100 == HEALTH_TEMP_INVALID) return;
     if (tempC100 < health.tempMinC100) health.tempMinC100 = tempC100;
     if (tempC100 > health.tempMaxC100) health.tempMaxC100 = tempC100;
 }
@@ -2803,10 +2815,8 @@ static void powerEnterRecord(void)
         osMutexRelease(fileMtxHandle);
     }
 
-    /* Start GPS duty cycle. If the warm-up lead already powered the GPS, leave it
-     * on — re-powering clears the freshly-acquired fix/PPS latch and throws away
-     * the warm-up. */
-    if (!gpsPowered) gpsSetPower(1);
+    /* Start GPS duty cycle */
+    gpsSetPower(1);
     lastGpsDutyTick = HAL_GetTick();
     gpsDutyActive = 0;
 
@@ -3008,38 +3018,23 @@ static void powerScheduleCheck(void)
          * a time, exit only on shouldRecord transition or USER_CONNECTED. */
         uint32_t loopIter = 0;
         for (;;) {
-            /* secsUntilNext is whole-minute granularity (drops the seconds), so
-             * subtract the elapsed seconds to land on the window's :00 second.
-             *
-             * Two regimes: far out, deep-sleep (GPS off) until the warm-up point;
-             * within GPS_WARMUP_SEC of the window, stay AWAKE with the GPS powered
-             * so it acquires a fix and we track PPS/RMC before recording starts.
-             * (Stop 2 cuts GPS_VCC — see enterStop2 — so warm-up can't be slept
-             * through.) This puts the PPS anchor at ~sample 0 instead of ~20 s in. */
-            uint32_t secsToWindow = (sched.secsUntilNext > ss) ? (sched.secsUntilNext - ss) : 0;
-            wake_source_t ws = WAKE_RTC;
+            /* secsUntilNext is whole-minute granularity (derived from nowMinUTC,
+             * which drops the seconds), so subtract the seconds already elapsed in
+             * the current minute — otherwise we wake up to ~59s into the window and
+             * clip its start. This lands the wake on the window's :00 second. */
+            uint32_t sleepSec = sched.secsUntilNext;
+            sleepSec = (sleepSec > ss) ? (sleepSec - ss) : 0;
+            if (sleepSec < 5)     sleepSec = 5;      /* floor: skip a pointless ~0s Stop 2 */
+            if (sleepSec > 65000) sleepSec = 65000;  /* RTC wake-timer max */
 
-            if (secsToWindow > GPS_WARMUP_SEC) {
-                uint32_t sleepSec = secsToWindow - GPS_WARMUP_SEC;
-                if (sleepSec < 5)     sleepSec = 5;      /* floor: skip a pointless ~0s Stop 2 */
-                if (sleepSec > 65000) sleepSec = 65000;  /* RTC wake-timer max */
+            printf("PWR: sleep iter=%lu rtc=%02u:%02u:%02u sleepSec=%lu nextWindow=%lu\r\n",
+                   (unsigned long)loopIter, hh, mm, ss,
+                   (unsigned long)sleepSec,
+                   (unsigned long)sched.secsUntilNext);
 
-                printf("PWR: sleep iter=%lu rtc=%02u:%02u:%02u sleepSec=%lu nextWindow=%lu\r\n",
-                       (unsigned long)loopIter, hh, mm, ss,
-                       (unsigned long)sleepSec,
-                       (unsigned long)sched.secsUntilNext);
-
-                ws = enterScheduledSleep(sleepSec);
-                printf("\r\nPWR: Woke from Stop 2 (%s)\r\n",
-                       ws == WAKE_ESP32 ? "ESP32" : "RTC");
-            } else {
-                if (!gpsPowered) {
-                    gpsSetPower(1);   /* pre-warm: acquire a fix before the window opens */
-                    printf("PWR: GPS warm-up ON (%lus to window)\r\n",
-                           (unsigned long)secsToWindow);
-                }
-                osDelay(1000);  /* stay awake; the GPS/NMEA task tracks the fix */
-            }
+            wake_source_t ws = enterScheduledSleep(sleepSec);
+            printf("\r\nPWR: Woke from Stop 2 (%s)\r\n",
+                   ws == WAKE_ESP32 ? "ESP32" : "RTC");
 
             if (ws == WAKE_ESP32) {
                 /* User connected. Stay awake until idle timeout. Inline

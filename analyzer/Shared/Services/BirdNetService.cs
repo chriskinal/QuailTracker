@@ -45,6 +45,11 @@ public class BirdNetService : IBirdNetService
     public bool IsModelLoaded => _session != null;
     public string? ModelPath { get; private set; }
 
+    /// <summary>Files skipped in the last AnalyzeBatchAsync because they could not
+    /// be decoded at all (empty until a batch runs). Partially-corrupt files are
+    /// NOT listed here — they are analyzed up to their damaged point.</summary>
+    public IReadOnlyList<string> LastRunSkippedFiles { get; private set; } = Array.Empty<string>();
+
     public async Task LoadModelAsync(string modelPath, CancellationToken ct = default)
     {
         await Task.Run(() =>
@@ -287,6 +292,7 @@ public class BirdNetService : IBirdNetService
         CancellationToken ct = default)
     {
         var allDetections = new ConcurrentBag<IReadOnlyList<Detection>>();
+        var skippedFiles = new ConcurrentBag<string>();
         var validFiles = audioFiles.Where(f => f.IsValid).ToList();
         var totalFiles = validFiles.Count;
         var totalSegments = validFiles
@@ -313,9 +319,30 @@ public class BirdNetService : IBirdNetService
                         Volatile.Read(ref detectionCount)));
                 });
 
-                var fileDetections = await AnalyzeFileAsync(
-                    audioFile, audioService, confidenceThreshold, targetSpecies,
-                    overlapSeconds, sensitivity, mergeCount, segmentProgress, null, token);
+                IReadOnlyList<Detection> fileDetections;
+                try
+                {
+                    fileDetections = await AnalyzeFileAsync(
+                        audioFile, audioService, confidenceThreshold, targetSpecies,
+                        overlapSeconds, sensitivity, mergeCount, segmentProgress, null, token);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;   // honor cancellation
+                }
+                catch (Exception ex)
+                {
+                    // Backstop: a file that can't be decoded at all (partial files
+                    // are already salvaged in AudioFileService) is skipped so one
+                    // bad file never aborts the whole batch. Note it and move on.
+                    skippedFiles.Add(fileName);
+                    Console.Error.WriteLine($"[BirdNet] skipped {fileName}: {ex.Message}");
+                    var done = Interlocked.Increment(ref filesCompleted);
+                    progress?.Report(new BirdNetProgress(
+                        done, totalFiles, Volatile.Read(ref segmentsCompleted),
+                        totalSegments, fileName, Volatile.Read(ref detectionCount)));
+                    return;
+                }
 
                 allDetections.Add(fileDetections);
                 var newDetectionCount = Interlocked.Add(ref detectionCount, fileDetections.Count);
@@ -330,6 +357,7 @@ public class BirdNetService : IBirdNetService
                     newDetectionCount));
             });
 
+        LastRunSkippedFiles = skippedFiles.ToArray();
         return allDetections.SelectMany(d => d).ToList();
     }
 

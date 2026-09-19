@@ -56,7 +56,8 @@ void Error_Handler(void);
 /* USER CODE BEGIN EFP */
 #include "device_state.h"
 wake_source_t enterStop2(uint32_t seconds);
-void sht30Read(void);
+uint8_t sht30Read(void);   /* 1 = success; on 0, dev.env temp/hum are NOT valid */
+void I2C_Recover(void);
 void rtcSyncFromGps(void);
 void rtcGetTime(uint8_t *hours, uint8_t *minutes, uint8_t *seconds);
 void rtcGetDate(uint8_t *day, uint8_t *month, uint16_t *year);

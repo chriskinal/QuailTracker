@@ -67,12 +67,52 @@ typedef enum {
 #define CMD25   25  /* WRITE_MULTIPLE_BLOCK */
 #define CMD55   55  /* APP_CMD */
 #define CMD58   58  /* READ_OCR */
+#define CMD59   59  /* CRC_ON_OFF */
 #define ACMD41  41  /* SD_SEND_OP_COND */
+
+/* Retries for a data block whose CRC failed (or that NAK'd) before giving up.
+ * SD SPI mode ships with data-CRC OFF, so a bus glitch on a 512 B block is
+ * stored/returned silently — the mechanism behind the 35%-corrupt field files.
+ * We enable CRC (CMD59) and retry a bad block: a transient glitch clears on the
+ * next attempt; a permanently-bad flash cell is at least detected + reported,
+ * never silently accepted. */
+#define SD_IO_RETRIES  3
 
 /* Private variables ---------------------------------------------------------*/
 extern SPI_HandleTypeDef hspi1;
 static volatile DSTATUS Stat = STA_NOINIT;
 static uint8_t CardType;
+static uint8_t sdCrcEnabled = 0;   /* 1 once CMD59 turned on card-side CRC */
+
+/* SD command CRC7 (poly x^7+x^3+1). Returned already shifted into bits [7:1]
+ * with the stop bit (bit 0 = 1) — ready to send as the command CRC byte. Once
+ * CMD59 enables CRC, the card checks EVERY command's CRC, so all commands (not
+ * just CMD0/CMD8) must carry a real one. Verified: CMD0→0x95, CMD8→0x87. */
+static uint8_t sd_crc7_byte(const uint8_t *data, int len)
+{
+    uint8_t crc = 0;
+    for (int i = 0; i < len; i++) {
+        uint8_t b = data[i];
+        for (int j = 0; j < 8; j++) {
+            crc <<= 1;
+            if ((b ^ crc) & 0x80) crc ^= 0x09;
+            b <<= 1;
+        }
+    }
+    return (uint8_t)(((crc & 0x7F) << 1) | 1);
+}
+
+/* SD data-block CRC: CRC-16-CCITT (poly 0x1021, init 0x0000), MSB-first. */
+static uint16_t sd_crc16(const uint8_t *buf, uint16_t len)
+{
+    uint16_t crc = 0;
+    for (uint16_t i = 0; i < len; i++) {
+        crc ^= (uint16_t)buf[i] << 8;
+        for (uint8_t b = 0; b < 8; b++)
+            crc = (crc & 0x8000) ? (uint16_t)((crc << 1) ^ 0x1021) : (uint16_t)(crc << 1);
+    }
+    return crc;
+}
 
 /* Private SD SPI helpers ---------------------------------------------------*/
 static volatile uint8_t spiDead = 0;  /* set if SPI times out — all ops bail */
@@ -254,18 +294,18 @@ static uint8_t SD_SendCmd(uint8_t cmd, uint32_t arg)
         if (!SD_Select()) return 0xFF;
     }
 
-    /* Send command packet */
-    SPI_TxRx(0x40 | cmd);
-    SPI_TxRx((uint8_t)(arg >> 24));
-    SPI_TxRx((uint8_t)(arg >> 16));
-    SPI_TxRx((uint8_t)(arg >> 8));
-    SPI_TxRx((uint8_t)(arg));
-
-    /* CRC - required for CMD0 and CMD8 */
-    uint8_t crc = 0xFF;
-    if (cmd == CMD0) crc = 0x95;
-    if (cmd == CMD8) crc = 0x87;
-    SPI_TxRx(crc);
+    /* Send command packet with a real CRC7 over all 6-byte header. Required for
+     * CMD0/CMD8 always, and for EVERY command once CMD59 turns CRC checking on —
+     * the previous code sent a dummy 0xFF for everything else, so enabling CRC
+     * made the card reject CMD17/CMD24/etc. (mount read of LBA 0 failed). */
+    uint8_t pkt[5];
+    pkt[0] = (uint8_t)(0x40 | cmd);
+    pkt[1] = (uint8_t)(arg >> 24);
+    pkt[2] = (uint8_t)(arg >> 16);
+    pkt[3] = (uint8_t)(arg >> 8);
+    pkt[4] = (uint8_t)(arg);
+    for (int i = 0; i < 5; i++) SPI_TxRx(pkt[i]);
+    SPI_TxRx(sd_crc7_byte(pkt, 5));
 
     /* Skip stuff byte for CMD12 */
     if (cmd == CMD12) SPI_TxRx(0xFF);
@@ -291,8 +331,16 @@ static int SD_RxDataBlock(uint8_t *buf, uint16_t len)
     if (token != 0xFE) return 0;
 
     SPI_RxMulti(buf, len);
-    SPI_TxRx(0xFF); /* Discard CRC */
-    SPI_TxRx(0xFF);
+    uint8_t crcHi = SPI_TxRx(0xFF);
+    uint8_t crcLo = SPI_TxRx(0xFF);
+    if (sdCrcEnabled) {
+        uint16_t rxCrc = ((uint16_t)crcHi << 8) | crcLo;
+        if (rxCrc != sd_crc16(buf, len)) {
+            printf("SD_Rx CRC MISMATCH (got %04X calc %04X) — retryable\r\n",
+                   rxCrc, sd_crc16(buf, len));
+            return 0;   /* caller retries */
+        }
+    }
     return 1;
 }
 
@@ -306,12 +354,15 @@ static int SD_TxDataBlock(const uint8_t *buf, uint8_t token)
     SPI_TxRx(token);
     if (token != 0xFD) {
         SPI_TxMulti(buf, 512);
-        SPI_TxRx(0xFF); /* Dummy CRC */
-        SPI_TxRx(0xFF);
+        /* Real CRC when enabled so the card can reject a corrupted block (resp
+         * 0x0B) instead of silently storing it; dummy otherwise (card ignores). */
+        uint16_t crc = sdCrcEnabled ? sd_crc16(buf, 512) : 0xFFFF;
+        SPI_TxRx((uint8_t)(crc >> 8));
+        SPI_TxRx((uint8_t)(crc & 0xFF));
 
         uint8_t resp = SPI_TxRx(0xFF);
         if ((resp & 0x1F) != 0x05) {
-            /* 0x05=accepted, 0x0B=CRC error (signal), 0x0D=write error (card),
+            /* 0x05=accepted, 0x0B=CRC error (retryable), 0x0D=write error (card),
              * 0xFF=SPI dead. */
             printf("SD_Tx FAIL: data resp=0x%02X spiDead=%d\r\n", resp, spiDead);
             return 0;
@@ -429,6 +480,16 @@ DSTATUS USER_initialize (
         SD_SendCmd(CMD16, 512); /* Set block size to 512 */
     }
 
+    /* Turn on card-side data-block CRC (arg bit0=1). SPI mode defaults to OFF,
+     * which is why bus glitches corrupted field files silently. If the card
+     * won't ACK it, fall back to no-CRC rather than fail the mount. */
+    if (ty) {
+        uint8_t crcResp = SD_SendCmd(CMD59, 1);
+        sdCrcEnabled = (crcResp == 0);
+        printf("SD init: data CRC %s (CMD59 resp=0x%02X)\r\n",
+               sdCrcEnabled ? "ENABLED" : "unavailable", crcResp);
+    }
+
     CardType = ty;
     SD_Deselect();
 
@@ -481,21 +542,35 @@ DRESULT USER_read (
 
     if (!(CardType & CT_BLOCK)) sector *= 512; /* Convert to byte address if needed */
 
-    if (count == 1) {
-        if (SD_SendCmd(CMD17, sector) == 0) {
-            if (SD_RxDataBlock(buff, 512)) count = 0;
+    /* Retry a block that fails its CRC (or NAKs): a transient bus glitch clears
+     * on re-read; a permanently-bad cell is reported, never silently accepted. */
+    for (int attempt = 0; attempt < SD_IO_RETRIES; attempt++) {
+        BYTE *p = buff;
+        UINT rem = count;
+        if (rem == 1) {
+            if (SD_SendCmd(CMD17, sector) == 0 && SD_RxDataBlock(p, 512)) rem = 0;
+        } else {
+            if (SD_SendCmd(CMD18, sector) == 0) {
+                do {
+                    if (!SD_RxDataBlock(p, 512)) break;
+                    p += 512;
+                } while (--rem);
+                SD_SendCmd(CMD12, 0);
+            }
         }
-    } else {
-        if (SD_SendCmd(CMD18, sector) == 0) {
-            do {
-                if (!SD_RxDataBlock(buff, 512)) break;
-                buff += 512;
-            } while (--count);
-            SD_SendCmd(CMD12, 0);
+        SD_Deselect();
+        if (rem == 0) {
+            if (attempt > 0)
+                printf("SD_read: recovered on attempt %d (LBA=%lu)\r\n",
+                       attempt + 1, (unsigned long)sector);
+            return RES_OK;
         }
+        if (spiDead) break;   /* retries are futile on a dead bus */
+        printf("SD_read: retry %d/%d (LBA=%lu)\r\n",
+               attempt + 1, SD_IO_RETRIES, (unsigned long)sector);
     }
-    SD_Deselect();
-    return count ? RES_ERROR : RES_OK;
+    printf("SD_read: FAILED after retries (LBA=%lu)\r\n", (unsigned long)sector);
+    return RES_ERROR;
   /* USER CODE END READ */
 }
 
@@ -528,37 +603,62 @@ DRESULT USER_write (
 
     UINT reqCount = count;
 
-    uint8_t cmdResp = 0xFF;
-    int cmdFailNum = 0;
-    if (count == 1) {
-        cmdResp = SD_SendCmd(CMD24, sector);
-        if (cmdResp == 0) {
-            if (SD_TxDataBlock(buff, 0xFE)) count = 0;
+    /* Retry a block the card rejects on CRC (resp 0x0B) — with CRC enabled a
+     * glitched write is caught here instead of silently stored (the field-file
+     * corruption). A permanently-failing write is reported after retries, and
+     * the recording task recovers the process (see app_freertos.c). */
+    for (int attempt = 0; attempt < SD_IO_RETRIES; attempt++) {
+        const BYTE *p = buff;
+        UINT rem = reqCount;
+        uint8_t cmdResp = 0xFF;
+        int cmdFailNum = 0;
+
+        if (rem == 1) {
+            cmdResp = SD_SendCmd(CMD24, sector);
+            if (cmdResp == 0) {
+                if (SD_TxDataBlock(p, 0xFE)) rem = 0;
+            } else {
+                cmdFailNum = 24;
+            }
         } else {
-            cmdFailNum = 24;
+            if (CardType & (CT_SD1 | CT_SD2)) {
+                SD_SendCmd(ACMD41 | 0x80, 0); /* Dummy ACMD23 prep */
+            }
+            cmdResp = SD_SendCmd(CMD25, sector);
+            if (cmdResp == 0) {
+                do {
+                    if (!SD_TxDataBlock(p, 0xFC)) break;
+                    p += 512;
+                } while (--rem);
+                /* Always send the stop token to terminate the CMD25 sequence
+                 * cleanly, even after a mid-stream failure, before any retry. */
+                if (!SD_TxDataBlock(0, 0xFD) && rem == 0) rem = 1;
+            } else {
+                cmdFailNum = 25;
+            }
         }
-    } else {
-        if (CardType & (CT_SD1 | CT_SD2)) {
-            SD_SendCmd(ACMD41 | 0x80, 0); /* Dummy ACMD23 prep */
+        SD_Deselect();
+
+        if (rem == 0) {
+            if (sdFormatState == 1)
+                sdFormatBytes += (uint32_t)reqCount * 512U;
+            if (attempt > 0)
+                printf("SD_write: recovered on attempt %d (LBA=%lu)\r\n",
+                       attempt + 1, (unsigned long)sector);
+            return RES_OK;
         }
-        cmdResp = SD_SendCmd(CMD25, sector);
-        if (cmdResp == 0) {
-            do {
-                if (!SD_TxDataBlock(buff, 0xFC)) break;
-                buff += 512;
-            } while (--count);
-            if (!SD_TxDataBlock(0, 0xFD)) count = 1; /* Stop token */
-        } else {
-            cmdFailNum = 25;
-        }
+        if (cmdFailNum)
+            printf("SD_write: CMD%d resp=0x%02X LBA=%lu spiDead=%d (retry %d/%d)\r\n",
+                   cmdFailNum, cmdResp, (unsigned long)sector, spiDead,
+                   attempt + 1, SD_IO_RETRIES);
+        else
+            printf("SD_write: block rejected LBA=%lu (retry %d/%d)\r\n",
+                   (unsigned long)sector, attempt + 1, SD_IO_RETRIES);
+        if (spiDead) break;   /* retries are futile on a dead bus */
     }
-    SD_Deselect();
-    if (sdFormatState == 1 && count == 0)
-        sdFormatBytes += (uint32_t)reqCount * 512U;
-    if (cmdFailNum)
-        printf("USER_write FAIL: CMD%d resp=0x%02X LBA=%lu spiDead=%d\r\n",
-               cmdFailNum, cmdResp, (unsigned long)sector, spiDead);
-    return count ? RES_ERROR : RES_OK;
+    printf("SD_write: FAILED after retries LBA=%lu — block lost\r\n",
+           (unsigned long)sector);
+    return RES_ERROR;
   /* USER CODE END WRITE */
 }
 #endif /* _USE_WRITE == 1 */

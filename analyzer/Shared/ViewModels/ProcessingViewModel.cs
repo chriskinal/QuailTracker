@@ -377,9 +377,11 @@ public partial class ProcessingViewModel : ObservableObject
             }
 
             var withBearing = newDetections.Count(d => !double.IsNaN(d.BearingDeg));
+            var skipped = _birdNetService.LastRunSkippedFiles.Count;
+            var skippedNote = skipped > 0 ? $" ({skipped} file(s) skipped — undecodable)" : string.Empty;
             _setStatus(withBearing > 0
-                ? $"Processing complete. {newDetections.Count} detections, {withBearing} with bearing."
-                : $"Processing complete. Found {newDetections.Count} detections.");
+                ? $"Processing complete. {newDetections.Count} detections, {withBearing} with bearing.{skippedNote}"
+                : $"Processing complete. Found {newDetections.Count} detections.{skippedNote}");
         }
         catch (OperationCanceledException)
         {

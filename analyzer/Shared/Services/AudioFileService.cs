@@ -494,7 +494,22 @@ public class AudioFileService : IAudioFileService
             {
                 ct.ThrowIfCancellationRequested();
 
-                var samplesRead = provider.Read(chunk, 0, chunk.Length);
+                int samplesRead;
+                try
+                {
+                    samplesRead = provider.Read(chunk, 0, chunk.Length);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // A corrupt frame mid-stream (e.g. the field SD corruption)
+                    // makes the FLAC decoder throw. Salvage everything decoded up
+                    // to the bad spot instead of failing the whole file — a
+                    // recording damaged at 15 min still yields 15 min of audio.
+                    Console.Error.WriteLine(
+                        $"[AudioFileService] {Path.GetFileName(filePath)}: decode stopped at " +
+                        $"{monoCount} frames ({monoCount / (double)Math.Max(1, srcRate):F1}s) — {ex.Message}");
+                    break;
+                }
                 if (samplesRead == 0) break;
 
                 var framesRead = samplesRead / channels;
@@ -592,7 +607,20 @@ public class AudioFileService : IAudioFileService
             }
 
             var interleaved = new float[sampleCount * 2];
-            var read = provider.Read(interleaved, 0, interleaved.Length);
+            int read;
+            try
+            {
+                read = provider.Read(interleaved, 0, interleaved.Length);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Corrupt frame within this segment — skip the bearing for this
+                // detection rather than aborting the run.
+                Console.Error.WriteLine(
+                    $"[AudioFileService] {Path.GetFileName(filePath)}: stereo segment at " +
+                    $"{offsetSeconds:F0}s undecodable — {ex.Message}");
+                return (Array.Empty<float>(), Array.Empty<float>());
+            }
 
             // Deinterleave into L and R
             var frames = read / 2;
@@ -646,7 +674,20 @@ public class AudioFileService : IAudioFileService
             {
                 ct.ThrowIfCancellationRequested();
 
-                var samplesRead = provider.Read(chunk, 0, chunk.Length);
+                int samplesRead;
+                try
+                {
+                    samplesRead = provider.Read(chunk, 0, chunk.Length);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // Salvage the portion decoded before a corrupt frame (see
+                    // LoadAllSamplesAsync) rather than failing the whole file.
+                    Console.Error.WriteLine(
+                        $"[AudioFileService] {Path.GetFileName(filePath)}: stereo decode stopped at " +
+                        $"{frameCount} frames — {ex.Message}");
+                    break;
+                }
                 if (samplesRead == 0) break;
 
                 var framesRead = samplesRead / 2;
