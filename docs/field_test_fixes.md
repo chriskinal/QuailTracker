@@ -44,6 +44,26 @@ error-log and crash-capture protocol that the STM32 side no longer implements.
   keeps logging. **Seen on 0.10.23 and on 0.10.22 (`main`)**, always after a
   Stop 2 wake. Root cause not yet established; branch
   `fix-audio-restart-after-stop2` only makes the failure loud.
+- **Config reverts to the UID-derived station name (`QT_xxxx`).** Seen on
+  0.10.19-diag, 2026-09-20: `Config: Invalid/empty - writing defaults` at boot
+  while `Health: Loaded from flash (boots=48)` — the page below survived.
+  `configSave()` erases + programs the single config page from **three tasks
+  with no lock** (CLI `app_freertos.c:1114,1141`; GPS survey-in `:2027,2079`,
+  which saves every 100 fixes; Bridge `:2338,2422`, on every adopt), and
+  `healthSave()` runs only from the Bridge task — which is why health lives and
+  config dies. A reset landing between the erase and the programming does the
+  same thing, with no second copy to fall back on (A/B went out with the
+  dual-bank OTA in v0.10.0 and is not coming back). It then becomes permanent:
+  defaults take `cfg_seq = 1`, `configSave()` bumps it to 2, and "higher seq
+  wins" (`spi_bridge.c:165`) pushes the UID name out to the ESP32, overwriting
+  the last good copy. `config_apply()` also never refreshes `deviceStationId`,
+  so filenames keep the boot-time name even after a good config is adopted.
+  **Fix (not yet written):** serialise the flash writes; skip the write when
+  nothing changed; load defaults with `cfg_seq = 0` and delay persisting them so
+  the ESP32's copy wins instead of being overwritten; refresh `deviceStationId`
+  on adopt. **This invalidated the 2026-09-20 step-02 run** — see the results
+  log.
+
 - **`SPI_CMD_HEALTH_RESET` has no handler on the STM32.** The rollback dropped
   the case while the ESP kept sending the command, so the web UI's stats reset
   has been a no-op since July. Restored on `diagnostics-reapply`.
@@ -85,6 +105,8 @@ starts recording from a fresh boot proves nothing.
 | 00 | 0.10.17 | 2026-09-20 | **PASS.** Slept into Stop 2, woke 17:25:01, 4 chunks x 300 s (51.9/51.9/51.7/51.7 MB), rotations logged, clean stop, slept again, survived an ESP32 wake. Measured 173 KB/s; PPS rate 48047.91 Hz. |
 
 | 01 | 0.10.18 | 2026-09-20 | **PASS.** Woke 18:13:00, 4 chunks x 300 s (51.5/51.6/51.8/51.6 MB), rotations, clean stop 18:33:00, slept. SHT30 failures now visible and clustered at sleep/wake (unpowered rail — step 05); `I2C_Recover` fired once after 2 strikes and recovered. |
+
+| 02 | 0.10.19-diag | 2026-09-20 | **INVALID — retest.** The config page was lost at boot, so the run used defaults: `chunkMinutes = 30` against a 20-minute window, i.e. **zero chunk rotations** — the suspected failure path was never exercised. What it did show: one 1200 s file (196.7 MB, 164 KB/s), clean stop, slept after, **overruns +0**. Latency: fatfs write max 101.33 ms (14067/14067 calls > 10 ms), sync max 53.87 ms (1758/1758), card write max 97.99 ms over 26 sectors (17419 slow / 40826 calls). No CRC-retry lines at all, so no CRC errors fired. |
 
 Baseline numbers for comparison: a healthy 5-minute chunk is **~52 MB**. A
 ~118 KB file means the DMA never restarted and only the ring residue was
