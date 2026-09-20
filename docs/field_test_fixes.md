@@ -14,7 +14,7 @@ between each. Batches get debugged backwards and cost days.
 
 | # | Defect seen in the field | Fix | Ver | On main? | Tested on HW? |
 |---|--------------------------|-----|-----|----------|---------------|
-| 1 | Temp/humidity frozen at last value | SHT30 fail-loud + `I2C_Recover` | 0.10.18 | yes | **no** |
+| 1 | Temp/humidity frozen at last value | SHT30 fail-loud + `I2C_Recover` | 0.10.18 | yes | **PASS 09-20** |
 | 2 | ~35% of files corrupt (silent bit errors) | SD data CRC + CMD59 + CRC7 + retry | 0.10.19 | yes | **no** |
 | 3 | Stop 2 exit errata (ES0499, ICACHE) | ICACHE workaround + REV_ID readout | 0.10.20 | yes | **no** |
 | 4 | Stop 2 entry wakeup race (ES0499) | PRIMASK guard | 0.10.21 | yes | **no** |
@@ -83,6 +83,8 @@ starts recording from a fresh boot proves nothing.
 | Step | Ver | Date | Result |
 |------|-----|------|--------|
 | 00 | 0.10.17 | 2026-09-20 | **PASS.** Slept into Stop 2, woke 17:25:01, 4 chunks x 300 s (51.9/51.9/51.7/51.7 MB), rotations logged, clean stop, slept again, survived an ESP32 wake. Measured 173 KB/s; PPS rate 48047.91 Hz. |
+
+| 01 | 0.10.18 | 2026-09-20 | **PASS.** Woke 18:13:00, 4 chunks x 300 s (51.5/51.6/51.8/51.6 MB), rotations, clean stop 18:33:00, slept. SHT30 failures now visible and clustered at sleep/wake (unpowered rail — step 05); `I2C_Recover` fired once after 2 strikes and recovered. |
 
 Baseline numbers for comparison: a healthy 5-minute chunk is **~52 MB**. A
 ~118 KB file means the DMA never restarted and only the ring residue was
