@@ -70,6 +70,20 @@ starts recording from a fresh boot proves nothing.
    - temperature/humidity present and changing in the web UI
 5. Record the result in the table above before flashing the next step.
 
+## Results log
+
+| Step | Ver | Date | Result |
+|------|-----|------|--------|
+| 00 | 0.10.17 | 2026-09-20 | **PASS.** Slept into Stop 2, woke 17:25:01, 4 chunks x 300 s (51.9/51.9/51.7/51.7 MB), rotations logged, clean stop, slept again, survived an ESP32 wake. Measured 173 KB/s; PPS rate 48047.91 Hz. |
+
+Baseline numbers for comparison: a healthy 5-minute chunk is **~52 MB**. A
+~118 KB file means the DMA never restarted and only the ring residue was
+written.
+
+**Conclusion so far:** the Stop 2 wake path is sound at 0.10.17, so the audio
+death after wake is introduced by one of steps 01-04 — all of which are on
+`main` today.
+
 ## The ladder
 
 Binaries live in `bisect_bins/ladder/`, numbered in apply order. Step 00 is the
