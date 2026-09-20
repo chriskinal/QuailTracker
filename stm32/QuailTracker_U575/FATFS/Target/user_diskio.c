@@ -583,6 +583,30 @@ DRESULT USER_read (
   * @retval DRESULT: Operation result
   */
 #if _USE_WRITE == 1
+/* --- DIAGNOSTIC: card-level write latency (step02 investigation) ------- */
+volatile uint32_t sdWrMaxUs     = 0;   /* slowest single USER_write call */
+volatile uint32_t sdWrSlowCount = 0;   /* calls that took > 10 ms */
+volatile uint32_t sdWrCalls     = 0;
+volatile uint32_t sdWrSectors   = 0;
+volatile uint32_t sdWrMaxSectors = 0;  /* sector count of the slowest call */
+
+static void sdDiagInit(void)
+{
+    static uint8_t done = 0;
+    if (done) return;
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CYCCNT = 0;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+    done = 1;
+}
+
+static void sdDiagDone(uint32_t t0, UINT count)
+{
+    uint32_t us = (DWT->CYCCNT - t0) / 160u;   /* 160 MHz */
+    if (us > sdWrMaxUs) { sdWrMaxUs = us; sdWrMaxSectors = count; }
+    if (us > 10000u) sdWrSlowCount++;
+}
+
 DRESULT USER_write (
 	BYTE pdrv,          /* Physical drive nmuber to identify the drive */
 	const BYTE *buff,   /* Data to be written */
@@ -600,6 +624,16 @@ DRESULT USER_write (
     if (Stat & STA_NOINIT) return RES_NOTRDY;
 
     if (!(CardType & CT_BLOCK)) sector *= 512;
+
+    /* --- DIAGNOSTIC: card-level write latency ---------------------------
+     * Separates "the card was busy" from "FatFS did extra work". Times the
+     * whole multi-sector run at the diskio layer; the audio task times the
+     * f_write/f_sync around it. A >10.7 ms stall here is what overruns the
+     * DMA ring (one half-buffer = 512 samples = 10.67 ms). */
+    sdDiagInit();
+    uint32_t t0 = DWT->CYCCNT;
+    sdWrCalls++;
+    sdWrSectors += count;
 
     UINT reqCount = count;
 
@@ -640,6 +674,7 @@ DRESULT USER_write (
         SD_Deselect();
 
         if (rem == 0) {
+            sdDiagDone(t0, reqCount);
             if (sdFormatState == 1)
                 sdFormatBytes += (uint32_t)reqCount * 512U;
             if (attempt > 0)
@@ -656,6 +691,7 @@ DRESULT USER_write (
                    (unsigned long)sector, attempt + 1, SD_IO_RETRIES);
         if (spiDead) break;   /* retries are futile on a dead bus */
     }
+    sdDiagDone(t0, reqCount);
     printf("SD_write: FAILED after retries LBA=%lu — block lost\r\n",
            (unsigned long)sector);
     return RES_ERROR;

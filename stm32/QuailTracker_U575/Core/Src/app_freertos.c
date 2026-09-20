@@ -461,6 +461,61 @@ void MX_FREERTOS_Init(void) {
 * @retval None
 */
 /* USER CODE END Header_StartAudioTask */
+/* --- DIAGNOSTIC: write-path latency (step02 investigation) --------------
+ * The ring overruns 512 samples at a time (one DMA half-buffer = 10.67 ms), so
+ * any single f_write/f_sync that blocks longer than that loses audio. Time both
+ * at the FatFS level here, and compare with the card-level figures from
+ * user_diskio.c to see whether the stall is the card or FatFS metadata work. */
+extern volatile uint32_t sdWrMaxUs, sdWrSlowCount, sdWrCalls, sdWrSectors, sdWrMaxSectors;
+
+static uint32_t wrMaxUs = 0, wrSlow = 0, wrCalls = 0;
+static uint32_t syMaxUs = 0, sySlow = 0, syCalls = 0;
+static uint32_t diagOverrunsAtStart = 0;
+
+static inline uint32_t diagNow(void)
+{
+    static uint8_t init = 0;
+    if (!init) {
+        CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+        DWT->CYCCNT = 0;
+        DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+        init = 1;
+    }
+    return DWT->CYCCNT;
+}
+
+static inline void diagTally(uint32_t t0, uint32_t *maxUs, uint32_t *slow, uint32_t *calls)
+{
+    uint32_t us = (DWT->CYCCNT - t0) / 160u;
+    if (us > *maxUs) *maxUs = us;
+    if (us > 10000u) (*slow)++;
+    (*calls)++;
+}
+
+static void diagReset(void)
+{
+    wrMaxUs = wrSlow = wrCalls = 0;
+    syMaxUs = sySlow = syCalls = 0;
+    sdWrMaxUs = sdWrSlowCount = sdWrCalls = sdWrSectors = sdWrMaxSectors = 0;
+    diagOverrunsAtStart = ringOverruns;
+}
+
+static void diagReport(const char *when)
+{
+    printf("DIAG %s: fatfs write max=%lu.%02lu ms (%lu slow / %lu calls), "
+           "sync max=%lu.%02lu ms (%lu slow / %lu) | card write max=%lu.%02lu ms "
+           "over %lu sectors (%lu slow / %lu calls, %lu sectors) | overruns +%lu\r\n",
+           when,
+           (unsigned long)(wrMaxUs / 1000), (unsigned long)((wrMaxUs % 1000) / 10),
+           (unsigned long)wrSlow, (unsigned long)wrCalls,
+           (unsigned long)(syMaxUs / 1000), (unsigned long)((syMaxUs % 1000) / 10),
+           (unsigned long)sySlow, (unsigned long)syCalls,
+           (unsigned long)(sdWrMaxUs / 1000), (unsigned long)((sdWrMaxUs % 1000) / 10),
+           (unsigned long)sdWrMaxSectors,
+           (unsigned long)sdWrSlowCount, (unsigned long)sdWrCalls, (unsigned long)sdWrSectors,
+           (unsigned long)(ringOverruns - diagOverrunsAtStart));
+}
+
 void StartAudioTask(void *argument)
 {
   /* USER CODE BEGIN audioTask */
@@ -486,8 +541,9 @@ void StartAudioTask(void *argument)
         melAccumIdx = 0;
         mel_reset();
         startRecording();
+        diagReset();
       }
-      else if (cmd == CMD_STOP_REC) stopRecording();
+      else if (cmd == CMD_STOP_REC) { diagReport("stop"); stopRecording(); }
     }
 
     /* Drain ring buffer into encoder/file writer.
@@ -694,7 +750,9 @@ void StartAudioTask(void *argument)
           }
           osMutexAcquire(fileMtxHandle, osWaitForever);
           UINT bw;
+          uint32_t dt0 = diagNow();
           FRESULT fres = f_write(&wavFile, packed, blockLen * 6, &bw);
+          diagTally(dt0, &wrMaxUs, &wrSlow, &wrCalls);
           if (fres != FR_OK) {
             printf("f_write FAILED: %d at %lu bytes\r\n", fres, (unsigned long)totalDataBytes);
             f_close(&wavFile);
@@ -704,7 +762,9 @@ void StartAudioTask(void *argument)
 
           /* Sync every ~1 second (stereo: 2ch × 3 bytes × 48000 = 288000 bytes/sec) */
           if ((totalDataBytes % (SAMPLE_RATE * 6)) < (uint32_t)(blockLen * 6)) {
+            uint32_t st0 = diagNow();
             f_sync(&wavFile);
+            diagTally(st0, &syMaxUs, &sySlow, &syCalls);
           }
           osMutexRelease(fileMtxHandle);
         } else {
@@ -713,7 +773,9 @@ void StartAudioTask(void *argument)
           if (encoded > 0) {
             osMutexAcquire(fileMtxHandle, osWaitForever);
             UINT bw;
+            uint32_t dt0 = diagNow();
             FRESULT fres = f_write(&wavFile, flacEncoder.outBuf, encoded, &bw);
+            diagTally(dt0, &wrMaxUs, &wrSlow, &wrCalls);
             if (fres != FR_OK) {
               printf("f_write FAILED: %d at %lu bytes\r\n", fres, (unsigned long)totalDataBytes);
               f_close(&wavFile);
@@ -724,7 +786,9 @@ void StartAudioTask(void *argument)
 
             /* Sync every ~8 frames (~680ms) */
             if ((flacEncoder.frameNumber % 8) == 0) {
+              uint32_t st0 = diagNow();
               f_sync(&wavFile);
+              diagTally(st0, &syMaxUs, &sySlow, &syCalls);
             }
             osMutexRelease(fileMtxHandle);
           }
@@ -734,8 +798,10 @@ void StartAudioTask(void *argument)
           uint32_t elapsedMs = HAL_GetTick() - recStartTick;
           if (elapsedMs >= (uint32_t)cfg.chunkMinutes * 60000u) {
             extern void chunkRecording(void);
+            diagReport("chunk");
             diagLog("Chunk rotation");
             chunkRecording();
+            diagReset();
           }
         }
 
