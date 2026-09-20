@@ -157,7 +157,7 @@ the two refactor steps. The refactor gets laddered like everything else.
 | Step | From | Adds | Status |
 |------|------|------|--------|
 | R00 | `6461b03` (0.10.17) | baseline — the 30-day build | PASS 2026-09-20 |
-| R01 | R00 | **flash single-owner**: mutex in `flashWritePage()` (or one owning task); skip the write when nothing changed; defaults load with `cfg_seq = 0` and are not persisted immediately, so the ESP32 copy wins; `config_apply()` refreshes `deviceStationId` | not written |
+| R01 | R00 | **flash single-owner**: mutex in `flashWritePage()` (or one owning task); skip the write when nothing changed; defaults load with `cfg_seq = 0` and are not persisted immediately, so the ESP32 copy wins; `config_apply()` refreshes `deviceStationId` | **written** — branch `r01-flash-single-owner`, 0.12.0 (`9dc8a9e`), `bisect_bins/R01_v0.12.0_flash-single-owner.bin`; **pending hardware test** |
 | R02 | R01 | **one `suspend()` / `resume()` pair** naming every peripheral in order — subsumes #6, and is the prime candidate for the audio-DMA-after-wake bug and part of the SHT30 failures | not written |
 | R03 | R02 | SD data CRC + CMD59 + CRC7 + retry (was #2 / step 02) | not applied |
 | R04 | R03 | `f_expand` pre-alloc + 15 s sync cadence (was #5) | not applied |
