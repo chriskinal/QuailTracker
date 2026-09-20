@@ -659,7 +659,10 @@ void StartAudioTask(void *argument)
 
           /* Process one mel hop when we have 256 decimated samples */
           if (melAccumIdx >= MEL_HOP) {
-            HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_7); /* blue LED: mel heartbeat */
+            /* NO heartbeat toggle here. This used to pulse PB7 as a "blue LED"
+             * — a leftover from an earlier board. On the V5 production board
+             * PB7 is I2C1_SDA, so every mel hop yanked the I2C data line and
+             * corrupted any SHT30 transfer in flight. See hardware/stm32u575_pinout.md. */
             mel_process_frame(melAccumBuf);
             melAccumIdx = 0;
 

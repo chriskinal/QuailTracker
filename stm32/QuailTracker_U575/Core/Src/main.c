@@ -1939,10 +1939,43 @@ static uint8_t sht30Crc(const uint8_t *data, uint8_t len)
 void I2C_Recover(void)
 {
     HAL_I2C_DeInit(&hi2c1);
+
+    /* Free the BUS before resetting the master. Resetting I2C1 fixes a latched
+     * BUSY flag, but if the SHT30 was power-cut mid-byte it can still be
+     * holding SDA low, and no amount of master-side reset releases it — the
+     * slave only lets go when it sees the clocks it is waiting for. Drive SCL
+     * manually up to 9 times (one full byte + ACK), then synthesise a STOP.
+     * PB6 = SCL, PB7 = SDA, both open-drain with external 4.7k pull-ups. */
+    GPIO_InitTypeDef g = {0};
+    g.Pin   = GPIO_PIN_6 | GPIO_PIN_7;
+    g.Mode  = GPIO_MODE_OUTPUT_OD;
+    g.Pull  = GPIO_NOPULL;
+    g.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOB, &g);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6 | GPIO_PIN_7, GPIO_PIN_SET);  /* release both */
+
+    for (int i = 0; i < 9 && HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_7) == GPIO_PIN_RESET; i++) {
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_RESET);   /* SCL low  */
+        for (volatile int d = 0; d < 800; d++) { }              /* ~5 µs @160MHz */
+        HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);     /* SCL high */
+        for (volatile int d = 0; d < 800; d++) { }
+    }
+
+    /* STOP: SDA low→high while SCL is high. */
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_RESET);
+    for (volatile int d = 0; d < 800; d++) { }
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
+    for (volatile int d = 0; d < 800; d++) { }
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_7, GPIO_PIN_SET);
+    for (volatile int d = 0; d < 800; d++) { }
+
+    if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_7) == GPIO_PIN_RESET)
+        printf("I2C1: SDA still held low after bus clear — sensor wiring?\r\n");
+
     __HAL_RCC_I2C1_FORCE_RESET();
     HAL_Delay(1);
     __HAL_RCC_I2C1_RELEASE_RESET();
-    MX_I2C1_Init();
+    MX_I2C1_Init();   /* restores PB6/PB7 to I2C1 AF via HAL_I2C_MspInit */
 }
 
 /* Read SHT30 single-shot, high repeatability, no clock stretch.
@@ -1952,34 +1985,121 @@ void I2C_Recover(void)
  * values in that case.  A previous version returned silently on every error
  * path, so a dead sensor kept publishing its last good reading indefinitely;
  * an entire 30-day deployment shipped a constant 21.92 C / 99.67 %RH. */
+/* One single-shot conversion. Returns 1 and fills *t100/*h100 on success.
+ * Touches no global state — the caller decides what a sample is worth. */
+static uint8_t sht30ReadOnce(int16_t *t100, uint16_t *h100)
+{
+    uint8_t cmd[2] = { 0x24, 0x00 };
+    if (HAL_I2C_Master_Transmit(&hi2c1, 0x44 << 1, cmd, 2, 100) != HAL_OK)
+        return 0;
+
+    HAL_Delay(16);  /* 15 ms max for high repeatability */
+
+    uint8_t rx[6];
+    if (HAL_I2C_Master_Receive(&hi2c1, 0x44 << 1, rx, 6, 100) != HAL_OK)
+        return 0;
+
+    /* Verify CRC on both words */
+    if (sht30Crc(rx, 2) != rx[2] || sht30Crc(rx + 3, 2) != rx[5])
+        return 0;
+
+    uint16_t rawT = ((uint16_t)rx[0] << 8) | rx[1];
+    uint16_t rawH = ((uint16_t)rx[3] << 8) | rx[4];
+
+    /* temp = -45 + 175 * rawT / 65535  →  in 0.01 °C units */
+    *t100 = (int16_t)(-4500 + (int32_t)17500 * rawT / 65535);
+    /* hum = 100 * rawH / 65535  →  in 0.01 %RH units */
+    *h100 = (uint16_t)((uint32_t)10000 * rawH / 65535);
+    return 1;
+}
+
+/* Burst-read policy. Air temperature and humidity move slowly, so a single
+ * sample is a needlessly fragile way to measure them: one NACK, one corrupted
+ * byte pair that happens to pass CRC, or one glitched bit and the reading is
+ * either lost or wrong. Take SHT30_SAMPLES conversions, keep the ones that
+ * complete, then reject any that sit far from the median before averaging the
+ * survivors. Costs ~130 ms once every 5 s in the bridge task.
+ *
+ * HAL_Delay (not osDelay) on purpose: this also runs from main() before the
+ * scheduler starts. */
+#define SHT30_SAMPLES      5
+#define SHT30_MIN_GOOD     3     /* fewer valid samples than this = failed read */
+#define SHT30_SPACING_MS   10
+#define SHT30_T_OUTLIER    200   /* 2.00 °C from the median */
+#define SHT30_H_OUTLIER    500   /* 5.00 %RH from the median */
+
+static uint32_t sht30Dropped = 0;   /* lifetime count of rejected samples */
+
+static int16_t medianI16(int16_t *v, int n)
+{
+    for (int i = 1; i < n; i++) {          /* insertion sort, n <= 5 */
+        int16_t k = v[i]; int j = i - 1;
+        while (j >= 0 && v[j] > k) { v[j + 1] = v[j]; j--; }
+        v[j + 1] = k;
+    }
+    return v[n / 2];
+}
+
 uint8_t sht30Read(void)
 {
     uint8_t ok = 0;
 
-    do {
-        uint8_t cmd[2] = { 0x24, 0x00 };
-        if (HAL_I2C_Master_Transmit(&hi2c1, 0x44 << 1, cmd, 2, 100) != HAL_OK)
-            break;
+    /* The sensor lives on the switched PERIPH rail (PD11). Between a Stop 2
+     * wake and powerEnterRecord() turning the rail back on, it has no power —
+     * reading it there is guaranteed to NACK and would count as a sensor
+     * failure. Skip instead: not powered is not broken. */
+    if (HAL_GPIO_ReadPin(GPIOD, GPIO_PIN_11) != GPIO_PIN_SET)
+        return 0;
 
-        HAL_Delay(16);  /* 15 ms max for high repeatability */
+    int16_t  ts[SHT30_SAMPLES];
+    uint16_t hs[SHT30_SAMPLES];
+    int n = 0;
 
-        uint8_t rx[6];
-        if (HAL_I2C_Master_Receive(&hi2c1, 0x44 << 1, rx, 6, 100) != HAL_OK)
-            break;
+    for (int i = 0; i < SHT30_SAMPLES; i++) {
+        int16_t t; uint16_t h;
+        if (sht30ReadOnce(&t, &h)) {
+            ts[n] = t; hs[n] = h; n++;
+        }
+        if (i + 1 < SHT30_SAMPLES) HAL_Delay(SHT30_SPACING_MS);
+    }
 
-        /* Verify CRC on both words */
-        if (sht30Crc(rx, 2) != rx[2] || sht30Crc(rx + 3, 2) != rx[5])
-            break;
+    if (n >= SHT30_MIN_GOOD) {
+        int16_t tSorted[SHT30_SAMPLES], hSorted[SHT30_SAMPLES];
+        for (int i = 0; i < n; i++) { tSorted[i] = ts[i]; hSorted[i] = (int16_t)hs[i]; }
+        int16_t tMed = medianI16(tSorted, n);
+        int16_t hMed = medianI16(hSorted, n);
 
-        uint16_t rawT = ((uint16_t)rx[0] << 8) | rx[1];
-        uint16_t rawH = ((uint16_t)rx[3] << 8) | rx[4];
+        int32_t tSum = 0, hSum = 0; int kept = 0, dropped = 0;
+        for (int i = 0; i < n; i++) {
+            int32_t dT = (int32_t)ts[i] - tMed;
+            int32_t dH = (int32_t)hs[i] - hMed;
+            if (dT < 0) dT = -dT;
+            if (dH < 0) dH = -dH;
+            if (dT > SHT30_T_OUTLIER || dH > SHT30_H_OUTLIER) {
+                dropped++;
+                sht30Dropped++;
+                /* Loud on the first few, then rare — a flaky bus must not
+                 * flood RTT for a whole deployment. */
+                if (sht30Dropped <= 3 || (sht30Dropped % 100) == 0)
+                    printf("SHT30: dropped outlier %ld.%02ldC %lu.%02lu%%RH "
+                           "(median %ld.%02ldC %ld.%02ld%%RH, %lu total)\r\n",
+                           (long)(ts[i] / 100), (long)labs(ts[i] % 100),
+                           (unsigned long)(hs[i] / 100), (unsigned long)(hs[i] % 100),
+                           (long)(tMed / 100), (long)labs(tMed % 100),
+                           (long)(hMed / 100), (long)labs(hMed % 100),
+                           (unsigned long)sht30Dropped);
+                continue;
+            }
+            tSum += ts[i]; hSum += hs[i]; kept++;
+        }
 
-        /* temp = -45 + 175 * rawT / 65535  →  in 0.01 °C units */
-        sht30TempC100 = (int16_t)(-4500 + (int32_t)17500 * rawT / 65535);
-        /* hum = 100 * rawH / 65535  →  in 0.01 %RH units */
-        sht30HumRH100 = (uint16_t)((uint32_t)10000 * rawH / 65535);
-        ok = 1;
-    } while (0);
+        if (kept > 0) {
+            sht30TempC100 = (int16_t)(tSum / kept);
+            sht30HumRH100 = (uint16_t)(hSum / kept);
+            ok = 1;
+        }
+        (void)dropped;
+    }
 
     if (ok) {
         if (dev.env.shtFailCount)
