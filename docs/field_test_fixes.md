@@ -33,6 +33,10 @@ Fixes 1–4 are on `main` (0.10.22) because they map to observed field defects.
 (0.5.19) and `shared/` were never rolled back, so they already speak the
 error-log and crash-capture protocol that the STM32 side no longer implements.
 
+> **Why these keep appearing:** see [architecture_review.md](architecture_review.md)
+> — resource ownership was never stated, so each feature adds a race and each
+> race gets a recovery patch.
+
 ## Open bugs found while investigating (not from the field test)
 
 - **Audio DMA is not restarted after a Stop 2 wake, silently.** `enterStop2()`
