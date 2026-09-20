@@ -47,6 +47,14 @@ error-log and crash-capture protocol that the STM32 side no longer implements.
 - **`SPI_CMD_HEALTH_RESET` has no handler on the STM32.** The rollback dropped
   the case while the ESP kept sending the command, so the web UI's stats reset
   has been a no-op since July. Restored on `diagnostics-reapply`.
+- **SHT30 read failures were always happening, just silently.** 0.10.17's
+  `sht30Read()` returns `void` and keeps the last values on error, so the
+  baseline looks clean while failing exactly as much; 0.10.18 only made it
+  audible. Root causes, fixed on branch `fix-sht30-read-path` (0.11.0, pending
+  test): the 5 s periodic read runs while the PERIPH rail is off between a
+  Stop 2 wake and `powerEnterRecord()`; `I2C_Recover()` reset only the master
+  and never clocked a slave off SDA; and the PB7 toggle below. That branch also
+  switches to a 5-sample burst read with median-based outlier rejection.
 - **PB7 is toggled as a "blue LED" mel heartbeat** (`app_freertos.c`, in the
   mel path). PB7 is **I2C1_SDA** on this board — there is no LED there. Every
   mel hop toggles the I2C data line, which is a strong candidate for the SHT30
@@ -102,6 +110,16 @@ Step 04 plus the SPI2 PING-test removal is today's `main` (0.10.22).
 **Test step 00 first.** If the baseline also loses audio after a Stop 2 wake,
 then the bug predates every fix in this table and the ladder is not the place
 to look — the wake path is.
+
+## Pending steps (new work, not from the rolled-back line)
+
+| Step | Branch | Ver | Adds | Tested? |
+|------|--------|-----|------|---------|
+| 05 | `fix-sht30-read-path` | 0.11.0 | SHT30 rail gate + real I2C bus clear + 5-sample burst read with outlier rejection + PB7/SDA toggle removed | **no** — `bisect_bins/step05_v0.11.0_sht30.bin` |
+
+Version numbering: new work starts at **0.11.0**. 0.10.23-0.10.33 belong to the
+rolled-back line and some of those binaries exist on thumbdrives and units, so
+reusing those numbers would make two different builds report the same version.
 
 ## Tools (not fixes — never ship)
 
