@@ -174,6 +174,45 @@ these may shrink to very little or become unnecessary.
 **Still pending separately:** step 05 (`fix-sht30-read-path`, 0.11.0) — the
 SHT30 rail gate and I2C bus clear. Re-evaluate against R02 for the same reason.
 
+### Compensation audit — a gate after R02, before anything is re-applied
+
+Almost the entire recovery stack lives in the rolled-back line, not in the
+baseline: at `6461b03` only `SPI_Recover` (SD bus) and the stock HardFault
+handler exist. So this is a gate on **re-applying** machinery, not on removing
+working code — the default is **do not re-apply**, and each item has to earn its
+way back in.
+
+**For each mechanism, answer in writing before it returns:**
+
+1. What failure does it handle, concretely?
+2. Can that failure still occur once R01 (single-owner flash) and R02
+   (symmetric suspend/resume) are in? If the failure was a symptom of either,
+   the answer is no and the mechanism is dropped.
+3. Is there field or bench evidence it ever fired *usefully* — a counter, an
+   error-log row, an RTT line? "Might help someday" is not evidence.
+4. What failure modes does it add? Recovery code runs at the worst moment by
+   definition.
+
+**The list:**
+
+| Mechanism | Compensates for | Audit note |
+|---|---|---|
+| `I2C_Recover` (#1) | SHT30 reads failing | Root cause is the rail gate + PB7/SDA toggle (step 05), both of which R02 and step 05 address. Keep only if reads still fail with the rail up and PB7 left alone. |
+| ICACHE ES0499 workaround (#3) | Stop 2 exit corruption | Silicon errata, not ownership — likely genuine. Confirm against REV_ID on the units actually in the field before carrying it. |
+| PRIMASK wakeup guard (#4) | Stop 2 entry race | Belongs to the sleep/wake state machine that R02 rewrites. Re-derive it inside R02 rather than re-applying the patch. |
+| ADC/SPI2/USART3 re-init (#6) | peripherals dead after wake | **Dropped** — R02 subsumes it by construction. |
+| Record-through remount (#7) | a write error abandoning the window | Genuine only if writes still fail after R03's CRC + retry. Ask what it does that the retry loop does not. |
+| SD retry loops (`SD_IO_RETRIES`, part of R03) | transient block errors | Arrives with CRC. Worth measuring separately: the 2026-09-20 run logged **zero** retries, so it has never been observed to fire. |
+| `SPI_Recover` (in baseline) | wedged SD SPI bus | Already there and cheap. Confirm it has ever fired; if not, it is untested code on the critical path. |
+| ESP32 NRST watchdog (`STM32_WD_*`) | a hung STM32 | **Has its own failure mode** — it can reset mid-flash-write, one of the two candidate causes of the config loss. R01 makes that survivable; re-check the 30 s threshold against real stall times. |
+| HardFault self-reset + TAMP capture (#12) | 30 s of downtime per fault | The capture is diagnostics and is worth keeping. The self-reset is a compensation — with ownership fixed, ask whether faults still occur at all. |
+| Audio stack 8 -> 16 KB (#13) | stack overflow at rotation | Already suspected to be an artifact of the batch. Measure high-water marks on R02 instead of guessing. |
+| Error log, SPI surface, `sdErrors` (#8-#11) | no visibility | Diagnostics, not compensation. Keep — they are how the questions above get answered. |
+
+**Rule:** anything that cannot answer questions 2 and 3 does not come back. If
+it turns out to be needed later, the error log will say so, and it can be added
+then against real evidence rather than a remembered fear.
+
 ### Test-run hygiene (until R01 lands)
 
 The 2026-09-20 step-02 run was void because the config page was lost and the
