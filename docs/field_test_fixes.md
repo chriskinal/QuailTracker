@@ -120,10 +120,75 @@ written.
 death after wake is introduced by one of steps 01-04 — all of which are on
 `main` today.
 
-## The ladder
+## DECISION 2026-09-20 — rebuild from 0.10.17 with ownership fixed first
+
+**The original ladder (steps 02-04) is stopped.** It is not being continued to
+step 13.
+
+**Why.** Five of the thirteen fixes are compensations for two architectural
+defects rather than fixes in their own right — see
+[architecture_review.md](architecture_review.md). #6 (ADC/SPI2/USART3 re-init
+after wake) is pure compensation and a symmetric `resume()` removes the need for
+it entirely; #1, #3, #4 and #7 are partly the same. Re-applying those one at a
+time onto a baseline that still has the defects means testing patches whose
+value depends on the bug still being there — and every such result is about code
+that the ownership work then replaces. Testing once, on the code that ships, is
+strictly less work than testing twice.
+
+**Why it is safe to stop the hunt.** The open question was which step kills audio
+after a Stop 2 wake. **Step 00 passed the full protocol including a Stop 2 wake**
+(2026-09-20), so 0.10.17 is known good on exactly that path and the bug is inside
+01-04 — all of which are dropped or re-applied one at a time below. It resurfaces
+on the way back up, under the same protocol, with the step that caused it named.
+If the culprit is step 02 (the prime suspect for the chunk-rotation hang) rather
+than the resume path, the refactor would never have fixed it and the ladder
+catches it when CRC is re-applied.
+
+**What is preserved.** 0.10.17 (`6461b03`) stays the fixed point. The test
+protocol and pass criteria above are unchanged, so the two passes already
+recorded stay comparable. The stopped ladder's findings live on branch
+`diag-step02-write-latency`.
+
+**Unchanged rule:** one change at a time, hardware test between each — including
+the two refactor steps. The refactor gets laddered like everything else.
+
+### Revised ladder
+
+| Step | From | Adds | Status |
+|------|------|------|--------|
+| R00 | `6461b03` (0.10.17) | baseline — the 30-day build | PASS 2026-09-20 |
+| R01 | R00 | **flash single-owner**: mutex in `flashWritePage()` (or one owning task); skip the write when nothing changed; defaults load with `cfg_seq = 0` and are not persisted immediately, so the ESP32 copy wins; `config_apply()` refreshes `deviceStationId` | not written |
+| R02 | R01 | **one `suspend()` / `resume()` pair** naming every peripheral in order — subsumes #6, and is the prime candidate for the audio-DMA-after-wake bug and part of the SHT30 failures | not written |
+| R03 | R02 | SD data CRC + CMD59 + CRC7 + retry (was #2 / step 02) | not applied |
+| R04 | R03 | `f_expand` pre-alloc + 15 s sync cadence (was #5) | not applied |
+| R05 | R04 | record-through: remount + fresh file, bounded (was #7) | not applied |
+| R06 | R05 | diagnostics: in-flash error log, SPI surface, health `sdErrors`, crash capture (was #8-#12) | not applied |
+
+**Dropped:** #6 (ADC/SPI2/USART3 re-init) — subsumed by R02.
+
+**Re-evaluate after R02, do not re-apply blind:** #1 (SHT30 fail-loud +
+`I2C_Recover`), #3 (ICACHE ES0499), #4 (PRIMASK guard), #13 (audio stack
+8->16 KB, already suspected to be an artifact). With symmetric suspend/resume
+these may shrink to very little or become unnecessary.
+
+**Still pending separately:** step 05 (`fix-sht30-read-path`, 0.11.0) — the
+SHT30 rail gate and I2C bus clear. Re-evaluate against R02 for the same reason.
+
+### Test-run hygiene (until R01 lands)
+
+The 2026-09-20 step-02 run was void because the config page was lost and the
+unit ran on defaults (`chunkMinutes = 30` against a 20-minute window, so no
+rotations). Until R01 is in:
+
+- Treat **`Config: Invalid/empty` in the RTT log as an automatic void** — reset
+  the config and rerun.
+- Confirm `chunkMinutes = 5` actually stuck before the window opens.
+
+## The ladder (original — STOPPED at step 02, see the decision above)
 
 Binaries live in `bisect_bins/ladder/`, numbered in apply order. Step 00 is the
-30-day baseline; stop at the first step that fails.
+30-day baseline; stop at the first step that fails. **Kept for the record:**
+steps 02-04 are not being run; their fixes return as R03 onward.
 
 | Step | Commit | Version | Adds |
 |------|--------|---------|------|
