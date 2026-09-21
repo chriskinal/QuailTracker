@@ -159,6 +159,9 @@ starts recording from a fresh boot proves nothing.
 
 | R05 dead-card path | 0.16.3 | 2026-09-21 | **PASS.** Every write failing from #400: `REC: finalise stopped at reopen — 2159168 bytes of audio are on the card`. Bails immediately instead of grinding, as intended. The file stays at the full 86.5 MB with the placeholder header (nothing can be written when the card is gone) and `flac -t` refuses it — but **`flac -d -F` recovers all 13.1 s of audio**, matching what the firmware reported. So the unrecoverable case costs convenience, not data, and needs no custom repair tool. |
 
+| R06+R07 | 0.18.1 | 2026-09-21 | **FAIL, then explained.** 2709 overruns (~28.9 s lost, two chunks short by 14 s) against 18-24 on R04/R05. Instrumented rerun (0.18.1-diag) showed **no write over 341 ms** but 4224 of 8098 writes over 10 ms — the bus, not the card. |
+| R08 (SD SPI 5 -> 10 MHz) | 0.19.0-diag | 2026-09-21 | **PASS.** Same instrumentation, same protocol: **chunk 1 overruns 1274 -> 0**, total 1521 -> 18, card write max ~100 ms -> ~39 ms, 4 of 4 chunks at full 300 s. The `>10ms` count barely moved (4224 -> 4050), so those writes are card busy time, not bus time — what the extra bandwidth bought is margin to drain a backlog faster than it builds. Also explains R07's "regression": at 5 MHz the bus ran ~27% duty with 341 ms of ring headroom, so R06+R07's extra load (SHT30 burst ~130 ms/5 s, error log) consumed headroom that was never there. |
+
 Baseline numbers for comparison: a healthy 5-minute chunk is **~52 MB**. A
 ~118 KB file means the DMA never restarted and only the ring residue was
 written.
@@ -209,6 +212,8 @@ the two refactor steps. The refactor gets laddered like everything else.
 | R03 | R02 | **`f_expand` pre-alloc + 15 s sync cadence** (was #5) — *pulled ahead of the CRC step, see below* | **PASS (with a cost) 2026-09-21** — 0.14.0 (`fe1db2e`). 4 chunks x 300 s, **3 overruns (~32 ms)** where R02 had 0 — one per mid-window chunk open, i.e. `f_expand` writing the FAT chain. Truncate confirmed. |
 | R04 | R03 | SD data CRC + CMD59 + CRC7 + retry (was #2 / step 02) | **PASS (with a cost) 2026-09-21** — 0.15.0 (`5fe599a`). 4 chunks x 300 s, **18 overruns (~192 ms)** vs R03's 3. The same change lost 14 s and 58 s as step 02, before R03 removed the allocation stalls. |
 | R05 | R04 | **finalise on write failure** — *replaces the planned record-through (#7)* | **PASS 2026-09-21** — 0.16.3. Normal path: 4 chunks x 300 s, clean stop. Failure path verified with injected write errors: recoverable error -> truncated, header-patched file that `flac -t` decodes (618496 samples, ok); dead card -> bails at `reopen`, audio left on the card. |
+| R08 | R07 | **SD SPI data clock 5 -> 10 MHz** (`SD_SPI_FAST_PRESCALER`, /16; env `stm32u575_spi20` for /8 = 20 MHz) | **PASS 2026-09-21** — 0.19.0-diag (`7c7dbef`). Chunk-1 overruns 1274 -> 0, total 1521 -> 18. |
+| R07 | R06 | SHT30 rail gate + burst read + diagnostics, no `I2C_Recover` | **PASS 2026-09-21** — 0.18.0/0.18.1. Zero `ERR_SHT30_READ` rows: the rail gate and the PB7/SDA removal were the fix, so `I2C_Recover` stays out. GPS fix-loss logging gated on its rail too (0.18.1). |
 | R06 | R05 | diagnostics: in-flash error log, SPI surface, health `sdErrors`, crash capture (was #8-#12) | **written** — branch `r06-diagnostics`, 0.17.0 (`26e3513`), `bisect_bins/R06_v0.17.0_diagnostics.bin`; **pending hardware test**. Self-reset NOT re-applied (audit default); SPI2 failure is logged but not recovered. |
 
 **Reordered 2026-09-21:** `f_expand` (was R04) now comes before the SD CRC work
