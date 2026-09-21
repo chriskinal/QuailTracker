@@ -933,6 +933,57 @@ void stopRecording(void)
  * Either way the file is truncated to true EOF: since R03 pre-allocates a whole
  * chunk, an un-finalised file stays at its full ~86.5 MB with an unwritten tail.
  */
+/* Finalise a recording whose FIL has been poisoned by a write error.
+ *
+ * FatFS latches the failure on the file object: ff.c ABORT() stores it in
+ * fp->err, and f_write / f_lseek / f_truncate / f_sync all return that latched
+ * error on every later call (ff.c:3528, 3627, 4485, 5152). So the header cannot
+ * be patched through the same handle even if the card has recovered — which is
+ * exactly what the 2026-09-21 injection run showed ("finalise stopped at
+ * truncate" on a card that was fine one write later).
+ *
+ * Close the poisoned handle, reopen the file, and patch it through a clean FIL.
+ * `eof` is f_tell() captured before the close — the true end of valid data.
+ * Every step is checked and the first refusal ends the sequence: on a genuinely
+ * failing card the reopen is what fails, immediately and cheaply.
+ */
+static const char *finaliseAfterWriteError(const char *path, FSIZE_t eof)
+{
+    FIL f;
+    UINT bw;
+
+    if (f_open(&f, path, FA_WRITE | FA_OPEN_EXISTING) != FR_OK)
+        return "reopen";
+
+    /* Drop the pre-allocated tail (R03 leaves the file at full chunk size). */
+    if (f_lseek(&f, eof) != FR_OK)   { f_close(&f); return "lseek-eof"; }
+    if (f_truncate(&f) != FR_OK)     { f_close(&f); return "truncate"; }
+
+    if (dev.rec.format == REC_FMT_WAV) {
+        if (f_lseek(&f, 0) != FR_OK) { f_close(&f); return "lseek-0"; }
+        WAV_WriteHeader(&f, SAMPLE_RATE, totalDataBytes);
+    } else {
+        uint8_t hdr[FLAC_HEADER_SIZE];
+        static uint8_t seekBuf[FLAC_SEEKTABLE_BLOCK_SIZE];
+
+        if (f_lseek(&f, 0) != FR_OK) { f_close(&f); return "lseek-0"; }
+
+        /* STREAMINFO is what makes the file decodable — without it the header
+         * still holds the placeholder written at open. */
+        flac_enc_finalize_header(&flacEncoder, hdr);
+        hdr[4] &= 0x7F;  /* NOT last — SEEKTABLE follows */
+        if (f_write(&f, hdr, FLAC_HEADER_SIZE, &bw) != FR_OK)
+            { f_close(&f); return "streaminfo"; }
+
+        flac_enc_finalize_seektable(&flacEncoder, seekBuf);
+        if (f_write(&f, seekBuf, FLAC_SEEKTABLE_BLOCK_SIZE, &bw) != FR_OK)
+            { f_close(&f); return "seektable"; }
+    }
+
+    f_close(&f);
+    return NULL;   /* complete */
+}
+
 void stopRecordingEx(uint8_t bestEffort)
 {
     if (!isRecording) {
@@ -941,28 +992,49 @@ void stopRecordingEx(uint8_t bestEffort)
     }
 
     isRecording = 0;
-    recFilename[0] = '\0';
 
     const char *failedAt = NULL;   /* first step that refused, in bestEffort */
+
+    /* Write error: the handle is poisoned, so close it and patch the file
+     * through a fresh one. Capture the true EOF and the name first —
+     * f_tell() is a macro over fp->fptr and needs no disk access. */
+    if (bestEffort) {
+        char path[sizeof(recFilename)];
+        FSIZE_t eof = f_tell(&wavFile);
+        strncpy(path, recFilename, sizeof(path) - 1);
+        path[sizeof(path) - 1] = '\0';
+        recFilename[0] = '\0';
+
+        f_close(&wavFile);   /* result irrelevant: the object is already failed */
+        failedAt = finaliseAfterWriteError(path, eof);
+
+        if (failedAt)
+            printf("REC: finalise stopped at %s — %lu bytes of audio are on the "
+                   "card, header/tail incomplete\r\n",
+                   failedAt, (unsigned long)totalDataBytes);
+        else
+            printf("REC: finalised after write error — %lu bytes, file is "
+                   "complete and decodable\r\n", (unsigned long)totalDataBytes);
+        goto health;
+    }
+
+    recFilename[0] = '\0';
 
     if (dev.rec.format == REC_FMT_WAV) {
         /* Append GUANO metadata chunk after audio data (skipped when the card
          * is already failing — it is metadata, not audio). */
-        if (!bestEffort) writeGuanoChunk(&wavFile, totalDataBytes);
+        writeGuanoChunk(&wavFile, totalDataBytes);
 
         /* fptr is now at true EOF. Release the pre-allocated tail (f_expand left
          * the file at full chunk size) before the f_size-based RIFF calc below. */
-        if (recPreallocated && f_truncate(&wavFile) != FR_OK && bestEffort)
-            failedAt = "truncate";
+        if (recPreallocated) f_truncate(&wavFile);
 
         /* Rewrite WAV header with actual audio data size */
-        if (!failedAt) {
-            if (f_lseek(&wavFile, 0) != FR_OK && bestEffort) failedAt = "lseek";
-            else WAV_WriteHeader(&wavFile, SAMPLE_RATE, totalDataBytes);
-        }
+        f_lseek(&wavFile, 0);
+        WAV_WriteHeader(&wavFile, SAMPLE_RATE, totalDataBytes);
 
         /* Fix RIFF container size to include GUANO chunk */
-        if (!failedAt && !bestEffort) {
+        {
             uint32_t riffSize = f_size(&wavFile) - 8;
             f_lseek(&wavFile, 4);
             UINT bw;
@@ -979,46 +1051,33 @@ void stopRecordingEx(uint8_t bestEffort)
         uint32_t flushBytes = flac_enc_flush(&flacEncoder);
         if (flushBytes > 0) {
             UINT bw;
-            if (f_write(&wavFile, flacEncoder.outBuf, flushBytes, &bw) != FR_OK && bestEffort)
-                failedAt = "flush";
+            f_write(&wavFile, flacEncoder.outBuf, flushBytes, &bw);
             totalDataBytes += bw;
             flac_enc_notify_write(&flacEncoder, bw);
         }
 
         /* fptr is now at end of the last audio frame = true EOF. Release the
          * pre-allocated tail here, before seeking back to patch the header. */
-        if (!failedAt && recPreallocated &&
-            f_truncate(&wavFile) != FR_OK && bestEffort)
-            failedAt = "truncate";
+        if (recPreallocated) f_truncate(&wavFile);
 
         /* Rewrite STREAMINFO + SEEKTABLE + VORBIS_COMMENT at file offset 0.
          * STREAMINFO is what makes the file decodable — without it the header
          * still holds the placeholder written at open. */
-        if (!failedAt) {
+        {
             UINT bw;
             uint8_t hdr[FLAC_HEADER_SIZE];
             static uint8_t seekBuf[FLAC_SEEKTABLE_BLOCK_SIZE];
 
-            if (f_lseek(&wavFile, 0) != FR_OK && bestEffort) {
-                failedAt = "lseek";
-            } else {
-                flac_enc_finalize_header(&flacEncoder, hdr);
-                hdr[4] &= 0x7F;  /* NOT last — SEEKTABLE follows */
-                if (f_write(&wavFile, hdr, FLAC_HEADER_SIZE, &bw) != FR_OK && bestEffort)
-                    failedAt = "streaminfo";
-            }
+            f_lseek(&wavFile, 0);
+            flac_enc_finalize_header(&flacEncoder, hdr);
+            hdr[4] &= 0x7F;  /* NOT last — SEEKTABLE follows */
+            f_write(&wavFile, hdr, FLAC_HEADER_SIZE, &bw);
 
             /* Finalize SEEKTABLE with real byte offsets */
-            if (!failedAt) {
-                flac_enc_finalize_seektable(&flacEncoder, seekBuf);
-                if (f_write(&wavFile, seekBuf, FLAC_SEEKTABLE_BLOCK_SIZE, &bw) != FR_OK
-                    && bestEffort)
-                    failedAt = "seektable";
-            }
+            flac_enc_finalize_seektable(&flacEncoder, seekBuf);
+            f_write(&wavFile, seekBuf, FLAC_SEEKTABLE_BLOCK_SIZE, &bw);
 
-            /* Metadata only — skipped when the card is failing. */
-            if (!failedAt && !bestEffort)
-                writeFlacVorbisComment(&wavFile);
+            writeFlacVorbisComment(&wavFile); /* replaces PADDING with real metadata */
         }
 
         f_close(&wavFile);
@@ -1031,16 +1090,8 @@ void stopRecordingEx(uint8_t bestEffort)
             (unsigned long)ratio);
     }
 
-    if (bestEffort) {
-        if (failedAt)
-            printf("REC: finalise stopped at %s — file closed, audio up to that "
-                   "point is on the card (header/tail may be incomplete)\r\n",
-                   failedAt);
-        else
-            printf("REC: finalised after write error — file is complete and "
-                   "decodable\r\n");
-    }
-
+health:
+    (void)failedAt;
     /* Update health stats with completed recording */
     {
         uint32_t secs = (dev.rec.format == REC_FMT_WAV)
