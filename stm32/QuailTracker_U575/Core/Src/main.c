@@ -2038,201 +2038,294 @@ void rtcGetDate(uint8_t *day, uint8_t *month, uint16_t *year)
     *year  = 2000 + (uint16_t)sDate.Year;
 }
 
-wake_source_t enterStop2(uint32_t seconds)
+/* ===================== Stop 2 suspend / resume =========================
+ *
+ * ONE pair, naming every peripheral, in order. resume() is the exact mirror of
+ * suspend(); read them side by side and "is everything back?" is answerable by
+ * reading one screen instead of hunting call sites.
+ *
+ * Rules:
+ *  - Anything suspend() touches, resume() restores. No exceptions, no
+ *    "the driver will sort it out later" unless that owner is named here.
+ *  - Every restore that can fail is checked and reported. Stop 2 destroys
+ *    peripheral state; a silent restore failure looks exactly like a hang
+ *    (see field_test_fixes.md: audio dead after wake, ~1 s of ring residue).
+ *  - Order matters: suspend goes high level -> low level (stop the traffic,
+ *    then cut the power); resume goes low level -> high level.
+ */
+
+typedef struct {
+    uint32_t moderA, moderB, moderD;   /* pin modes taken to analog for sleep */
+    uint32_t odrD;                     /* rail + GPS control line states      */
+    uint32_t pb12Moder, pb12Pupdr;     /* PB12 borrowed as the ESP wake input */
+    uint32_t exticr3;                  /* EXTI line 12 port mux               */
+    uint32_t nvicIser[8];              /* everything but the two wake IRQs    */
+    uint8_t  audioWasOn;
+} pwr_ctx_t;
+
+/* Bits in the resume failure mask — reported in one line, not scattered. */
+#define PWR_FAIL_SPI2    (1u << 0)
+#define PWR_FAIL_USART1  (1u << 1)
+#define PWR_FAIL_USART3  (1u << 2)
+#define PWR_FAIL_I2C1    (1u << 3)
+#define PWR_FAIL_ADC1    (1u << 4)
+#define PWR_FAIL_MDF_L   (1u << 5)
+#define PWR_FAIL_MDF_R   (1u << 6)
+
+static void pwrSuspend(pwr_ctx_t *c)
 {
-    if (seconds == 0 || seconds > 65535) return WAKE_RTC;
-
-    uint8_t wasAudioStarted = audioStarted;
-
-    /* Stop MDF1 stereo DMA if running */
+    /* 1. AUDIO (MDF1 + GPDMA) — stop the stream before anything it feeds. */
+    c->audioWasOn = audioStarted;
     if (audioStarted) {
         HAL_MDF_AcqStop_DMA(&MdfHandle0);
         HAL_MDF_AcqStop_DMA(&MdfHandle1);
         audioStarted = 0;
     }
 
-    /* Disable UART RXNE interrupts and clear error flags.
-     * Switching pins to analog disconnects USART RX, which can set ORE/FE.
-     * On STM32U5, RXNEIE also enables ORE interrupt — a set ORE would
-     * re-assert the USART NVIC line immediately after any pending clear,
-     * causing WFI to return instantly.  Clear errors + drain RDR first. */
+    /* 2. USART1 (GPS) + USART3 (console) — quiesce RX.
+     * Taking the pins to analog disconnects RX and can set ORE; on U5 RXNEIE
+     * also enables the ORE interrupt, so a latched ORE would re-assert the
+     * NVIC line and WFI would return instantly. Clear errors, drain RDR. */
     __HAL_UART_DISABLE_IT(&husart1, UART_IT_RXNE);
     __HAL_UART_DISABLE_IT(&husart3, UART_IT_RXNE);
     USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
     USART3->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
-    (void)USART1->RDR;  /* drain stale RXNE */
+    (void)USART1->RDR;
     (void)USART3->RDR;
 
-    /* Set all peripheral-facing GPIOs to analog (hi-Z) to prevent
-     * back-powering unpowered modules through ESD protection diodes.
-     * MODER = 0b11 per pin = analog mode (highest impedance). */
-    uint32_t moder_a = GPIOA->MODER;
-    uint32_t moder_b = GPIOB->MODER;
-    uint32_t moder_d = GPIOD->MODER;
-    GPIOA->MODER |= (0x3u << (4*2))   /* PA4  SD_CS               */
-                   | (0x3u << (5*2))   /* PA5  SPI1_SCK  (SD CLK)  */
-                   | (0x3u << (6*2))   /* PA6  SPI1_MISO (SD MISO) */
-                   | (0x3u << (7*2))   /* PA7  SPI1_MOSI (SD MOSI) */
-                   | (0x3u << (9*2))   /* PA9  USART1_TX (GPS RX)  */
-                   | (0x3u << (10*2)); /* PA10 USART1_RX (GPS TX)  */
-    GPIOB->MODER |= (0x3u << (6*2))   /* PB6  I2C1_SCL  (SHT30)  */
-                   | (0x3u << (7*2));  /* PB7  I2C1_SDA  (SHT30)  */
-    GPIOD->MODER |= (0x3u << (8*2))   /* PD8  USART3_TX (console) */
-                   | (0x3u << (9*2));  /* PD9  USART3_RX (console) */
-    /* Drive GPS control pins LOW to prevent ESD back-powering SW_VCC.
-     * Keep as outputs (don't change MODER) — floating PD12 turns on
-     * the power switch, floating PD14 could wake GPS from backup. */
-    uint32_t odr_d = GPIOD->ODR;
-    GPIOD->BSRR = (1u << (11+16))   /* PD11 PERIPH_VCC EN → LOW */
-                 | (1u << (12+16))   /* PD12 GPS_VCC EN    → LOW */
-                 | (1u << (14+16))   /* PD14 GPS_WAKE      → LOW */
-                 | (1u << (15+16));  /* PD15 GPS_nRESET    → LOW */
+    /* 3. I2C1 (SHT30) — the sensor loses power below; release the bus so it is
+     *    not driven into an unpowered slave. */
+    HAL_I2C_DeInit(&hi2c1);
 
-    /* --- Phase 2: Configure PB12 (SPI2 CS) as EXTI input for ESP32 wake ---
-     * Save PB12 MODER, then reconfigure as input with pull-up.
-     * ESP32 pulls PB12 LOW for 10ms to wake STM32. */
-    uint32_t pb12_moder_save = GPIOB->MODER & (0x3u << (12*2));
-    uint32_t pb12_pupdr_save = GPIOB->PUPDR & (0x3u << (12*2));
-    GPIOB->MODER &= ~(0x3u << (12*2));        /* PB12 = input */
-    GPIOB->PUPDR &= ~(0x3u << (12*2));
-    GPIOB->PUPDR |=  (0x1u << (12*2));        /* PB12 = pull-up */
+    /* 4. ADC1 (battery) — Stop 2 can power down the analog domain. */
+    HAL_ADC_DeInit(&hadc1);
 
-    /* Mux EXTI line 12 to port B (default is port A → PA12, which is
-     * floating and never transitions). On STM32U5, EXTI->EXTICR[3]
-     * holds lines 12-15, 8 bits per line. Port B = 0x01.
-     * Without this mux, the wake pulse on PB12 is invisible to EXTI. */
-    uint32_t exticr3_save = EXTI->EXTICR[3];
-    EXTI->EXTICR[3] = (exticr3_save & ~0xFFu) | 0x01u;
+    /* 5. SPI2 (ESP32 bridge) — the peer stays powered and may be mid-transfer
+     *    when we stop clocking; de-init so resume starts from a known state. */
+    HAL_SPI_DeInit(&hspi2);
 
-    /* Enable EXTI12 falling edge (PB12) for ESP32 wake */
-    EXTI->FTSR1 |= EXTI_FTSR1_FT12;          /* falling edge trigger */
-    EXTI->IMR1  |= EXTI_IMR1_IM12;            /* unmask EXTI line 12 */
+    /* 6. SPI1 / SD — owned by the disk layer (user_diskio.c), which re-runs
+     *    card init on the next access and owns SPI_Recover. Named here so the
+     *    list is complete: we only park its pins, below. */
 
-    /* Force the heartbeat LED OFF before sleep so it's a clean indicator:
-     * dark = sleeping, lit = awake/faulted. Otherwise it freezes wherever
-     * the 1Hz toggle landed and ON-during-sleep looks identical to a
-     * stuck-on-fault. */
+    /* 7. GPIO + rails — pins to analog (hi-Z) so nothing back-powers an
+     *    unpowered module through its ESD diodes, then cut the switched rails.
+     *    GPS control lines stay outputs driven LOW: floating PD12 turns the
+     *    switch back on, floating PD14 could wake the GPS from backup. */
+    c->moderA = GPIOA->MODER;
+    c->moderB = GPIOB->MODER;
+    c->moderD = GPIOD->MODER;
+    c->odrD   = GPIOD->ODR;
+    GPIOA->MODER |= (0x3u << (4*2))    /* PA4  SD_CS               */
+                   | (0x3u << (5*2))    /* PA5  SPI1_SCK            */
+                   | (0x3u << (6*2))    /* PA6  SPI1_MISO           */
+                   | (0x3u << (7*2))    /* PA7  SPI1_MOSI           */
+                   | (0x3u << (9*2))    /* PA9  USART1_TX (GPS RX)  */
+                   | (0x3u << (10*2));  /* PA10 USART1_RX (GPS TX)  */
+    GPIOB->MODER |= (0x3u << (6*2))    /* PB6  I2C1_SCL            */
+                   | (0x3u << (7*2));   /* PB7  I2C1_SDA            */
+    GPIOD->MODER |= (0x3u << (8*2))    /* PD8  USART3_TX           */
+                   | (0x3u << (9*2));   /* PD9  USART3_RX           */
+    GPIOD->BSRR = (1u << (11+16))      /* PD11 PERIPH_VCC EN -> LOW */
+                 | (1u << (12+16))      /* PD12 GPS_VCC EN    -> LOW */
+                 | (1u << (14+16))      /* PD14 GPS_WAKE      -> LOW */
+                 | (1u << (15+16));     /* PD15 GPS_nRESET    -> LOW */
+
+    /* 8. Status LED off: dark = asleep, lit = awake or faulted. Otherwise the
+     *    1 Hz heartbeat freezes wherever it landed and ON looks like a fault. */
     GPIOD->BSRR = (1u << (13 + 16));
+}
 
-    /* Disable SysTick + HAL timebase (TIM17) to stop periodic ticks */
+static uint32_t pwrResume(pwr_ctx_t *c)
+{
+    uint32_t fail = 0;
+
+    /* 8/7. GPIO + rails first — everything below needs power and real pins. */
+    GPIOD->ODR   = c->odrD;
+    GPIOA->MODER = c->moderA;
+    GPIOB->MODER = c->moderB;
+    GPIOD->MODER = c->moderD;
+    HAL_Delay(5);   /* rails settle; SHT30 needs ~1.5 ms from power-on */
+
+    /* 6. SPI1 / SD — the disk layer re-inits the card on next access. */
+
+    /* 5. SPI2 (ESP32 bridge) */
+    if (HAL_SPI_Init(&hspi2) != HAL_OK) fail |= PWR_FAIL_SPI2;
+
+    /* 4. ADC1 — re-init and recalibrate; the analog domain may have dropped. */
+    if (HAL_ADC_Init(&hadc1) != HAL_OK) {
+        fail |= PWR_FAIL_ADC1;
+    } else if (HAL_ADCEx_Calibration_Start(&hadc1, ADC_CALIB_OFFSET,
+                                           ADC_SINGLE_ENDED) != HAL_OK) {
+        fail |= PWR_FAIL_ADC1;
+    }
+
+    /* 3. I2C1 (SHT30) — the sensor was power-cycled with the bus parked. */
+    if (HAL_I2C_Init(&hi2c1) != HAL_OK ||
+        HAL_I2CEx_ConfigAnalogFilter(&hi2c1, I2C_ANALOGFILTER_ENABLED) != HAL_OK)
+        fail |= PWR_FAIL_I2C1;
+
+    /* 2. USART3 (console) + USART1 (GPS). Deliberately NOT MX_USART*_Init:
+     *    those call Error_Handler() on failure, which hangs the unit — over a
+     *    debug console, on wake. Fail soft and report; printf still reaches RTT. */
+    if (HAL_UART_Init(&husart3) != HAL_OK) fail |= PWR_FAIL_USART3;
+    if (HAL_UART_Init(&husart1) != HAL_OK) fail |= PWR_FAIL_USART1;
+    USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
+    USART3->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
+    (void)USART1->RDR;
+    (void)USART3->RDR;
+
+    /* NVIC enables back only now: the pins are real again and the USART error
+     * flags are clear, so nothing fires the instant interrupts return. RXNE
+     * stays off until after this, matching the order the 30-day build used. */
+    for (uint32_t i = 0; i < 8u; i++)
+        NVIC->ISER[i] = c->nvicIser[i];
+
+    __HAL_UART_ENABLE_IT(&husart1, UART_IT_RXNE);
+    __HAL_UART_ENABLE_IT(&husart3, UART_IT_RXNE);
+
+    /* 1. AUDIO (MDF1 + GPDMA) — last, so it restarts into a working system.
+     *    LOUD on failure: audioStarted staying 0 means no DMA callback ever
+     *    fires, the audio task blocks on its semaphore forever, and the
+     *    recording gets only the ring residue while the unit looks asleep. */
+    if (c->audioWasOn) {
+        MDF_DmaConfigTypeDef dmaL = {0};
+        dmaL.Address    = (uint32_t)audioBuffer;
+        dmaL.DataLength = AUDIO_BUF_SIZE * 4;
+        dmaL.MsbOnly    = DISABLE;
+        MDF_DmaConfigTypeDef dmaR = {0};
+        dmaR.Address    = (uint32_t)audioBufferR;
+        dmaR.DataLength = AUDIO_BUF_SIZE * 4;
+        dmaR.MsbOnly    = DISABLE;
+
+        HAL_StatusTypeDef sL = HAL_MDF_AcqStart_DMA(&MdfHandle0, &MdfFilterConfig0, &dmaL);
+        HAL_StatusTypeDef sR = HAL_MDF_AcqStart_DMA(&MdfHandle1, &MdfFilterConfig1, &dmaR);
+        if (sL != HAL_OK) fail |= PWR_FAIL_MDF_L;
+        if (sR != HAL_OK) fail |= PWR_FAIL_MDF_R;
+        if (sL == HAL_OK && sR == HAL_OK) {
+            HAL_MDF_GenerateTrgo(&MdfHandle0);
+            audioStarted = 1;
+        }
+    }
+
+    if (fail)
+        printf("PWR: resume INCOMPLETE mask=0x%02lX%s%s%s%s%s%s%s\r\n",
+               (unsigned long)fail,
+               (fail & PWR_FAIL_MDF_L)  ? " MDF-L(audio DEAD)" : "",
+               (fail & PWR_FAIL_MDF_R)  ? " MDF-R(audio DEAD)" : "",
+               (fail & PWR_FAIL_ADC1)   ? " ADC1(battery)"     : "",
+               (fail & PWR_FAIL_I2C1)   ? " I2C1(SHT30)"       : "",
+               (fail & PWR_FAIL_SPI2)   ? " SPI2(ESP)"         : "",
+               (fail & PWR_FAIL_USART1) ? " USART1(GPS)"       : "",
+               (fail & PWR_FAIL_USART3) ? " USART3(console)"   : "");
+    return fail;
+}
+
+/* Borrow PB12 (SPI2 CS) as the ESP32 wake input and arm the RTC timer. Not a
+ * peripheral suspend — this is the sleep mechanism itself, so it lives apart
+ * from the pair above and is undone by pwrDisarmWake(). */
+static void pwrArmWake(pwr_ctx_t *c, uint32_t seconds)
+{
+    c->pb12Moder = GPIOB->MODER & (0x3u << (12*2));
+    c->pb12Pupdr = GPIOB->PUPDR & (0x3u << (12*2));
+    GPIOB->MODER &= ~(0x3u << (12*2));       /* PB12 = input    */
+    GPIOB->PUPDR &= ~(0x3u << (12*2));
+    GPIOB->PUPDR |=  (0x1u << (12*2));       /* PB12 = pull-up  */
+
+    /* Mux EXTI line 12 to port B (default port A -> PA12, which floats and
+     * never transitions). EXTI->EXTICR[3] holds lines 12-15, 8 bits each. */
+    c->exticr3 = EXTI->EXTICR[3];
+    EXTI->EXTICR[3] = (c->exticr3 & ~0xFFu) | 0x01u;
+    EXTI->FTSR1 |= EXTI_FTSR1_FT12;          /* ESP pulls CS low for 10 ms */
+    EXTI->IMR1  |= EXTI_IMR1_IM12;
+
+    /* Tick off: no periodic interrupts to wake us early. */
     SysTick->CTRL &= ~(SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk);
     HAL_SuspendTick();
 
-    /* Deactivate previous wake-up timer, then reconfigure for requested seconds.
-     * Use WP disable/enable around HAL calls to work around STM32U5 HAL v1.8.0
-     * which doesn't manage write protection in SetWakeUpTimer_IT. */
+    /* RTC wake-up timer. WP disable/enable around the HAL calls works around
+     * STM32U5 HAL v1.8.0 not managing write protection in SetWakeUpTimer_IT. */
     __HAL_RTC_WRITEPROTECTION_DISABLE(&hrtc);
     HAL_RTCEx_DeactivateWakeUpTimer(&hrtc);
     HAL_RTCEx_SetWakeUpTimer_IT(&hrtc, seconds - 1,
                                  RTC_WAKEUPCLOCK_CK_SPRE_16BITS, 0);
     __HAL_RTC_WRITEPROTECTION_ENABLE(&hrtc);
-
-    /* EXTI line 19 = RTC wake-up timer (configurable event on U5) */
-    EXTI->RTSR1 |= EXTI_RTSR1_RT19;
+    EXTI->RTSR1 |= EXTI_RTSR1_RT19;          /* line 19 = RTC wake-up timer */
     EXTI->IMR1  |= EXTI_IMR1_IM19;
 
-    /* Save all NVIC interrupt enables, then disable everything except
-     * the RTC IRQ (EXTI line 19) and EXTI0 (ESP32 CS wake).
-     * WFI only wakes on enabled+pending interrupts. */
-    uint32_t nvic_iser_save[8];
+    /* Leave only the two wake IRQs enabled — WFI returns on any enabled
+     * pending interrupt, so everything else has to go. */
     for (uint32_t i = 0; i < 8u; i++) {
-        nvic_iser_save[i] = NVIC->ISER[i];
-        NVIC->ICER[i] = 0xFFFFFFFFu;       /* disable all IRQs */
+        c->nvicIser[i] = NVIC->ISER[i];
+        NVIC->ICER[i] = 0xFFFFFFFFu;
     }
-    NVIC_EnableIRQ(RTC_IRQn);               /* enable RTC wake */
-    NVIC_EnableIRQ(EXTI12_IRQn);            /* enable ESP32 CS wake */
+    NVIC_EnableIRQ(RTC_IRQn);
+    NVIC_EnableIRQ(EXTI12_IRQn);
 
-    /* Clear ALL pending: SysTick, PendSV, NVIC, and EXTI (both edges) */
-    SCB->ICSR  = SCB_ICSR_PENDSTCLR_Msk | SCB_ICSR_PENDSVCLR_Msk;
+    /* Clear everything pending: SysTick, PendSV, NVIC, EXTI (both edges). */
+    SCB->ICSR = SCB_ICSR_PENDSTCLR_Msk | SCB_ICSR_PENDSVCLR_Msk;
     for (uint32_t i = 0; i < 8u; i++)
         NVIC->ICPR[i] = 0xFFFFFFFFu;
-    EXTI->RPR1 = 0xFFFFFFFFu;              /* clear all rising pending  */
-    EXTI->FPR1 = 0xFFFFFFFFu;              /* clear all falling pending */
-    espWakePulseSeen = 0;                  /* reset before sleep */
+    EXTI->RPR1 = 0xFFFFFFFFu;
+    EXTI->FPR1 = 0xFFFFFFFFu;
+    espWakePulseSeen = 0;
     __DSB();
     __ISB();
+}
 
-    /* Enter Stop 2 */
-    HAL_PWREx_EnterSTOP2Mode(PWR_STOPENTRY_WFI);
-
-    /* --- CPU resumes here after RTC or EXTI12 wake-up ---
-     * Note: by the time we get here, the EXTI12 IRQ handler has already
-     * run and cleared EXTI->FPR1 bit 12. We rely on espWakePulseSeen
-     * which is set by HAL_GPIO_EXTI_Falling_Callback. */
-    wake_source_t wakeSource = espWakePulseSeen ? WAKE_ESP32 : WAKE_RTC;
-
-    /* Restore PLL / 160MHz system clock */
+static void pwrDisarmWake(pwr_ctx_t *c)
+{
+    /* Clock and tick back first — everything below assumes 160 MHz. */
     SystemClock_Config();
-
-    /* Re-enable SysTick + HAL timebase (TIM17) */
     SysTick->CTRL |= SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk;
     HAL_ResumeTick();
 
-    /* Deactivate RTC wake-up timer */
     __HAL_RTC_WRITEPROTECTION_DISABLE(&hrtc);
     HAL_RTCEx_DeactivateWakeUpTimer(&hrtc);
     __HAL_RTC_WRITEPROTECTION_ENABLE(&hrtc);
 
-    /* Disable EXTI12 (PB12) — no longer needed as wake source */
     EXTI->FTSR1 &= ~EXTI_FTSR1_FT12;
     EXTI->IMR1  &= ~EXTI_IMR1_IM12;
-    EXTI->FPR1   = EXTI_FPR1_FPIF12;   /* clear pending */
+    EXTI->FPR1   = EXTI_FPR1_FPIF12;
+    EXTI->EXTICR[3] = c->exticr3;
 
-    /* Restore EXTICR mux for line 12 to its original (default port A) value */
-    EXTI->EXTICR[3] = exticr3_save;
-
-    /* Restore PB12 to its original mode (SPI2 CS output) */
     GPIOB->PUPDR &= ~(0x3u << (12*2));
-    GPIOB->PUPDR |= pb12_pupdr_save;
+    GPIOB->PUPDR |= c->pb12Pupdr;
     GPIOB->MODER &= ~(0x3u << (12*2));
-    GPIOB->MODER |= pb12_moder_save;
+    GPIOB->MODER |= c->pb12Moder;
 
-    /* Clear UART error flags accumulated during sleep (ORE from RX pins
-     * disconnected from AF) and drain stale RDR before restoring GPIOs. */
-    USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
-    USART3->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
-    (void)USART1->RDR;
-    (void)USART3->RDR;
+    /* NVIC enables are restored in pwrResume(), not here: they must come after
+     * the GPIO restore, because reconnecting the USART RX pins can raise ORE. */
+}
 
-    /* Restore peripheral GPIO states (saved before sleep) */
-    GPIOD->ODR = odr_d;
-    GPIOA->MODER = moder_a;
-    GPIOB->MODER = moder_b;
-    GPIOD->MODER = moder_d;
+wake_source_t enterStop2(uint32_t seconds)
+{
+    if (seconds == 0 || seconds > 65535) return WAKE_RTC;
 
-    /* GPIOs restored — USART RX pins reconnected, may generate new ORE.
-     * Clear errors again + drain RDR before restoring NVIC enables. */
-    USART1->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
-    USART3->ICR = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF | USART_ICR_PECF;
-    (void)USART1->RDR;
-    (void)USART3->RDR;
+    pwr_ctx_t ctx;
+    pwrSuspend(&ctx);
+    pwrArmWake(&ctx, seconds);
 
-    /* Restore all NVIC interrupt enables (saved before sleep) */
-    for (uint32_t i = 0; i < 8u; i++)
-        NVIC->ISER[i] = nvic_iser_save[i];
+    /* ES0499 (rev W): the device can HANG if a wakeup event asserts in the few
+     * cycles before Stop entry — exactly an ESP CS-wake pulse landing as we go
+     * down. Mask across the entry: WFI still wakes on a pending enabled IRQ
+     * with PRIMASK set, and the handler is simply deferred to the far side. */
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
 
-    /* Re-enable UART RXNE interrupts */
-    __HAL_UART_ENABLE_IT(&husart1, UART_IT_RXNE);
-    __HAL_UART_ENABLE_IT(&husart3, UART_IT_RXNE);
+    HAL_PWREx_EnterSTOP2Mode(PWR_STOPENTRY_WFI);
 
-    /* Restart MDF1 stereo DMA if it was running */
-    if (wasAudioStarted) {
-        extern int32_t audioBuffer[];
-        extern int32_t audioBufferR[];
-        MDF_DmaConfigTypeDef dmaL = {0};
-        dmaL.Address = (uint32_t)audioBuffer;
-        dmaL.DataLength = AUDIO_BUF_SIZE * 4;
-        dmaL.MsbOnly = DISABLE;
-        MDF_DmaConfigTypeDef dmaR = {0};
-        dmaR.Address = (uint32_t)audioBufferR;
-        dmaR.DataLength = AUDIO_BUF_SIZE * 4;
-        dmaR.MsbOnly = DISABLE;
-        if (HAL_MDF_AcqStart_DMA(&MdfHandle0, &MdfFilterConfig0, &dmaL) == HAL_OK &&
-            HAL_MDF_AcqStart_DMA(&MdfHandle1, &MdfFilterConfig1, &dmaR) == HAL_OK) {
-            HAL_MDF_GenerateTrgo(&MdfHandle0);
-            audioStarted = 1;
-        }
-    }
+    /* --- resumes here on RTC or EXTI12 --- */
+
+    /* Let the deferred wake handler run before reading the flag it sets; only
+     * the two wake IRQs are enabled, so nothing else fires. */
+    __set_PRIMASK(primask);
+    __ISB();
+
+    wake_source_t wakeSource = espWakePulseSeen ? WAKE_ESP32 : WAKE_RTC;
+
+    pwrDisarmWake(&ctx);
+    pwrResume(&ctx);
 
     return wakeSource;
 }
