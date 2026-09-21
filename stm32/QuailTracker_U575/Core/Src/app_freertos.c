@@ -269,6 +269,8 @@ static int32_t  lpfPrevOut = 0;
 static uint32_t lpfAlpha   = 0;   /* computed from bpfHigh, Q16 */
 /* Right channel filter state (independent, same coefficients) */
 static int32_t  hpfPrevInR  = 0;
+static int32_t  hpfPrevOutR = 0;
+static int32_t  lpfPrevOutR = 0;
 
 /* Recording file-sync cadence. f_sync flushes the dirty dirent (and, without
  * f_expand, FAT/FSInfo) to the card; doing it every ~1 s rewrote a fixed metadata
@@ -282,8 +284,6 @@ static int32_t  hpfPrevInR  = 0;
 #define REC_SYNC_INTERVAL_MS  15000u
 static uint32_t recLastSyncTick = 0;
 static uint8_t  recSyncArmed    = 0;   /* 0 until the first write of a recording */
-static int32_t  hpfPrevOutR = 0;
-static int32_t  lpfPrevOutR = 0;
 
 /* Compute Q16 HPF alpha from cutoff frequency: alpha = e^(-2*pi*fc/fs) * 65536 */
 static uint32_t computeHpfAlpha(uint16_t fc) {
@@ -2840,11 +2840,13 @@ int healthSave(void)
 
 void healthReset(void)
 {
-    uint32_t boots = health.bootCount;  /* preserve boot count across resets */
+    /* Everything goes, bootCount included — shared/spi_protocol.h defines
+     * SPI_CMD_HEALTH_RESET as "zero all health stats, including bootCount",
+     * and the web UI's Reset Stats leaving the boot count standing is the
+     * behaviour that gets reported as a bug. */
     memset(&health, 0, sizeof(health));
     health.magic = HEALTH_MAGIC;
     health.version = HEALTH_VERSION;
-    health.bootCount = boots;
     health.battMinMv = 0xFFFFFFFF;
     health.tempMinC100 = 32767;
     health.tempMaxC100 = -32768;
