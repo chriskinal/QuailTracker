@@ -43,7 +43,9 @@ error-log and crash-capture protocol that the STM32 side no longer implements.
 > — resource ownership was never stated, so each feature adds a race and each
 > race gets a recovery patch.
 
-## Open bugs found while investigating (not from the field test)
+## Bugs found while investigating (not from the field test) — all resolved
+
+Kept for the record; none of these is outstanding.
 
 - **Health page lost between the R04 and R05 runs (2026-09-21) — cause known.**
   Boot showed `Health: Loaded from flash (boots=1, files=0)` where the previous
@@ -327,11 +329,34 @@ to look — the wake path is.
 
 | Step | Branch | Ver | Adds | Tested? |
 |------|--------|-----|------|---------|
-| 05 | `fix-sht30-read-path` | 0.11.0 | SHT30 rail gate + real I2C bus clear + 5-sample burst read with outlier rejection + PB7/SDA toggle removed | **no** — `bisect_bins/step05_v0.11.0_sht30.bin` |
+| 05 | `fix-sht30-read-path` | 0.11.0 | SHT30 rail gate + I2C bus clear + burst read + PB7/SDA toggle removed | **Superseded by R07 (0.18.x)**, which landed the same root-cause fixes on the R-line and showed the I2C bus clear was not needed. Branch kept for history; do not flash. |
 
 Version numbering: new work starts at **0.11.0**. 0.10.23-0.10.33 belong to the
 rolled-back line and some of those binaries exist on thumbdrives and units, so
 reusing those numbers would make two different builds report the same version.
+
+## What is validated, and what is not (2026-09-21)
+
+**Validated:** all ten ladder steps R00-R09 on hardware, each against the
+protocol above, one change at a time. `main` is 0.19.1 and builds
+byte-identical to the binary that ran.
+
+**Decided, not outstanding:**
+- `f_expand` costs ~10.7 ms per chunk open (one ring buffer). Measured and
+  accepted — the alternative was the cluster-allocation stalls it removes.
+- A dead-card stop leaves the file at its full pre-allocated size with a
+  placeholder header. Nothing can be written when the card is gone, and
+  `flac -d -F` recovers the audio. A mount-time cleanup pass is a candidate,
+  not a defect.
+
+**Not yet validated:**
+- **Duration.** Every run here is a 20-minute bench window. The failures this
+  work addresses took 30 days to appear (SD wear, config loss, frozen sensor).
+  A multi-day run on 0.19.1 is the real test, and the error log means the next
+  failure should explain itself.
+- **One unit, one card.** 20 MHz SD SPI is proven on this board's traces with
+  this card. A second unit, a longer cable run or a slower card is untested —
+  `stm32u575_spi10` (10 MHz, also proven) is the fallback.
 
 ## Tools (not fixes — never ship)
 
