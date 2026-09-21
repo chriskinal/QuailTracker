@@ -972,6 +972,16 @@ static const char *finaliseAfterWriteError(const char *path, FSIZE_t eof)
          * still holds the placeholder written at open. */
         flac_enc_finalize_header(&flacEncoder, hdr);
         hdr[4] &= 0x7F;  /* NOT last — SEEKTABLE follows */
+
+        /* Declare "unknown length" (total samples = 0, which FLAC allows for
+         * streams). The encoder counted the block that the failed write took
+         * with it, so a real count would promise audio the file does not have
+         * and a decoder stops at END_OF_STREAM — measured on the 2026-09-21
+         * injection run, where `flac -t` refused the file this path had just
+         * called "complete and decodable". 36-bit field: low nibble of byte 21
+         * plus bytes 22-25. */
+        hdr[21] &= 0xF0;
+        hdr[22] = hdr[23] = hdr[24] = hdr[25] = 0;
         if (f_write(&f, hdr, FLAC_HEADER_SIZE, &bw) != FR_OK)
             { f_close(&f); return "streaminfo"; }
 
@@ -1013,8 +1023,8 @@ void stopRecordingEx(uint8_t bestEffort)
                    "card, header/tail incomplete\r\n",
                    failedAt, (unsigned long)totalDataBytes);
         else
-            printf("REC: finalised after write error — %lu bytes, file is "
-                   "complete and decodable\r\n", (unsigned long)totalDataBytes);
+            printf("REC: finalised after write error — %lu bytes, decodable "
+                   "(length declared unknown)\r\n", (unsigned long)totalDataBytes);
         goto health;
     }
 
