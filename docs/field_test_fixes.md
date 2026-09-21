@@ -45,6 +45,16 @@ error-log and crash-capture protocol that the STM32 side no longer implements.
 
 ## Open bugs found while investigating (not from the field test)
 
+- **Health page lost between the R04 and R05 runs (2026-09-21).** Boot showed
+  `Health: Loaded from flash (boots=1, files=0)` where the previous run had
+  `boots=63, files=37`; the config page one page below survived (`seq=23`). The
+  mirror image of the config-reversion bug, and on a build that already has R01
+  (flash writes serialised by `flashMtx`). `healthSave()` runs only from the
+  Bridge task, so concurrent writers are not the explanation. Unresolved —
+  candidates: a deliberate stats reset from the web UI, a reset landing inside
+  the erase/program window, or something in the J-Link flash cycle. Needs
+  confirming with the user before it is chased.
+
 - **Audio DMA is not restarted after a Stop 2 wake, silently.** `enterStop2()`
   restarts the MDF stereo DMA only when both `HAL_MDF_AcqStart_DMA` calls
   return `HAL_OK`, and logs nothing when they don't. `audioStarted` stays 0, no
@@ -126,6 +136,8 @@ starts recording from a fresh boot proves nothing.
 
 | R04 | 0.15.0 | 2026-09-21 | **PASS, with a measured cost.** Window 10:15-10:35 after a Stop 2 wake. 4 chunks x 300 s (49.89/49.21/49.39/49.46 MB), clean stop, slept. **Ring overruns 18 (~192 ms)** — +15 over R03's 3, so the CRC path costs ~160 ms per 20-minute window. `SD init: data CRC ENABLED (CMD59 resp=0x00)` at every mount including after each wake. **Zero retries and zero CRC mismatches**, as in every previous run. Compare step 02 (same change, no pre-alloc): 1253 and 5406 overruns, 14 s and 58 s lost. Confirms the reorder: cluster allocation was the dominant stall. |
 
+| R05 | 0.16.0 | 2026-09-21 | **PASS on the normal path.** Window 13:26-13:46 after a Stop 2 wake. 4 chunks x 300 s (49.55/50.04/50.18/49.53 MB), rotations, clean stop, slept. Ring overruns 24 (R04 18, R03 3) — **treat these as single samples with unknown variance**; R05 changes nothing in the write path except the untaken failure branch. No write errors, so the finalise path did not run: it needs the injection fixtures. **Also observed: health stats reset between runs** (`boots=1, files=0`, was `boots=63, files=37`) while config survived (`seq=23`) — see open bugs. |
+
 Baseline numbers for comparison: a healthy 5-minute chunk is **~52 MB**. A
 ~118 KB file means the DMA never restarted and only the ring residue was
 written.
@@ -175,7 +187,7 @@ the two refactor steps. The refactor gets laddered like everything else.
 | R02 | R01 | **one `suspend()` / `resume()` pair** naming every peripheral in order — subsumes #6, and is the prime candidate for the audio-DMA-after-wake bug and part of the SHT30 failures | **PASS 2026-09-20** — 0.13.0 (`a3d3492`). 3 sleep/wake cycles (ESP32, RTC, post-window), no `resume INCOMPLETE`, 4 chunks x 300 s, overruns 0 |
 | R03 | R02 | **`f_expand` pre-alloc + 15 s sync cadence** (was #5) — *pulled ahead of the CRC step, see below* | **PASS (with a cost) 2026-09-21** — 0.14.0 (`fe1db2e`). 4 chunks x 300 s, **3 overruns (~32 ms)** where R02 had 0 — one per mid-window chunk open, i.e. `f_expand` writing the FAT chain. Truncate confirmed. |
 | R04 | R03 | SD data CRC + CMD59 + CRC7 + retry (was #2 / step 02) | **PASS (with a cost) 2026-09-21** — 0.15.0 (`5fe599a`). 4 chunks x 300 s, **18 overruns (~192 ms)** vs R03's 3. The same change lost 14 s and 58 s as step 02, before R03 removed the allocation stalls. |
-| R05 | R04 | **finalise on write failure** — *replaces the planned record-through (#7)* | **written** — branch `r05-finalize-on-failure`, 0.16.0 (`f656423`), `bisect_bins/R05_v0.16.0_finalize-on-failure.bin`; **pending hardware test** (normal path only — the failure path needs an injected error or a bad card) |
+| R05 | R04 | **finalise on write failure** — *replaces the planned record-through (#7)* | **PASS (normal path) 2026-09-21** — 0.16.0 (`f656423`). 4 chunks x 300 s, clean stop, no write errors. **Failure path still unexercised** — fixtures built on `r05-inject-test` (`bisect_bins/R05inj_once/dead_v0.16.0.bin`). |
 | R06 | R05 | diagnostics: in-flash error log, SPI surface, health `sdErrors`, crash capture (was #8-#12) | not applied |
 
 **Reordered 2026-09-21:** `f_expand` (was R04) now comes before the SD CRC work
