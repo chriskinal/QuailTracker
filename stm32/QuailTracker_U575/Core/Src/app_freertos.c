@@ -2836,8 +2836,26 @@ int healthSave(void)
      * the error log right after (offset 256). Same erase — the error log is free
      * to persist, no extra flash wear. 1056 B = 66 quad-words. */
     static uint8_t page[ERRLOG_PAGE_OFFSET + sizeof(err_log_t)] __attribute__((aligned(16)));
+    memset(page, 0, sizeof(page));   /* deterministic padding, so the compare below is stable */
     memcpy(page, &health, sizeof(health));
     memcpy(page + ERRLOG_PAGE_OFFSET, &errLogData, sizeof(errLogData));
+
+    /* Skip the write when NEITHER the health stats NOR the error log changed.
+     * Every erase+program is a window in which a reset — the ESP32's NRST
+     * watchdog, or a bench flash — loses the page, which is how this page
+     * vanished on 2026-09-21 (boots=63 -> 1). The 5-minute tick rewrites
+     * near-identical bytes most of the time: nothing here changes while the
+     * unit sits between windows (uptimeStartTick is always 0, and the min/max
+     * fields only move on a new extreme), so the exposure was almost entirely
+     * self-inflicted. Recording still writes, because filesWritten/totalBytes
+     * change every chunk — which is when the data is actually worth keeping. */
+    if (memcmp((const void *)HEALTH_FLASH_ADDR, page, sizeof(page)) == 0) {
+        static uint32_t skipped = 0;
+        if ((++skipped % 12u) == 0)   /* ~hourly at the 5-minute cadence */
+            printf("Health: unchanged, write skipped (%lu so far)\r\n",
+                   (unsigned long)skipped);
+        return 1;
+    }
 
     if (!flashWritePage(HEALTH_FLASH_ADDR, page, (int)(sizeof(page) / 16))) {
         errLog(ERR_FLASH_WRITE, HAL_FLASH_GetError());  /* RAM-only; persists next save */
