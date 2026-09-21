@@ -189,11 +189,34 @@ static void SPI_SetSlow(void)
     MODIFY_REG(hspi1.Instance->CFG1, SPI_CFG1_MBR_Msk, SPI_BAUDRATEPRESCALER_64);  /* 16MHz/64 = 250 kHz */
 }
 
+/* Data-phase SPI clock. PCLK2 is 160 MHz, so the old /32 = 5 MHz was the real
+ * constraint on the write path — not the card. Measured 2026-09-21 at 5 MHz:
+ * 4224 of 8098 writes over 10 ms and NOT ONE over 341 ms (the PCM ring's
+ * headroom). Nothing stalled; the bus simply ran near capacity — 625 KB/s
+ * ceiling against 166 KB/s of audio — so a few seconds of disturbance (card
+ * housekeeping, the 86.5 MB f_expand at chunk start) built a backlog that took
+ * tens of seconds to drain, losing audio throughout. At /16 = 10 MHz the same
+ * run went from 1274 lost buffers in the first chunk to 0, and 1521 to 18 for
+ * the run; card write max halved, ~100 ms -> ~39 ms.
+ *
+ * /8 = 20 MHz is the shipping setting: SD SPI mode is specified to 25 MHz, and
+ * the extra margin is insurance for a slower card or a colder day. Fall back
+ * with -DSD_SPI_FAST_PRESCALER=SPI_BAUDRATEPRESCALER_16 (env stm32u575_spi10)
+ * if a card ever proves unhappy at 20 MHz.
+ *
+ * The old "/32 is the long-proven config" note was about the KERNEL CLOCK: the
+ * spiDead FIFO stalls came from running SPI1 off HSI16 at a 10:1 kernel/bus
+ * ratio. The data phase has always used PCLK2; the divider is a separate knob
+ * and was never the thing under test. */
+#ifndef SD_SPI_FAST_PRESCALER
+#define SD_SPI_FAST_PRESCALER  SPI_BAUDRATEPRESCALER_8    /* 160 MHz/8 = 20 MHz */
+#endif
+
 static void SPI_SetFast(void)
 {
     if (hspi1.Instance->CR1 & SPI_CR1_SPE) SPI_Stop();
     SPI_SetClockSource(RCC_SPI1CLKSOURCE_PCLK2);                                   /* 160 MHz bus */
-    MODIFY_REG(hspi1.Instance->CFG1, SPI_CFG1_MBR_Msk, SPI_BAUDRATEPRESCALER_32);  /* 160MHz/32 = 5 MHz */
+    MODIFY_REG(hspi1.Instance->CFG1, SPI_CFG1_MBR_Msk, SD_SPI_FAST_PRESCALER);
 }
 
 /* Timeout ~10ms at 160MHz (each iteration is a few cycles) */
@@ -335,9 +358,10 @@ static int SD_RxDataBlock(uint8_t *buf, uint16_t len)
     uint8_t crcLo = SPI_TxRx(0xFF);
     if (sdCrcEnabled) {
         uint16_t rxCrc = ((uint16_t)crcHi << 8) | crcLo;
-        if (rxCrc != sd_crc16(buf, len)) {
-            printf("SD_Rx CRC MISMATCH (got %04X calc %04X) — retryable\r\n",
-                   rxCrc, sd_crc16(buf, len));
+        uint16_t calc = sd_crc16(buf, len);
+        if (rxCrc != calc) {
+            errLog(ERR_SD_CRC, ((uint32_t)rxCrc << 16) | calc);
+            printf("SD_Rx CRC MISMATCH (got %04X calc %04X) — retryable\r\n", rxCrc, calc);
             return 0;   /* caller retries */
         }
     }
@@ -566,9 +590,11 @@ DRESULT USER_read (
             return RES_OK;
         }
         if (spiDead) break;   /* retries are futile on a dead bus */
+        errLog(ERR_SD_READ_RETRY, sector);
         printf("SD_read: retry %d/%d (LBA=%lu)\r\n",
                attempt + 1, SD_IO_RETRIES, (unsigned long)sector);
     }
+    errLog(ERR_SD_READ_FAIL, sector);
     printf("SD_read: FAILED after retries (LBA=%lu)\r\n", (unsigned long)sector);
     return RES_ERROR;
   /* USER CODE END READ */
@@ -647,6 +673,7 @@ DRESULT USER_write (
                        attempt + 1, (unsigned long)sector);
             return RES_OK;
         }
+        errLog(ERR_SD_WRITE_RETRY, sector);
         if (cmdFailNum)
             printf("SD_write: CMD%d resp=0x%02X LBA=%lu spiDead=%d (retry %d/%d)\r\n",
                    cmdFailNum, cmdResp, (unsigned long)sector, spiDead,
@@ -656,6 +683,7 @@ DRESULT USER_write (
                    (unsigned long)sector, attempt + 1, SD_IO_RETRIES);
         if (spiDead) break;   /* retries are futile on a dead bus */
     }
+    errLog(ERR_SD_WRITE_FAIL, sector);
     printf("SD_write: FAILED after retries LBA=%lu — block lost\r\n",
            (unsigned long)sector);
     return RES_ERROR;

@@ -84,6 +84,25 @@ static __attribute__((used, noreturn)) void hf_dump_and_spin(const char *tag, ui
     hf_puts("R2="); hf_hex32(frame[2]); hf_puts(" R3="); hf_hex32(frame[3]); hf_puts("\r\n");
     hf_puts("R12="); hf_hex32(frame[4]); hf_puts("\r\n");
     GPIOD->BSRR = GPIO_PIN_13;  /* status LED on (PD13) */
+
+    /* Stash the fault in TAMP backup registers (survive reset) so the next boot
+     * can log it to the error log — a field unit has no J-Link to see the RTT
+     * dump above. BKP0R magic marks "a fault happened". DBP was enabled at boot. */
+    TAMP->BKP0R = 0xFA017C0DUL;  /* "FAULT COD" magic */
+    TAMP->BKP1R = cfsr;
+    TAMP->BKP2R = frame[6];      /* faulting PC */
+    TAMP->BKP3R = hfsr;
+    TAMP->BKP4R = frame[5];      /* LR */
+
+    /* Stop here. The self-reset that used to live at this point was a
+     * compensation, and the compensation audit's default is not to re-apply
+     * one without evidence it is needed (docs/field_test_fixes.md): with
+     * ownership fixed (R01) and a symmetric resume (R02), the question is
+     * whether faults still happen at all — and the TAMP capture above is how
+     * that gets answered. The ESP32 watchdog still recovers a hung unit, just
+     * more slowly, and a halted core is far easier to attach a debugger to.
+     * If the error log starts showing ERR_HARDFAULT rows in the field, revisit
+     * this with the evidence in hand. */
     for (;;) { }
 }
 #define HF_DUMP(tag) do {                                            \

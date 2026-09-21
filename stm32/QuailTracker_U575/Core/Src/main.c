@@ -2094,29 +2094,129 @@ static uint8_t sht30Crc(const uint8_t *data, uint8_t len)
 
 /* Read SHT30 single-shot, high repeatability, no clock stretch.
  * Updates sht30TempC100 and sht30HumRH100.  Silently keeps old values on error. */
-void sht30Read(void)
+/* One single-shot conversion. Returns 1 and fills *t100/*h100 on success.
+ * Touches no global state — the caller decides what a sample is worth. */
+static uint8_t sht30ReadOnce(int16_t *t100, uint16_t *h100)
 {
     uint8_t cmd[2] = { 0x24, 0x00 };
     if (HAL_I2C_Master_Transmit(&hi2c1, 0x44 << 1, cmd, 2, 100) != HAL_OK)
-        return;
+        return 0;
 
     HAL_Delay(16);  /* 15 ms max for high repeatability */
 
     uint8_t rx[6];
     if (HAL_I2C_Master_Receive(&hi2c1, 0x44 << 1, rx, 6, 100) != HAL_OK)
-        return;
+        return 0;
 
-    /* Verify CRC on both words */
     if (sht30Crc(rx, 2) != rx[2] || sht30Crc(rx + 3, 2) != rx[5])
-        return;
+        return 0;
 
     uint16_t rawT = ((uint16_t)rx[0] << 8) | rx[1];
     uint16_t rawH = ((uint16_t)rx[3] << 8) | rx[4];
+    *t100 = (int16_t)(-4500 + (int32_t)17500 * rawT / 65535);
+    *h100 = (uint16_t)((uint32_t)10000 * rawH / 65535);
+    return 1;
+}
 
-    /* temp = -45 + 175 * rawT / 65535  →  in 0.01 °C units */
-    sht30TempC100 = (int16_t)(-4500 + (int32_t)17500 * rawT / 65535);
-    /* hum = 100 * rawH / 65535  →  in 0.01 %RH units */
-    sht30HumRH100 = (uint16_t)((uint32_t)10000 * rawH / 65535);
+/* Burst-read policy. Air temperature and humidity move slowly, so one sample is
+ * a needlessly fragile way to measure them: a single NACK, or one glitched pair
+ * that happens to pass CRC, and the reading is lost or wrong. Take
+ * SHT30_SAMPLES conversions, keep the ones that complete, reject any sitting
+ * far from the median, average the survivors. Costs ~130 ms once every 5 s.
+ *
+ * HAL_Delay (not osDelay) on purpose: this also runs from main() before the
+ * scheduler starts. */
+#define SHT30_SAMPLES      5
+#define SHT30_MIN_GOOD     3     /* fewer valid samples than this = failed read */
+#define SHT30_SPACING_MS   10
+#define SHT30_T_OUTLIER    200   /* 2.00 C from the median */
+#define SHT30_H_OUTLIER    500   /* 5.00 %RH from the median */
+
+static uint32_t sht30Dropped = 0;   /* lifetime count of rejected samples */
+
+static int16_t medianI16(int16_t *v, int n)
+{
+    for (int i = 1; i < n; i++) {          /* insertion sort, n <= 5 */
+        int16_t k = v[i]; int j = i - 1;
+        while (j >= 0 && v[j] > k) { v[j + 1] = v[j]; j--; }
+        v[j + 1] = k;
+    }
+    return v[n / 2];
+}
+
+uint8_t sht30Read(void)
+{
+    /* The sensor lives on the switched PERIPH rail (PD11). Between a Stop 2
+     * wake and powerEnterRecord() turning the rail back on it has no power, and
+     * the 5 s tick can land in that window — reading there is guaranteed to
+     * NACK and would count as a sensor failure. Not powered is not broken. */
+    if (HAL_GPIO_ReadPin(GPIOD, GPIO_PIN_11) != GPIO_PIN_SET)
+        return 0;
+
+    int16_t  ts[SHT30_SAMPLES];
+    uint16_t hs[SHT30_SAMPLES];
+    int n = 0;
+
+    for (int i = 0; i < SHT30_SAMPLES; i++) {
+        int16_t t; uint16_t h;
+        if (sht30ReadOnce(&t, &h)) { ts[n] = t; hs[n] = h; n++; }
+        if (i + 1 < SHT30_SAMPLES) HAL_Delay(SHT30_SPACING_MS);
+    }
+
+    uint8_t ok = 0;
+    if (n >= SHT30_MIN_GOOD) {
+        int16_t tSorted[SHT30_SAMPLES], hSorted[SHT30_SAMPLES];
+        for (int i = 0; i < n; i++) { tSorted[i] = ts[i]; hSorted[i] = (int16_t)hs[i]; }
+        int16_t tMed = medianI16(tSorted, n);
+        int16_t hMed = medianI16(hSorted, n);
+
+        int32_t tSum = 0, hSum = 0; int kept = 0;
+        for (int i = 0; i < n; i++) {
+            int32_t dT = (int32_t)ts[i] - tMed; if (dT < 0) dT = -dT;
+            int32_t dH = (int32_t)hs[i] - hMed; if (dH < 0) dH = -dH;
+            if (dT > SHT30_T_OUTLIER || dH > SHT30_H_OUTLIER) {
+                sht30Dropped++;
+                if (sht30Dropped <= 3 || (sht30Dropped % 100) == 0)
+                    printf("SHT30: dropped outlier %ld.%02ld C (median %ld.%02ld C, %lu total)\r\n",
+                           (long)(ts[i] / 100), (long)labs(ts[i] % 100),
+                           (long)(tMed / 100), (long)labs(tMed % 100),
+                           (unsigned long)sht30Dropped);
+                continue;
+            }
+            tSum += ts[i]; hSum += hs[i]; kept++;
+        }
+        if (kept > 0) {
+            sht30TempC100 = (int16_t)(tSum / kept);
+            sht30HumRH100 = (uint16_t)(hSum / kept);
+            ok = 1;
+        }
+    }
+
+    if (ok) {
+        if (dev.env.shtFailCount)
+            printf("SHT30: recovered after %lu failed reads\r\n",
+                   (unsigned long)dev.env.shtFailCount);
+        dev.env.shtFailCount = 0;
+        dev.env.shtValid = 1;
+        return 1;
+    }
+
+    dev.env.shtValid = 0;
+    dev.env.shtFailCount++;
+    errLog(ERR_SHT30_READ, dev.env.shtFailCount);
+
+    /* Loud once, then rarely — a wedged bus fails every 5 s and would otherwise
+     * flood RTT for a whole deployment. The error log keeps the real count. */
+    if (dev.env.shtFailCount == 1 || (dev.env.shtFailCount % 720) == 0)
+        printf("SHT30: read FAILED (%lu consecutive, %d/%d samples good)\r\n",
+               (unsigned long)dev.env.shtFailCount, n, SHT30_SAMPLES);
+
+    /* NO I2C_Recover here, deliberately. R02 re-inits I2C1 on every Stop 2
+     * wake, the rail gate above removes the unpowered-sensor reads, and the
+     * PB7/I2C1_SDA toggle is gone — so the compensation has to earn its way
+     * back in on evidence (docs/field_test_fixes.md, compensation audit). If
+     * ERR_SHT30_READ rows keep appearing with the rail up, add it then. */
+    return 0;
 }
 
 static void MX_RTC_Init(void)
@@ -2157,6 +2257,27 @@ static void MX_RTC_Init(void)
 }
 
 /* ---- RTC time sync from GPS ---- */
+/* RTC → UNIX epoch seconds (proleptic Gregorian). Returns 0 if the RTC has not
+ * been GPS-disciplined yet, so error timestamps are absolute where available. */
+uint32_t rtcEpochNow(void)
+{
+    if (!dev.pwr.rtcSynced) return 0;
+    uint8_t hh, mm, ss, dd, mo;
+    uint16_t yy;
+    rtcGetTime(&hh, &mm, &ss);
+    rtcGetDate(&dd, &mo, &yy);
+
+    static const uint16_t cumDays[12] = {0,31,59,90,120,151,181,212,243,273,304,334};
+    uint32_t y = yy;
+    uint32_t days = (y - 1970) * 365
+                  + (y - 1969) / 4 - (y - 1901) / 100 + (y - 1601) / 400
+                  + cumDays[(mo - 1u) % 12u]
+                  + (dd - 1u);
+    if (mo > 2 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0))
+        days += 1;   /* leap day already passed this year */
+    return days * 86400u + (uint32_t)hh * 3600u + (uint32_t)mm * 60u + ss;
+}
+
 void rtcSyncFromGps(void)
 {
     extern device_state_t dev;
