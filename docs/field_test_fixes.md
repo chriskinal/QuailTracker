@@ -231,8 +231,14 @@ rather than re-applied. R02 also re-inits I2C1 on wake, which may make #1's
 8->16 KB, already suspected to be an artifact). With symmetric suspend/resume
 these may shrink to very little or become unnecessary.
 
-**Still pending separately:** step 05 (`fix-sht30-read-path`, 0.11.0) — the
-SHT30 rail gate and I2C bus clear. Re-evaluate against R02 for the same reason.
+**R07 (2026-09-21):** the SHT30 work landed on the R-line as its own step —
+branch `r07-sht30-onR06`, 0.18.0, `bisect_bins/R07_v0.18.0_sht30.bin`, pending
+hardware test. Rail gate, PB7/I2C1_SDA toggle removed, fail-loud read with
+`errLog(ERR_SHT30_READ)`, burst read with median outlier rejection. **No
+`I2C_Recover`** — R02 re-inits I2C1 on every wake, so the compensation has to
+earn its way back on evidence from the error log. This supersedes the older
+`fix-sht30-read-path` branch (0.11.0), which was written against the abandoned
+line.
 
 ### Compensation audit — a gate after R02, before anything is re-applied
 
@@ -257,7 +263,7 @@ way back in.
 
 | Mechanism | Compensates for | Audit note |
 |---|---|---|
-| `I2C_Recover` (#1) | SHT30 reads failing | Root cause is the rail gate + PB7/SDA toggle (step 05), both of which R02 and step 05 address. Keep only if reads still fail with the rail up and PB7 left alone. |
+| `I2C_Recover` (#1) | SHT30 reads failing | **Not re-applied (R07, 2026-09-21).** Root causes fixed instead: rail gate, PB7/SDA toggle removed, and R02 re-inits I2C1 on every wake. The read now raises `ERR_SHT30_READ`, so the error log answers whether recovery is needed at all. |
 | ICACHE ES0499 workaround (#3) | Stop 2 exit corruption | Silicon errata, not ownership — likely genuine. Confirm against REV_ID on the units actually in the field before carrying it. |
 | PRIMASK wakeup guard (#4) | Stop 2 entry race | Belongs to the sleep/wake state machine that R02 rewrites. Re-derive it inside R02 rather than re-applying the patch. |
 | ADC/SPI2/USART3 re-init (#6) | peripherals dead after wake | **Dropped** — R02 subsumes it by construction. |
