@@ -202,4 +202,12 @@ void config_apply(const device_config_t *cfg)
 
     /* Recording format */
     dev.rec.format = cfg->recFormat;
+
+    /* Station id drives recording filenames. Without this, a config adopted
+     * from the ESP32 (including the one that repairs a lost config page) only
+     * reached the filenames after a reboot, so files kept the boot-time
+     * UID-derived name. */
+    extern char deviceStationId[16];
+    strncpy(deviceStationId, cfg->stationId, sizeof(deviceStationId) - 1);
+    deviceStationId[sizeof(deviceStationId) - 1] = '\0';
 }

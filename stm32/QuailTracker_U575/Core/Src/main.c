@@ -515,11 +515,8 @@ void writeFlacVorbisComment(FIL *fp)
             snprintf(tags[ntags++], 80, "MIC_HEADING=%u", (unsigned)hdg);
     }
 
-    /* Temperature and humidity from SHT30 — omitted entirely when the last read
-     * failed.  Emitting the stale value instead is what made all 171 files of
-     * the 30-day field test claim a constant 21.92 C / 99.67 %RH: absent tags
-     * are recoverable, plausible fabricated ones are not. */
-    if (dev.env.shtValid) {
+    /* Temperature and humidity from SHT30 */
+    {
         int32_t tW = sht30TempC100 / 100;
         int32_t tF = sht30TempC100 % 100;
         if (tF < 0) tF = -tF;
@@ -1175,22 +1172,23 @@ int main(void)
 
   setvbuf(stdout, NULL, _IONBF, 0);
 
+  /* SPI2 ping-pong test with ESP32-C3 bridge */
+  {
+      uint8_t tx[64] = {0}, rx[64] = {0};
+      memcpy(tx, "PING", 4);
+      HAL_GPIO_WritePin(GPIOD, GPIO_PIN_0, GPIO_PIN_RESET);  /* CS low */
+      HAL_StatusTypeDef s = HAL_SPI_TransmitReceive(&hspi2, tx, rx, 64, 1000);
+      HAL_GPIO_WritePin(GPIOD, GPIO_PIN_0, GPIO_PIN_SET);    /* CS high */
+      printf("SPI2 test: %s (RX: \"%.*s\")\r\n",
+             s == HAL_OK ? "OK" : "FAIL", 8, (char *)rx);
+  }
+
   printf("\r\n\r\n");
   printf("================================================\r\n");
   printf("  QuailTracker U575 - PDM Audio Recorder\r\n");
   printf("  STM32U575  v%s  [FreeRTOS]\r\n", FW_VERSION);
   printf("  SYSCLK: %lu MHz\r\n",
          (unsigned long)(HAL_RCC_GetSysClockFreq() / 1000000UL));
-  /* Silicon revision — cross-reference ES0499 errata applicability. The Stop2/
-   * Stop3 wake errata (ICACHE line corruption on exit; hang on a wakeup landing
-   * just before entry) affect earlier cuts and are fixed on the Die482 cut 3.3 /
-   * rev "U" enhancement. DEV_ID reads 0x482 for STM32U575/585. */
-  {
-      uint32_t idcode = DBGMCU->IDCODE;
-      printf("  Silicon: DEV_ID=0x%03lX REV_ID=0x%04lX\r\n",
-             (unsigned long)(idcode & 0xFFFU),
-             (unsigned long)((idcode >> 16) & 0xFFFFU));
-  }
   printf("================================================\r\n");
 
   /* ADC1 — battery voltage on PC0 / IN1 */
@@ -1925,86 +1923,31 @@ static uint8_t sht30Crc(const uint8_t *data, uint8_t len)
     return crc;
 }
 
-/* Recover I2C1 from a wedged bus.
- *
- * The SHT30 sits on the switched PERIPH rail (PD11).  Stop 2 entry takes
- * PB6/PB7 to analog and cuts PD11, so the sensor is power-cycled with the bus
- * floating; that can leave the peripheral's BUSY flag latched, after which
- * every HAL_I2C_Master_Transmit fails forever.  MX_I2C1_Init runs only once at
- * boot, so nothing ever cleared it — this is why the 30-day field test wrote
- * one boot-time reading into all 171 files.
- *
- * Same remedy as SPI_Recover() in user_diskio.c: an RCC reset returns the
- * peripheral to power-on defaults regardless of what state it was stuck in. */
-void I2C_Recover(void)
-{
-    HAL_I2C_DeInit(&hi2c1);
-    __HAL_RCC_I2C1_FORCE_RESET();
-    HAL_Delay(1);
-    __HAL_RCC_I2C1_RELEASE_RESET();
-    MX_I2C1_Init();
-}
-
 /* Read SHT30 single-shot, high repeatability, no clock stretch.
- *
- * Returns 1 and updates sht30TempC100/sht30HumRH100 on success.  Returns 0 on
- * error and leaves dev.env.shtValid clear — callers MUST NOT emit the stored
- * values in that case.  A previous version returned silently on every error
- * path, so a dead sensor kept publishing its last good reading indefinitely;
- * an entire 30-day deployment shipped a constant 21.92 C / 99.67 %RH. */
-uint8_t sht30Read(void)
+ * Updates sht30TempC100 and sht30HumRH100.  Silently keeps old values on error. */
+void sht30Read(void)
 {
-    uint8_t ok = 0;
+    uint8_t cmd[2] = { 0x24, 0x00 };
+    if (HAL_I2C_Master_Transmit(&hi2c1, 0x44 << 1, cmd, 2, 100) != HAL_OK)
+        return;
 
-    do {
-        uint8_t cmd[2] = { 0x24, 0x00 };
-        if (HAL_I2C_Master_Transmit(&hi2c1, 0x44 << 1, cmd, 2, 100) != HAL_OK)
-            break;
+    HAL_Delay(16);  /* 15 ms max for high repeatability */
 
-        HAL_Delay(16);  /* 15 ms max for high repeatability */
+    uint8_t rx[6];
+    if (HAL_I2C_Master_Receive(&hi2c1, 0x44 << 1, rx, 6, 100) != HAL_OK)
+        return;
 
-        uint8_t rx[6];
-        if (HAL_I2C_Master_Receive(&hi2c1, 0x44 << 1, rx, 6, 100) != HAL_OK)
-            break;
+    /* Verify CRC on both words */
+    if (sht30Crc(rx, 2) != rx[2] || sht30Crc(rx + 3, 2) != rx[5])
+        return;
 
-        /* Verify CRC on both words */
-        if (sht30Crc(rx, 2) != rx[2] || sht30Crc(rx + 3, 2) != rx[5])
-            break;
+    uint16_t rawT = ((uint16_t)rx[0] << 8) | rx[1];
+    uint16_t rawH = ((uint16_t)rx[3] << 8) | rx[4];
 
-        uint16_t rawT = ((uint16_t)rx[0] << 8) | rx[1];
-        uint16_t rawH = ((uint16_t)rx[3] << 8) | rx[4];
-
-        /* temp = -45 + 175 * rawT / 65535  →  in 0.01 °C units */
-        sht30TempC100 = (int16_t)(-4500 + (int32_t)17500 * rawT / 65535);
-        /* hum = 100 * rawH / 65535  →  in 0.01 %RH units */
-        sht30HumRH100 = (uint16_t)((uint32_t)10000 * rawH / 65535);
-        ok = 1;
-    } while (0);
-
-    if (ok) {
-        if (dev.env.shtFailCount)
-            printf("SHT30: recovered after %lu failed reads\r\n",
-                   (unsigned long)dev.env.shtFailCount);
-        dev.env.shtFailCount = 0;
-        dev.env.shtValid = 1;
-        return 1;
-    }
-
-    dev.env.shtValid = 0;
-    dev.env.shtFailCount++;
-
-    /* Log the first failure and then rarely — a wedged bus fails every 5 s and
-     * would otherwise flood RTT for the whole deployment. */
-    if (dev.env.shtFailCount == 1 || (dev.env.shtFailCount % 720) == 0)
-        printf("SHT30: read FAILED (%lu consecutive)\r\n",
-               (unsigned long)dev.env.shtFailCount);
-
-    /* Two strikes, then reset the peripheral — covers the stuck-BUSY case
-     * without hammering the bus on a transient NACK. */
-    if (dev.env.shtFailCount >= 2)
-        I2C_Recover();
-
-    return 0;
+    /* temp = -45 + 175 * rawT / 65535  →  in 0.01 °C units */
+    sht30TempC100 = (int16_t)(-4500 + (int32_t)17500 * rawT / 65535);
+    /* hum = 100 * rawH / 65535  →  in 0.01 %RH units */
+    sht30HumRH100 = (uint16_t)((uint32_t)10000 * rawH / 65535);
 }
 
 static void MX_RTC_Init(void)
@@ -2206,48 +2149,16 @@ wake_source_t enterStop2(uint32_t seconds)
     EXTI->RPR1 = 0xFFFFFFFFu;              /* clear all rising pending  */
     EXTI->FPR1 = 0xFFFFFFFFu;              /* clear all falling pending */
     espWakePulseSeen = 0;                  /* reset before sleep */
-
-    /* ES0499 erratum workaround (Stop2/Stop3 exit): the first instruction fetch
-     * or data read from a 128-bit cache line after wake is corrupted if that
-     * line was the last accessed before entry — a prime cause of post-wake hard
-     * faults / garbage. Disable ICACHE across Stop2 so post-wake fetches are
-     * uncached (correct); it is re-enabled + invalidated on resume below.
-     * (DCACHE is not enabled on this build, so only ICACHE needs this.)
-     * __DSB() completes pending memory ops before sleep; __ISB() flushes the
-     * pipeline after the cache-disable. */
-    HAL_ICACHE_Disable();
     __DSB();
     __ISB();
-
-    /* ES0499 erratum workaround (rev W is affected): the device can HANG if a
-     * wakeup event is asserted in the few cycles before Stop2/Stop3 entry — the
-     * exact case of an ESP CS-wake pulse (WiFi connect) landing as we enter Stop.
-     * Mask interrupts across the entry: WFI still wakes on a pending enabled IRQ
-     * even with PRIMASK set, but the handler is deferred until PRIMASK is
-     * restored on the far side, closing the entry race. */
-    uint32_t primask = __get_PRIMASK();
-    __disable_irq();
 
     /* Enter Stop 2 */
     HAL_PWREx_EnterSTOP2Mode(PWR_STOPENTRY_WFI);
 
-    /* --- CPU resumes here after RTC or EXTI12 wake-up --- */
-
-    /* Re-enable + invalidate ICACHE (disabled before Stop2 per the ES0499
-     * cache-corruption workaround). Do it first so subsequent code runs cached;
-     * __ISB() flushes the pipeline so execution continues coherently. */
-    HAL_ICACHE_Enable();
-    __ISB();
-
-    /* Restore interrupts (masked across entry for the wakeup-race erratum). The
-     * pending RTC/EXTI12 wake handler runs now — only those two IRQs are enabled
-     * in the NVIC at this point, so nothing else fires. __ISB() so the deferred
-     * handler is taken before we read the flag it sets. */
-    __set_PRIMASK(primask);
-    __ISB();
-
-    /* The EXTI12 falling callback (just run) sets espWakePulseSeen and cleared
-     * EXTI->FPR1 bit 12; an RTC wake leaves it clear. */
+    /* --- CPU resumes here after RTC or EXTI12 wake-up ---
+     * Note: by the time we get here, the EXTI12 IRQ handler has already
+     * run and cleared EXTI->FPR1 bit 12. We rely on espWakePulseSeen
+     * which is set by HAL_GPIO_EXTI_Falling_Callback. */
     wake_source_t wakeSource = espWakePulseSeen ? WAKE_ESP32 : WAKE_RTC;
 
     /* Restore PLL / 160MHz system clock */

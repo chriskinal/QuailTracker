@@ -175,7 +175,7 @@ extern int formatSD(void);
 
 /* Battery/SHT30 functions from main.c */
 extern uint32_t battReadMv(void);
-extern uint8_t sht30Read(void);
+extern void sht30Read(void);
 
 #define SURVEY_DURATION_MS  300000      /* 5 minutes */
 #define SURVEY_MIN_SATS     4           /* minimum satellites for valid fix */
@@ -247,9 +247,6 @@ static wake_source_t enterScheduledSleep(uint32_t seconds);
 static void healthLoad(void);
 int healthSave(void);
 void healthReset(void);
-/* Sentinel temperature meaning "no valid reading" — outside any real range and
- * outside int16_t, so it can never collide with a genuine tempC100. */
-#define HEALTH_TEMP_INVALID  INT32_MIN
 void healthUpdateEnvironment(uint32_t battMv, int32_t tempC100);
 void healthUpdateRecStart(const char *filename);
 void healthUpdateRecStop(uint32_t bytes, uint32_t durationSecs);
@@ -339,6 +336,15 @@ const osThreadAttr_t formatTask_attributes = {
 };
 /* Definitions for fileMtx */
 osMutexId_t fileMtxHandle;
+/* Serialises every flash page write. flashWritePage() disables ICACHE and
+ * unlocks the flash controller — global hardware state — so two tasks inside
+ * it at once leaves an erased page with nothing programmed into it. configSave()
+ * is called from the CLI, GPS survey-in and Bridge tasks, which is how a unit
+ * loses its station name (see docs/architecture_review.md, defect 1). */
+osMutexId_t flashMtxHandle;
+const osMutexAttr_t flashMtx_attributes = {
+  .name = "flashMtx"
+};
 const osMutexAttr_t fileMtx_attributes = {
   .name = "fileMtx"
 };
@@ -366,6 +372,12 @@ static void gpsReset(void);
 
 /* Flash config */
 static void configSetDefaults(device_config_t *c);
+
+/* Set when configLoad() fell back to defaults and has not persisted them yet.
+ * Cleared by any successful configSave() — normally the ESP32 adopt. */
+#define CONFIG_DEFAULTS_GRACE_MS  60000u
+static volatile uint8_t cfgDefaultsPending = 0;
+static uint32_t cfgDefaultsTick = 0;
 static uint32_t configComputeCrc(const device_config_t *c);
 static void configLoad(void);
 int configSave(void);
@@ -391,6 +403,7 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END Init */
   /* creation of fileMtx */
   fileMtxHandle = osMutexNew(&fileMtx_attributes);
+  flashMtxHandle = osMutexNew(&flashMtx_attributes);
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
@@ -1455,29 +1468,20 @@ static void detLogCsv(const char *species, float confidence,
         }
 
         /* Temperature and humidity from SHT30 */
-        /* Temperature and humidity from SHT30 — left as empty CSV cells when the
-         * last read failed, rather than repeating a stale value (see sht30Read). */
-        char tempStr[12] = "";
-        char humStr[12]  = "";
-        if (dev.env.shtValid) {
-            int32_t tempWhole = sht30TempC100 / 100;
-            int32_t tempFrac  = sht30TempC100 % 100;
-            if (tempFrac < 0) tempFrac = -tempFrac;
-            uint32_t humWhole = sht30HumRH100 / 100;
-            uint32_t humFrac  = sht30HumRH100 % 100;
-            snprintf(tempStr, sizeof(tempStr), "%ld.%02ld",
-                     (long)tempWhole, (long)tempFrac);
-            snprintf(humStr, sizeof(humStr), "%lu.%02lu",
-                     (unsigned long)humWhole, (unsigned long)humFrac);
-        }
+        int32_t tempWhole = sht30TempC100 / 100;
+        int32_t tempFrac  = sht30TempC100 % 100;
+        if (tempFrac < 0) tempFrac = -tempFrac;
+        uint32_t humWhole = sht30HumRH100 / 100;
+        uint32_t humFrac  = sht30HumRH100 % 100;
 
         /* FatFS f_printf doesn't support %f or %llu — use snprintf + f_puts */
         char line[224];
         snprintf(line, sizeof(line),
-                 "%s,%s,%.2f,%.6f,%.6f,%.1f,%s,%s,%s,%d,%llu\n",
+                 "%s,%s,%.2f,%.6f,%.6f,%.1f,%ld.%02ld,%lu.%02lu,%s,%d,%llu\n",
                  ts, species, (double)confidence,
                  (double)lat, (double)lon, (double)alt,
-                 tempStr, humStr,
+                 (long)tempWhole, (long)tempFrac,
+                 (unsigned long)humWhole, (unsigned long)humFrac,
                  cfg.stationId, ppsSynced ? 1 : 0,
                  (unsigned long long)windowStartSample);
         f_puts(line, &f);
@@ -2176,16 +2180,26 @@ static void StartBridgeTask(void *argument)
     for (;;) {
         osDelay(10);  /* yield to other tasks */
 
+        /* Defaults were loaded because the config page was unreadable. Give the
+         * ESP32 its chance to push the real config back (its copy outranks
+         * seq 0); only if nothing arrives do we commit the defaults, so the
+         * unit still boots with a stored config next time. */
+        if (cfgDefaultsPending &&
+            (HAL_GetTick() - cfgDefaultsTick) >= CONFIG_DEFAULTS_GRACE_MS) {
+            cfgDefaultsPending = 0;
+            printf("Config: no copy from the ESP32 in %lu s — persisting defaults "
+                   "(station=%s)\r\n",
+                   (unsigned long)(CONFIG_DEFAULTS_GRACE_MS / 1000u), cfg.stationId);
+            configSave();
+        }
+
         /* Periodic SHT30 temperature/humidity read (~every 5s) */
         if ((HAL_GetTick() - lastSht30Tick) >= SHT30_INTERVAL_MS) {
             lastSht30Tick = HAL_GetTick();
-            uint8_t shtOk = sht30Read();
-            /* Update health min/max from latest readings.  Battery is always
-             * live; temperature only when the read succeeded, else a wedged
-             * sensor would pin tempMin/tempMax to one fabricated value. */
+            sht30Read();
+            /* Update health min/max from latest readings */
             uint32_t mv = battReadMv();
-            healthUpdateEnvironment(mv, shtOk ? (int32_t)sht30TempC100
-                                              : HEALTH_TEMP_INVALID);
+            healthUpdateEnvironment(mv, (int32_t)sht30TempC100);
             /* Track GPS fix losses */
             uint8_t curGpsValid = gpsData.valid;
             if (prevGpsValid && !curGpsValid)
@@ -2578,10 +2592,21 @@ static void configLoad(void)
         return;
     }
 
-    printf("Config: Invalid/empty - writing defaults\r\n");
+    /* Defaults, but do NOT persist them yet. Writing them immediately is what
+     * makes a lost config page permanent: defaults take a seq, configSave()
+     * bumps it, "higher seq wins" then pushes the UID-derived name out to the
+     * ESP32 and overwrites the last good copy. At seq 0 any ESP32 copy wins
+     * instead, and the config comes back on its own. If nothing arrives within
+     * the grace period the Bridge task persists these defaults, so a unit with
+     * no ESP32 still ends up with a stored config. */
+    printf("Config: Invalid/empty - using defaults (seq=0, not yet persisted; "
+           "waiting %lu s for the ESP32 copy)\r\n",
+           (unsigned long)(CONFIG_DEFAULTS_GRACE_MS / 1000u));
     configSetDefaults(&cfg);
+    cfg.cfg_seq = 0;          /* 0 = "I have nothing" — any ESP32 copy outranks it */
     cfg.crc32 = configComputeCrc(&cfg);
-    configSave();
+    cfgDefaultsPending = 1;
+    cfgDefaultsTick = HAL_GetTick();
     strncpy(deviceStationId, cfg.stationId, sizeof(deviceStationId));
 }
 
@@ -2593,6 +2618,11 @@ static void configLoad(void)
 static int flashWritePage(uint32_t addr, const uint8_t *src, int nQuad)
 {
     uint32_t bank, page;
+    int result = 0;
+
+    /* NULL before the scheduler starts (configLoad/healthLoad run from the
+     * Bridge task, but keep this safe for any earlier caller). */
+    if (flashMtxHandle) osMutexAcquire(flashMtxHandle, osWaitForever);
     if (addr < FLASH_BASE + FLASH_BANK_SIZE) {
         bank = FLASH_BANK_1;
         page = (addr - FLASH_BASE) / FLASH_PAGE_SIZE;
@@ -2624,15 +2654,39 @@ static int flashWritePage(uint32_t addr, const uint8_t *src, int nQuad)
         HAL_FLASH_Lock();
         HAL_ICACHE_Enable();
 
-        if (ok && memcmp((const void *)addr, src, (size_t)nQuad * 16) == 0)
-            return 1;
+        if (ok && memcmp((const void *)addr, src, (size_t)nQuad * 16) == 0) {
+            result = 1;
+            break;
+        }
         /* else: transient — fall through and retry once */
     }
-    return 0;
+
+    if (flashMtxHandle) osMutexRelease(flashMtxHandle);
+    return result;
 }
 
 int configSave(void)
 {
+    /* Skip the write when nothing actually changed. Every erase+program is a
+     * window in which a reset (or the ESP32's NRST watchdog) loses the page,
+     * and the GPS survey-in path calls this every 100 fixes. The cfg_seq bump
+     * has to be part of the comparison: bumping first would make every save
+     * differ from flash and defeat the check. */
+    const device_config_t *onFlash = (const device_config_t *)CONFIG_FLASH_ADDR;
+    if (configValid(onFlash)) {
+        device_config_t a = cfg, b = *onFlash;
+        a.cfg_seq = b.cfg_seq = 0;      /* compare content, not version */
+        a.crc32   = b.crc32   = 0;
+        if (memcmp(&a, &b, sizeof(a)) == 0) {
+            /* Content identical. Keep whichever seq is higher so the ESP32 is
+             * not handed a version number that moves backwards. */
+            if (onFlash->cfg_seq > cfg.cfg_seq) cfg.cfg_seq = onFlash->cfg_seq;
+            cfg.crc32 = configComputeCrc(&cfg);
+            cfgDefaultsPending = 0;
+            return 1;
+        }
+    }
+
     cfg.cfg_seq++;  /* bump sequence so ESP32 adopts on next SPI exchange */
     cfg.crc32 = configComputeCrc(&cfg);
 
@@ -2642,6 +2696,7 @@ int configSave(void)
                (unsigned long)HAL_FLASH_GetError());
         return 0;
     }
+    cfgDefaultsPending = 0;
     return 1;
 }
 
@@ -2711,7 +2766,6 @@ void healthUpdateEnvironment(uint32_t battMv, int32_t tempC100)
 {
     if (battMv < health.battMinMv) health.battMinMv = battMv;
     if (battMv > health.battMaxMv) health.battMaxMv = battMv;
-    if (tempC100 == HEALTH_TEMP_INVALID) return;
     if (tempC100 < health.tempMinC100) health.tempMinC100 = tempC100;
     if (tempC100 > health.tempMaxC100) health.tempMaxC100 = tempC100;
 }
