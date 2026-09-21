@@ -61,6 +61,11 @@ error-log and crash-capture protocol that the STM32 side no longer implements.
   only on real change, survived. Before R01 config was written on every adopt
   and every 100 GPS fixes — and config was the page that kept dying.
 
+  **Follow-up candidate:** a mount-time pass could truncate and re-header the
+  oversized files left by a dead-card stop, once the card works again (the
+  abandoned line had orphan-chunk handling, `079e3ab`). Low priority: `flac -d
+  -F` already recovers the audio.
+
   **Fix if wanted (not yet written):** apply R01's skip-unchanged test to
   `healthSave()` and lengthen the cadence; most 5-minute saves rewrite a page
   that has barely changed. A/B pages would be the thorough fix but are more
@@ -151,6 +156,8 @@ starts recording from a fresh boot proves nothing.
 | R05 | 0.16.0 | 2026-09-21 | **PASS on the normal path.** Window 13:26-13:46 after a Stop 2 wake. 4 chunks x 300 s (49.55/50.04/50.18/49.53 MB), rotations, clean stop, slept. Ring overruns 24 (R04 18, R03 3) — **treat these as single samples with unknown variance**; R05 changes nothing in the write path except the untaken failure branch. No write errors, so the finalise path did not run: it needs the injection fixtures. **Also observed: health stats reset between runs** (`boots=1, files=0`, was `boots=63, files=37`) while config survived (`seq=23`) — see open bugs. |
 
 | R05 failure path | 0.16.3 | 2026-09-21 | **PASS, after three wrong fixes.** Verified with SD write-error injection (`r05-inject-test`), because five clean runs had never produced a write error. Each attempt looked correct in the log and was wrong on the card: **0.16.0** — `f_truncate` refused, because FatFS latches the error on the FIL (`fp->err`, ff.c:455/3627/4485) and every later call on that handle returns it; file left at the full 86.5 MB. **0.16.1** — reopened through a fresh handle, but STREAMINFO still promised the samples of the block the failed write took, so `flac -t` stopped at END_OF_STREAM. **0.16.2** — declared unknown length, still refused: the file was 12,698 bytes longer than header + accounted audio, because a failed `f_write` advances `fptr` by the sectors it committed, so the file ended mid-frame. **0.16.3** — truncate at `f_tell() - bw` (the start of the failed write = a frame boundary): file 2,129,967 B = audio + 2,358 B header/seektable, `flac -t` "tested 618496 samples ... ok". Dead-card fixture bails at `reopen` as intended. **Lesson: the log line was wrong three times; only decoding the file settled it.** |
+
+| R05 dead-card path | 0.16.3 | 2026-09-21 | **PASS.** Every write failing from #400: `REC: finalise stopped at reopen — 2159168 bytes of audio are on the card`. Bails immediately instead of grinding, as intended. The file stays at the full 86.5 MB with the placeholder header (nothing can be written when the card is gone) and `flac -t` refuses it — but **`flac -d -F` recovers all 13.1 s of audio**, matching what the firmware reported. So the unrecoverable case costs convenience, not data, and needs no custom repair tool. |
 
 Baseline numbers for comparison: a healthy 5-minute chunk is **~52 MB**. A
 ~118 KB file means the DMA never restarted and only the ring residue was
