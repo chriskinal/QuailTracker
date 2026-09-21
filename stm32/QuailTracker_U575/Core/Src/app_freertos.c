@@ -2247,9 +2247,14 @@ static void StartBridgeTask(void *argument)
              * otherwise pin tempMin/tempMax to one fabricated value — how the
              * 30-day test wrote a single boot-time reading into all 171 files. */
             if (shtOk) healthUpdateEnvironment(mv, (int32_t)sht30TempC100);
-            /* Track GPS fix losses */
-            uint8_t curGpsValid = gpsData.valid;
-            if (prevGpsValid && !curGpsValid) {
+            /* Track GPS fix losses — but only while the GPS is powered. Its
+             * rail (PD12) is cut for Stop 2, so every wake would otherwise log
+             * a "lost fix" for a receiver we switched off ourselves: two rows
+             * per window on the bench, and enough to bury real signal over a
+             * 30-day deployment. Same rail gate as the SHT30 read. */
+            uint8_t gpsPowered  = (HAL_GPIO_ReadPin(GPIOD, GPIO_PIN_12) == GPIO_PIN_SET);
+            uint8_t curGpsValid = gpsPowered ? gpsData.valid : 0;
+            if (gpsPowered && prevGpsValid && !curGpsValid) {
                 health.gpsFixLosses++;
                 errLog(ERR_GPS_FIX_LOSS, 0);
             }
