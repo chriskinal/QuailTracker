@@ -124,6 +124,8 @@ starts recording from a fresh boot proves nothing.
 
 | R03 | 0.14.0 | 2026-09-21 | **PASS, with a measured cost.** Window 09:45-10:05 after a Stop 2 wake. 4 chunks x 300 s (49.97/49.52/49.87/49.10 MB), clean stop, slept. **Ring overruns 0 -> 3 (~32 ms lost).** Exactly 3 mid-window chunk opens, 1 overrun each = one DMA half-buffer (10.67 ms) per `f_expand`. No `f_expand skipped` line, so pre-alloc succeeded every time; free space fell 189 MB for ~198 MB of files (not 4 x 86.5 MB), so `f_truncate` on close works. Compare: the CRC runs lost 14 s and 58 s with 1253 and 5406 overruns. Cluster allocation was the stall; it is now paid once per chunk instead of continuously. |
 
+| R04 | 0.15.0 | 2026-09-21 | **PASS, with a measured cost.** Window 10:15-10:35 after a Stop 2 wake. 4 chunks x 300 s (49.89/49.21/49.39/49.46 MB), clean stop, slept. **Ring overruns 18 (~192 ms)** — +15 over R03's 3, so the CRC path costs ~160 ms per 20-minute window. `SD init: data CRC ENABLED (CMD59 resp=0x00)` at every mount including after each wake. **Zero retries and zero CRC mismatches**, as in every previous run. Compare step 02 (same change, no pre-alloc): 1253 and 5406 overruns, 14 s and 58 s lost. Confirms the reorder: cluster allocation was the dominant stall. |
+
 Baseline numbers for comparison: a healthy 5-minute chunk is **~52 MB**. A
 ~118 KB file means the DMA never restarted and only the ring residue was
 written.
@@ -172,7 +174,7 @@ the two refactor steps. The refactor gets laddered like everything else.
 | R01 | R00 | **flash single-owner**: mutex in `flashWritePage()` (or one owning task); skip the write when nothing changed; defaults load with `cfg_seq = 0` and are not persisted immediately, so the ESP32 copy wins; `config_apply()` refreshes `deviceStationId` | **PASS 2026-09-20** — 0.12.0 (`9dc8a9e`). Slept into Stop 2 before the window, 4 chunks x 300 s (49.7/49.5/49.6/49.1 MB), **overruns 0**, clean stop, config intact (`seq=12`), no flash-write failures. Defaults/`cfg_seq=0` path not yet triggered (needs a real config loss). |
 | R02 | R01 | **one `suspend()` / `resume()` pair** naming every peripheral in order — subsumes #6, and is the prime candidate for the audio-DMA-after-wake bug and part of the SHT30 failures | **PASS 2026-09-20** — 0.13.0 (`a3d3492`). 3 sleep/wake cycles (ESP32, RTC, post-window), no `resume INCOMPLETE`, 4 chunks x 300 s, overruns 0 |
 | R03 | R02 | **`f_expand` pre-alloc + 15 s sync cadence** (was #5) — *pulled ahead of the CRC step, see below* | **PASS (with a cost) 2026-09-21** — 0.14.0 (`fe1db2e`). 4 chunks x 300 s, **3 overruns (~32 ms)** where R02 had 0 — one per mid-window chunk open, i.e. `f_expand` writing the FAT chain. Truncate confirmed. |
-| R04 | R03 | SD data CRC + CMD59 + CRC7 + retry (was #2 / step 02) | **written** — branch `r04-sd-crc`, 0.15.0 (`5fe599a`), `bisect_bins/R04_v0.15.0_sd-crc.bin`; **pending hardware test**. This is the change that failed as step 02; R03 baseline for comparison is 3 overruns per 20-min window. |
+| R04 | R03 | SD data CRC + CMD59 + CRC7 + retry (was #2 / step 02) | **PASS (with a cost) 2026-09-21** — 0.15.0 (`5fe599a`). 4 chunks x 300 s, **18 overruns (~192 ms)** vs R03's 3. The same change lost 14 s and 58 s as step 02, before R03 removed the allocation stalls. |
 | R05 | R04 | record-through: remount + fresh file, bounded (was #7) | not applied |
 | R06 | R05 | diagnostics: in-flash error log, SPI surface, health `sdErrors`, crash capture (was #8-#12) | not applied |
 
@@ -227,7 +229,7 @@ way back in.
 | PRIMASK wakeup guard (#4) | Stop 2 entry race | Belongs to the sleep/wake state machine that R02 rewrites. Re-derive it inside R02 rather than re-applying the patch. |
 | ADC/SPI2/USART3 re-init (#6) | peripherals dead after wake | **Dropped** — R02 subsumes it by construction. |
 | Record-through remount (#7) | a write error abandoning the window | Genuine only if writes still fail after R03's CRC + retry. Ask what it does that the retry loop does not. |
-| SD retry loops (`SD_IO_RETRIES`, part of R03) | transient block errors | Arrives with CRC. Worth measuring separately: the 2026-09-20 run logged **zero** retries, so it has never been observed to fire. |
+| SD retry loops (`SD_IO_RETRIES`, part of R04) | transient block errors | Arrives with CRC. **Four runs now (2026-09-20 and the R04 run) have logged zero retries and zero CRC mismatches** — the path has never been observed to fire on this card. Keep the CRC detection (it is the fix for the 35% corruption); the retry loop itself is still unexercised code on the critical path. |
 | `SPI_Recover` (in baseline) | wedged SD SPI bus | Already there and cheap. Confirm it has ever fired; if not, it is untested code on the critical path. |
 | ESP32 NRST watchdog (`STM32_WD_*`) | a hung STM32 | **Has its own failure mode** — it can reset mid-flash-write, one of the two candidate causes of the config loss. R01 makes that survivable; re-check the 30 s threshold against real stall times. |
 | HardFault self-reset + TAMP capture (#12) | 30 s of downtime per fault | The capture is diagnostics and is worth keeping. The self-reset is a compensation — with ownership fixed, ask whether faults still occur at all. |
