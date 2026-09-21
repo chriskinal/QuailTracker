@@ -7,6 +7,12 @@ candidate fix does, and which ones have actually been tested on hardware.
 and rotated chunks reliably. Every version above it is a candidate, not a
 known-good build.
 
+**`main` follows the revised ladder** (since 2026-09-20): its firmware tree is
+R01 (0.12.0), i.e. the 0.10.17 baseline plus the one change hardware has
+passed. The old ladder's fixes #1-#4 are **not** on `main` any more — they
+return as R03 onward, or get re-derived inside R02. `main` is always the tested
+line; anything else lives on its branch until it passes the protocol.
+
 **Rule (from `6461b03`):** re-apply one fix at a time, with a hardware test
 between each. Batches get debugged backwards and cost days.
 
