@@ -178,7 +178,7 @@ extern int formatSD(void);
 
 /* Battery/SHT30 functions from main.c */
 extern uint32_t battReadMv(void);
-extern void sht30Read(void);
+extern uint8_t sht30Read(void);
 
 #define SURVEY_DURATION_MS  300000      /* 5 minutes */
 #define SURVEY_MIN_SATS     4           /* minimum satellites for valid fix */
@@ -699,7 +699,10 @@ void StartAudioTask(void *argument)
 
           /* Process one mel hop when we have 256 decimated samples */
           if (melAccumIdx >= MEL_HOP) {
-            HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_7); /* blue LED: mel heartbeat */
+            /* NO heartbeat toggle here. This used to pulse PB7 as a "blue LED",
+             * a leftover from an earlier board. On the V5 board PB7 is
+             * I2C1_SDA, so every mel hop yanked the I2C data line and corrupted
+             * any SHT30 transfer in flight (hardware/stm32u575_pinout.md). */
             mel_process_frame(melAccumBuf);
             melAccumIdx = 0;
 
@@ -2237,10 +2240,13 @@ static void StartBridgeTask(void *argument)
         /* Periodic SHT30 temperature/humidity read (~every 5s) */
         if ((HAL_GetTick() - lastSht30Tick) >= SHT30_INTERVAL_MS) {
             lastSht30Tick = HAL_GetTick();
-            sht30Read();
+            uint8_t shtOk = sht30Read();
             /* Update health min/max from latest readings */
             uint32_t mv = battReadMv();
-            healthUpdateEnvironment(mv, (int32_t)sht30TempC100);
+            /* Temperature only when the read succeeded: a wedged sensor would
+             * otherwise pin tempMin/tempMax to one fabricated value — how the
+             * 30-day test wrote a single boot-time reading into all 171 files. */
+            if (shtOk) healthUpdateEnvironment(mv, (int32_t)sht30TempC100);
             /* Track GPS fix losses */
             uint8_t curGpsValid = gpsData.valid;
             if (prevGpsValid && !curGpsValid) {
