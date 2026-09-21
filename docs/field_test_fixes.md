@@ -166,13 +166,18 @@ the two refactor steps. The refactor gets laddered like everything else.
 |------|------|------|--------|
 | R00 | `6461b03` (0.10.17) | baseline — the 30-day build | PASS 2026-09-20 |
 | R01 | R00 | **flash single-owner**: mutex in `flashWritePage()` (or one owning task); skip the write when nothing changed; defaults load with `cfg_seq = 0` and are not persisted immediately, so the ESP32 copy wins; `config_apply()` refreshes `deviceStationId` | **PASS 2026-09-20** — 0.12.0 (`9dc8a9e`). Slept into Stop 2 before the window, 4 chunks x 300 s (49.7/49.5/49.6/49.1 MB), **overruns 0**, clean stop, config intact (`seq=12`), no flash-write failures. Defaults/`cfg_seq=0` path not yet triggered (needs a real config loss). |
-| R02 | R01 | **one `suspend()` / `resume()` pair** naming every peripheral in order — subsumes #6, and is the prime candidate for the audio-DMA-after-wake bug and part of the SHT30 failures | not written |
+| R02 | R01 | **one `suspend()` / `resume()` pair** naming every peripheral in order — subsumes #6, and is the prime candidate for the audio-DMA-after-wake bug and part of the SHT30 failures | **written** — branch `r02-suspend-resume`, 0.13.0 (`a3d3492`), `bisect_bins/R02_v0.13.0_suspend-resume.bin`; **pending hardware test** |
 | R03 | R02 | SD data CRC + CMD59 + CRC7 + retry (was #2 / step 02) | not applied |
 | R04 | R03 | `f_expand` pre-alloc + 15 s sync cadence (was #5) | not applied |
 | R05 | R04 | record-through: remount + fresh file, bounded (was #7) | not applied |
 | R06 | R05 | diagnostics: in-flash error log, SPI surface, health `sdErrors`, crash capture (was #8-#12) | not applied |
 
 **Dropped:** #6 (ADC/SPI2/USART3 re-init) — subsumed by R02.
+
+**Handled inside R02 (2026-09-20):** #6 (ADC/SPI2/USART3 re-init) is subsumed
+by `pwrResume()`; #4 (PRIMASK wakeup guard) was re-derived in the entry sequence
+rather than re-applied. R02 also re-inits I2C1 on wake, which may make #1's
+`I2C_Recover` unnecessary — decide after the R02 run and step 05.
 
 **Re-evaluate after R02, do not re-apply blind:** #1 (SHT30 fail-loud +
 `I2C_Recover`), #3 (ICACHE ES0499), #4 (PRIMASK guard), #13 (audio stack
