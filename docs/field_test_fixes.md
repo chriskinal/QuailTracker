@@ -122,6 +122,8 @@ starts recording from a fresh boot proves nothing.
 
 | R02 | 0.13.0 | 2026-09-20 | **PASS.** Three sleep/wake cycles: ESP32 wake, RTC wake into the window, post-window sleep + ESP32 wake. **`PWR: resume INCOMPLETE` never printed** — every peripheral restored. 4 chunks x 300 s (49.54/49.52/49.19/49.08 MB), **Ring Overruns 0**, clean stop 01:39:00. After the wakes: battery 3.899 V (ADC re-init + recalibration), temp/humidity live at 25.47 C / 51.7% (I2C1 re-init), ESP32 bridge Ready with 5055 transactions (SPI2 re-init). |
 
+| R03 | 0.14.0 | 2026-09-21 | **PASS, with a measured cost.** Window 09:45-10:05 after a Stop 2 wake. 4 chunks x 300 s (49.97/49.52/49.87/49.10 MB), clean stop, slept. **Ring overruns 0 -> 3 (~32 ms lost).** Exactly 3 mid-window chunk opens, 1 overrun each = one DMA half-buffer (10.67 ms) per `f_expand`. No `f_expand skipped` line, so pre-alloc succeeded every time; free space fell 189 MB for ~198 MB of files (not 4 x 86.5 MB), so `f_truncate` on close works. Compare: the CRC runs lost 14 s and 58 s with 1253 and 5406 overruns. Cluster allocation was the stall; it is now paid once per chunk instead of continuously. |
+
 Baseline numbers for comparison: a healthy 5-minute chunk is **~52 MB**. A
 ~118 KB file means the DMA never restarted and only the ring residue was
 written.
@@ -169,7 +171,7 @@ the two refactor steps. The refactor gets laddered like everything else.
 | R00 | `6461b03` (0.10.17) | baseline — the 30-day build | PASS 2026-09-20 |
 | R01 | R00 | **flash single-owner**: mutex in `flashWritePage()` (or one owning task); skip the write when nothing changed; defaults load with `cfg_seq = 0` and are not persisted immediately, so the ESP32 copy wins; `config_apply()` refreshes `deviceStationId` | **PASS 2026-09-20** — 0.12.0 (`9dc8a9e`). Slept into Stop 2 before the window, 4 chunks x 300 s (49.7/49.5/49.6/49.1 MB), **overruns 0**, clean stop, config intact (`seq=12`), no flash-write failures. Defaults/`cfg_seq=0` path not yet triggered (needs a real config loss). |
 | R02 | R01 | **one `suspend()` / `resume()` pair** naming every peripheral in order — subsumes #6, and is the prime candidate for the audio-DMA-after-wake bug and part of the SHT30 failures | **PASS 2026-09-20** — 0.13.0 (`a3d3492`). 3 sleep/wake cycles (ESP32, RTC, post-window), no `resume INCOMPLETE`, 4 chunks x 300 s, overruns 0 |
-| R03 | R02 | **`f_expand` pre-alloc + 15 s sync cadence** (was #5) — *pulled ahead of the CRC step, see below* | **written** — branch `r03-f-expand`, 0.14.0 (`fe1db2e`), `bisect_bins/R03_v0.14.0_f-expand.bin`; **pending hardware test** |
+| R03 | R02 | **`f_expand` pre-alloc + 15 s sync cadence** (was #5) — *pulled ahead of the CRC step, see below* | **PASS (with a cost) 2026-09-21** — 0.14.0 (`fe1db2e`). 4 chunks x 300 s, **3 overruns (~32 ms)** where R02 had 0 — one per mid-window chunk open, i.e. `f_expand` writing the FAT chain. Truncate confirmed. |
 | R04 | R03 | SD data CRC + CMD59 + CRC7 + retry (was #2 / step 02) | not applied |
 | R05 | R04 | record-through: remount + fresh file, bounded (was #7) | not applied |
 | R06 | R05 | diagnostics: in-flash error log, SPI surface, health `sdErrors`, crash capture (was #8-#12) | not applied |
