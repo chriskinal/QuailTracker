@@ -110,6 +110,8 @@ starts recording from a fresh boot proves nothing.
 
 | 01 | 0.10.18 | 2026-09-20 | **PASS.** Woke 18:13:00, 4 chunks x 300 s (51.5/51.6/51.8/51.6 MB), rotations, clean stop 18:33:00, slept. SHT30 failures now visible and clustered at sleep/wake (unpowered rail — step 05); `I2C_Recover` fired once after 2 strikes and recovered. |
 
+| R01 | 0.12.0 | 2026-09-20 | **PARTIAL PASS.** 4 chunks x 300 s (49.7/49.5/49.6/49.1 MB at gain 6 = 165 KB/s), full duration on every chunk, **Ring Overruns 0**, clean stop 00:40:00, slept, woke on ESP32. `Config: Loaded from flash (station=QT004, seq=12)` — page survived; seq moved only 10->12 across several boots and setting changes, so skip-unchanged is not churning. **Did not include a Stop 2 wake before the window** (boot -> menu -> recording at up~76 s), so the wake path is untested at R01. |
+
 | 02 | 0.10.19-diag | 2026-09-20 | **INVALID — retest.** The config page was lost at boot, so the run used defaults: `chunkMinutes = 30` against a 20-minute window, i.e. **zero chunk rotations** — the suspected failure path was never exercised. What it did show: one 1200 s file (196.7 MB, 164 KB/s), clean stop, slept after, **overruns +0**. Latency: fatfs write max 101.33 ms (14067/14067 calls > 10 ms), sync max 53.87 ms (1758/1758), card write max 97.99 ms over 26 sectors (17419 slow / 40826 calls). No CRC-retry lines at all, so no CRC errors fired. |
 
 Baseline numbers for comparison: a healthy 5-minute chunk is **~52 MB**. A
@@ -157,7 +159,7 @@ the two refactor steps. The refactor gets laddered like everything else.
 | Step | From | Adds | Status |
 |------|------|------|--------|
 | R00 | `6461b03` (0.10.17) | baseline — the 30-day build | PASS 2026-09-20 |
-| R01 | R00 | **flash single-owner**: mutex in `flashWritePage()` (or one owning task); skip the write when nothing changed; defaults load with `cfg_seq = 0` and are not persisted immediately, so the ESP32 copy wins; `config_apply()` refreshes `deviceStationId` | **written** — branch `r01-flash-single-owner`, 0.12.0 (`9dc8a9e`), `bisect_bins/R01_v0.12.0_flash-single-owner.bin`; **pending hardware test** |
+| R01 | R00 | **flash single-owner**: mutex in `flashWritePage()` (or one owning task); skip the write when nothing changed; defaults load with `cfg_seq = 0` and are not persisted immediately, so the ESP32 copy wins; `config_apply()` refreshes `deviceStationId` | **PARTIAL PASS 2026-09-20** — 0.12.0 (`9dc8a9e`). 4 chunks x 300 s (49.7/49.5/49.6/49.1 MB), **overruns 0**, clean stop, config intact (`seq=12`), no flash-write failures. **Caveat: the run did not sleep into Stop 2 before the window**, so the wake path was not exercised — rerun to complete. Defaults/`cfg_seq=0` path not yet triggered (needs a real config loss). |
 | R02 | R01 | **one `suspend()` / `resume()` pair** naming every peripheral in order — subsumes #6, and is the prime candidate for the audio-DMA-after-wake bug and part of the SHT30 failures | not written |
 | R03 | R02 | SD data CRC + CMD59 + CRC7 + retry (was #2 / step 02) | not applied |
 | R04 | R03 | `f_expand` pre-alloc + 15 s sync cadence (was #5) | not applied |
