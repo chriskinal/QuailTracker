@@ -916,7 +916,7 @@ void startRecording(void)
 
 void stopRecording(void)
 {
-    stopRecordingEx(0);
+    stopRecordingEx(0, 0);
 }
 
 /* Finalize and close the current recording.
@@ -994,7 +994,7 @@ static const char *finaliseAfterWriteError(const char *path, FSIZE_t eof)
     return NULL;   /* complete */
 }
 
-void stopRecordingEx(uint8_t bestEffort)
+void stopRecordingEx(uint8_t bestEffort, uint32_t partialBytes)
 {
     if (!isRecording) {
         printf("Not recording!\r\n");
@@ -1010,7 +1010,17 @@ void stopRecordingEx(uint8_t bestEffort)
      * f_tell() is a macro over fp->fptr and needs no disk access. */
     if (bestEffort) {
         char path[sizeof(recFilename)];
+
+        /* Truncate at the START of the write that failed, not at fptr. FatFS
+         * commits whole sectors as it goes, so a failed f_write still advances
+         * fptr by the bytes it managed (`partialBytes`, what it reported in
+         * *bw) — and those land mid-frame. Cutting there leaves a partial FLAC
+         * frame and a decoder stops at END_OF_STREAM inside it, which is what
+         * `flac -t` refused on the 2026-09-21 runs. The start of the write is a
+         * frame boundary, because each f_write here carries one whole encoded
+         * block. */
         FSIZE_t eof = f_tell(&wavFile);
+        if (partialBytes && eof >= (FSIZE_t)partialBytes) eof -= partialBytes;
         strncpy(path, recFilename, sizeof(path) - 1);
         path[sizeof(path) - 1] = '\0';
         recFilename[0] = '\0';

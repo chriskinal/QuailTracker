@@ -728,7 +728,7 @@ void StartAudioTask(void *argument)
           if (fres != FR_OK) {
             printf("f_write FAILED: %d at %lu bytes — finalising\r\n",
                    fres, (unsigned long)totalDataBytes);
-            stopRecordingEx(1);   /* bounded finalise: truncate + header, bail on refusal */
+            stopRecordingEx(1, bw);   /* bw = bytes of the failed write already committed */
           }
           totalDataBytes += bw;
 
@@ -749,7 +749,7 @@ void StartAudioTask(void *argument)
             if (fres != FR_OK) {
               printf("f_write FAILED: %d at %lu bytes — finalising\r\n",
                      fres, (unsigned long)totalDataBytes);
-              stopRecordingEx(1);   /* bounded finalise: truncate + header, bail on refusal */
+              stopRecordingEx(1, bw);   /* bw = bytes of the failed write already committed */
             }
             totalDataBytes += bw;
             flac_enc_notify_write(&flacEncoder, bw);
