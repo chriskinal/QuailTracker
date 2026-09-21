@@ -66,11 +66,12 @@ error-log and crash-capture protocol that the STM32 side no longer implements.
   abandoned line had orphan-chunk handling, `079e3ab`). Low priority: `flac -d
   -F` already recovers the audio.
 
-  **Fix if wanted (not yet written):** apply R01's skip-unchanged test to
-  `healthSave()` and lengthen the cadence; most 5-minute saves rewrite a page
-  that has barely changed. A/B pages would be the thorough fix but are more
-  machinery than telemetry warrants. **Meanwhile: do not flash a running unit**
-  — power it down or accept losing the counters.
+  **Fixed in R09 (0.19.1, 2026-09-21):** `healthSave()` assembles the page,
+  compares it against flash and returns early when neither the health stats nor
+  the error log changed. Measured 39 consecutive skips while awake and idle, so
+  the page is now exposed only when it holds something new. **Still true: do not
+  flash a running unit** — a reset during a real write can still lose the page.
+  A/B pages remain the thorough fix if it ever proves necessary.
 
 - **Audio DMA is not restarted after a Stop 2 wake, silently.** `enterStop2()`
   restarts the MDF stereo DMA only when both `HAL_MDF_AcqStart_DMA` calls
@@ -163,6 +164,8 @@ starts recording from a fresh boot proves nothing.
 | R08 (SD SPI 5 -> 10 MHz) | 0.19.0-diag | 2026-09-21 | **PASS.** Same instrumentation, same protocol: **chunk 1 overruns 1274 -> 0**, total 1521 -> 18, card write max ~100 ms -> ~39 ms, 4 of 4 chunks at full 300 s. The `>10ms` count barely moved (4224 -> 4050), so those writes are card busy time, not bus time — what the extra bandwidth bought is margin to drain a backlog faster than it builds. Also explains R07's "regression": at 5 MHz the bus ran ~27% duty with 341 ms of ring headroom, so R06+R07's extra load (SHT30 burst ~130 ms/5 s, error log) consumed headroom that was never there. |
 
 | R08 clean (20 MHz) | 0.19.0 | 2026-09-21 | **PASS — best run of the ladder. Ring overruns 0.** 4 chunks x 300 s (50.14/50.13/50.00/49.93 MB, last 299 s), clean stop, `SD init: data CRC ENABLED` + `SUCCESS` after every wake, **no retries, no CRC mismatches**, error log clean. Instrumentation stripped, so this is the shipping code. 20 MHz proven on these traces; `stm32u575_spi10` remains as the fallback. |
+
+| R09 (health skip-unchanged) | 0.19.1 | 2026-09-21 | **PASS.** Verified with a 20 s-cadence bench build: **39 consecutive skips** while awake and idle — 39 page erase+program cycles that no longer happen, each one a window where a reset could have cost the counters. Recording still persists: `filesWritten` climbs in the web UI as chunks complete. Ship build uses the 5-minute cadence and logs a skip count hourly. |
 
 Baseline numbers for comparison: a healthy 5-minute chunk is **~52 MB**. A
 ~118 KB file means the DMA never restarted and only the ring residue was
