@@ -45,15 +45,27 @@ error-log and crash-capture protocol that the STM32 side no longer implements.
 
 ## Open bugs found while investigating (not from the field test)
 
-- **Health page lost between the R04 and R05 runs (2026-09-21).** Boot showed
-  `Health: Loaded from flash (boots=1, files=0)` where the previous run had
-  `boots=63, files=37`; the config page one page below survived (`seq=23`). The
-  mirror image of the config-reversion bug, and on a build that already has R01
-  (flash writes serialised by `flashMtx`). `healthSave()` runs only from the
-  Bridge task, so concurrent writers are not the explanation. Unresolved —
-  candidates: a deliberate stats reset from the web UI, a reset landing inside
-  the erase/program window, or something in the J-Link flash cycle. Needs
-  confirming with the user before it is chased.
+- **Health page lost between the R04 and R05 runs (2026-09-21) — cause known.**
+  Boot showed `Health: Loaded from flash (boots=1, files=0)` where the previous
+  run had `boots=63, files=37`; config one page below survived (`seq=23`). No
+  stats reset was performed. **Cause: flashing over SWD while the unit was
+  running.** The upload resets the MCU, and `healthSave()` runs every 5 minutes
+  from the Bridge task; a reset landing inside its erase/program window leaves
+  the page erased, so the next boot resets the counters and stores `boots=1`.
+  Same mechanism the audit flags for the ESP32 NRST watchdog. R01 fixed the
+  concurrency half of this; a reset mid-write needs redundancy or fewer writes,
+  not a mutex.
+
+  **Exposure tracks write frequency**, which explains the asymmetry in both
+  directions: health writes ~288x/day and died; config, which since R01 writes
+  only on real change, survived. Before R01 config was written on every adopt
+  and every 100 GPS fixes — and config was the page that kept dying.
+
+  **Fix if wanted (not yet written):** apply R01's skip-unchanged test to
+  `healthSave()` and lengthen the cadence; most 5-minute saves rewrite a page
+  that has barely changed. A/B pages would be the thorough fix but are more
+  machinery than telemetry warrants. **Meanwhile: do not flash a running unit**
+  — power it down or accept losing the counters.
 
 - **Audio DMA is not restarted after a Stop 2 wake, silently.** `enterStop2()`
   restarts the MDF stereo DMA only when both `HAL_MDF_AcqStart_DMA` calls
