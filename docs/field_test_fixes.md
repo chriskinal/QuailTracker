@@ -209,7 +209,7 @@ the two refactor steps. The refactor gets laddered like everything else.
 | R03 | R02 | **`f_expand` pre-alloc + 15 s sync cadence** (was #5) — *pulled ahead of the CRC step, see below* | **PASS (with a cost) 2026-09-21** — 0.14.0 (`fe1db2e`). 4 chunks x 300 s, **3 overruns (~32 ms)** where R02 had 0 — one per mid-window chunk open, i.e. `f_expand` writing the FAT chain. Truncate confirmed. |
 | R04 | R03 | SD data CRC + CMD59 + CRC7 + retry (was #2 / step 02) | **PASS (with a cost) 2026-09-21** — 0.15.0 (`5fe599a`). 4 chunks x 300 s, **18 overruns (~192 ms)** vs R03's 3. The same change lost 14 s and 58 s as step 02, before R03 removed the allocation stalls. |
 | R05 | R04 | **finalise on write failure** — *replaces the planned record-through (#7)* | **PASS 2026-09-21** — 0.16.3. Normal path: 4 chunks x 300 s, clean stop. Failure path verified with injected write errors: recoverable error -> truncated, header-patched file that `flac -t` decodes (618496 samples, ok); dead card -> bails at `reopen`, audio left on the card. |
-| R06 | R05 | diagnostics: in-flash error log, SPI surface, health `sdErrors`, crash capture (was #8-#12) | not applied |
+| R06 | R05 | diagnostics: in-flash error log, SPI surface, health `sdErrors`, crash capture (was #8-#12) | **written** — branch `r06-diagnostics`, 0.17.0 (`26e3513`), `bisect_bins/R06_v0.17.0_diagnostics.bin`; **pending hardware test**. Self-reset NOT re-applied (audit default); SPI2 failure is logged but not recovered. |
 
 **Reordered 2026-09-21:** `f_expand` (was R04) now comes before the SD CRC work
 (now R04). The old step-02 runs lost audio to ring overruns concentrated in the
@@ -265,7 +265,7 @@ way back in.
 | SD retry loops (`SD_IO_RETRIES`, part of R04) | transient block errors | Arrives with CRC. **Four runs now (2026-09-20 and the R04 run) have logged zero retries and zero CRC mismatches** — the path has never been observed to fire on this card. Keep the CRC detection (it is the fix for the 35% corruption); the retry loop itself is still unexercised code on the critical path. |
 | `SPI_Recover` (in baseline) | wedged SD SPI bus | Already there and cheap. Confirm it has ever fired; if not, it is untested code on the critical path. |
 | ESP32 NRST watchdog (`STM32_WD_*`) | a hung STM32 | **Has its own failure mode** — it can reset mid-flash-write, one of the two candidate causes of the config loss. R01 makes that survivable; re-check the 30 s threshold against real stall times. |
-| HardFault self-reset + TAMP capture (#12) | 30 s of downtime per fault | The capture is diagnostics and is worth keeping. The self-reset is a compensation — with ownership fixed, ask whether faults still occur at all. |
+| HardFault self-reset + TAMP capture (#12) | 30 s of downtime per fault | **Resolved 2026-09-21 in R06:** capture kept, self-reset **dropped**. With R01 and R02 in, the open question is whether faults still occur — the TAMP capture answers it, and a halted core is easier to attach to. The ESP watchdog still recovers a hung unit. Revisit if `ERR_HARDFAULT` rows appear in the field. |
 | Audio stack 8 -> 16 KB (#13) | stack overflow at rotation | Already suspected to be an artifact of the batch. Measure high-water marks on R02 instead of guessing. |
 | Error log, SPI surface, `sdErrors` (#8-#11) | no visibility | Diagnostics, not compensation. Keep — they are how the questions above get answered. |
 
