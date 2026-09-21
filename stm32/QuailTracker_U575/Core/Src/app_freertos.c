@@ -726,9 +726,9 @@ void StartAudioTask(void *argument)
           UINT bw;
           FRESULT fres = f_write(&wavFile, packed, blockLen * 6, &bw);
           if (fres != FR_OK) {
-            printf("f_write FAILED: %d at %lu bytes\r\n", fres, (unsigned long)totalDataBytes);
-            f_close(&wavFile);
-            isRecording = 0;
+            printf("f_write FAILED: %d at %lu bytes — finalising\r\n",
+                   fres, (unsigned long)totalDataBytes);
+            stopRecordingEx(1);   /* bounded finalise: truncate + header, bail on refusal */
           }
           totalDataBytes += bw;
 
@@ -738,6 +738,7 @@ void StartAudioTask(void *argument)
             f_sync(&wavFile);
           }
           osMutexRelease(fileMtxHandle);
+          if (!isRecording) break;   /* write failed and was finalised — stop draining */
         } else {
           /* FLAC encode -accumulates 8 calls into one 4096-sample block */
           uint32_t encoded = flac_enc_process_stereo(&flacEncoder, pcmBuffer, pcmBufferR, blockLen);
@@ -746,9 +747,9 @@ void StartAudioTask(void *argument)
             UINT bw;
             FRESULT fres = f_write(&wavFile, flacEncoder.outBuf, encoded, &bw);
             if (fres != FR_OK) {
-              printf("f_write FAILED: %d at %lu bytes\r\n", fres, (unsigned long)totalDataBytes);
-              f_close(&wavFile);
-              isRecording = 0;
+              printf("f_write FAILED: %d at %lu bytes — finalising\r\n",
+                     fres, (unsigned long)totalDataBytes);
+              stopRecordingEx(1);   /* bounded finalise: truncate + header, bail on refusal */
             }
             totalDataBytes += bw;
             flac_enc_notify_write(&flacEncoder, bw);
@@ -759,6 +760,7 @@ void StartAudioTask(void *argument)
               f_sync(&wavFile);
             }
             osMutexRelease(fileMtxHandle);
+            if (!isRecording) break;   /* write failed and was finalised — stop draining */
           }
         }
         /* Step 7: Check chunk duration — split file if elapsed */

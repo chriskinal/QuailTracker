@@ -57,6 +57,7 @@ void Error_Handler(void);
 #include "device_state.h"
 wake_source_t enterStop2(uint32_t seconds);
 void sht30Read(void);
+void stopRecordingEx(uint8_t bestEffort);  /* 1 = after a write error: bounded, bail on first refusal */
 void rtcSyncFromGps(void);
 void rtcGetTime(uint8_t *hours, uint8_t *minutes, uint8_t *seconds);
 void rtcGetDate(uint8_t *day, uint8_t *month, uint16_t *year);
@@ -69,7 +70,7 @@ void rtcGetDate(uint8_t *day, uint8_t *month, uint16_t *year);
 #define SD_CD_GPIO_Port GPIOC
 
 /* USER CODE BEGIN Private defines */
-#define FW_VERSION "0.15.0"
+#define FW_VERSION "0.16.0"
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

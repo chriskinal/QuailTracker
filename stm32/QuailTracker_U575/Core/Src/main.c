@@ -916,6 +916,25 @@ void startRecording(void)
 
 void stopRecording(void)
 {
+    stopRecordingEx(0);
+}
+
+/* Finalize and close the current recording.
+ *
+ * bestEffort = 0 — the normal path (chunk rotation, window end, manual stop).
+ * bestEffort = 1 — called after an f_write error. The card just refused a
+ *   write and there is no way to predict how much of the finalisation it will
+ *   accept, so every step is checked and the FIRST failure ends the sequence;
+ *   f_close is still attempted. Optional metadata (GUANO, Vorbis comment) is
+ *   skipped: the point is to get a decodable file off a card that is failing,
+ *   not a complete one. Bounded by construction — no step is retried here, and
+ *   the disk layer already bounds itself (SD_IO_RETRIES + SPI timeouts).
+ *
+ * Either way the file is truncated to true EOF: since R03 pre-allocates a whole
+ * chunk, an un-finalised file stays at its full ~86.5 MB with an unwritten tail.
+ */
+void stopRecordingEx(uint8_t bestEffort)
+{
     if (!isRecording) {
         printf("Not recording!\r\n");
         return;
@@ -924,23 +943,31 @@ void stopRecording(void)
     isRecording = 0;
     recFilename[0] = '\0';
 
+    const char *failedAt = NULL;   /* first step that refused, in bestEffort */
+
     if (dev.rec.format == REC_FMT_WAV) {
-        /* Append GUANO metadata chunk after audio data */
-        writeGuanoChunk(&wavFile, totalDataBytes);
+        /* Append GUANO metadata chunk after audio data (skipped when the card
+         * is already failing — it is metadata, not audio). */
+        if (!bestEffort) writeGuanoChunk(&wavFile, totalDataBytes);
 
         /* fptr is now at true EOF. Release the pre-allocated tail (f_expand left
          * the file at full chunk size) before the f_size-based RIFF calc below. */
-        if (recPreallocated) f_truncate(&wavFile);
+        if (recPreallocated && f_truncate(&wavFile) != FR_OK && bestEffort)
+            failedAt = "truncate";
 
         /* Rewrite WAV header with actual audio data size */
-        f_lseek(&wavFile, 0);
-        WAV_WriteHeader(&wavFile, SAMPLE_RATE, totalDataBytes);
+        if (!failedAt) {
+            if (f_lseek(&wavFile, 0) != FR_OK && bestEffort) failedAt = "lseek";
+            else WAV_WriteHeader(&wavFile, SAMPLE_RATE, totalDataBytes);
+        }
 
         /* Fix RIFF container size to include GUANO chunk */
-        uint32_t riffSize = f_size(&wavFile) - 8;
-        f_lseek(&wavFile, 4);
-        UINT bw;
-        f_write(&wavFile, &riffSize, 4, &bw);
+        if (!failedAt && !bestEffort) {
+            uint32_t riffSize = f_size(&wavFile) - 8;
+            f_lseek(&wavFile, 4);
+            UINT bw;
+            f_write(&wavFile, &riffSize, 4, &bw);
+        }
 
         f_close(&wavFile);
 
@@ -952,29 +979,47 @@ void stopRecording(void)
         uint32_t flushBytes = flac_enc_flush(&flacEncoder);
         if (flushBytes > 0) {
             UINT bw;
-            f_write(&wavFile, flacEncoder.outBuf, flushBytes, &bw);
+            if (f_write(&wavFile, flacEncoder.outBuf, flushBytes, &bw) != FR_OK && bestEffort)
+                failedAt = "flush";
             totalDataBytes += bw;
             flac_enc_notify_write(&flacEncoder, bw);
         }
 
         /* fptr is now at end of the last audio frame = true EOF. Release the
          * pre-allocated tail here, before seeking back to patch the header. */
-        if (recPreallocated) f_truncate(&wavFile);
+        if (!failedAt && recPreallocated &&
+            f_truncate(&wavFile) != FR_OK && bestEffort)
+            failedAt = "truncate";
 
-        /* Rewrite STREAMINFO + SEEKTABLE + VORBIS_COMMENT at file offset 0 */
-        f_lseek(&wavFile, 0);
-        uint8_t hdr[FLAC_HEADER_SIZE];
-        flac_enc_finalize_header(&flacEncoder, hdr);
-        hdr[4] &= 0x7F;  /* NOT last — SEEKTABLE follows */
-        UINT bw;
-        f_write(&wavFile, hdr, FLAC_HEADER_SIZE, &bw);
+        /* Rewrite STREAMINFO + SEEKTABLE + VORBIS_COMMENT at file offset 0.
+         * STREAMINFO is what makes the file decodable — without it the header
+         * still holds the placeholder written at open. */
+        if (!failedAt) {
+            UINT bw;
+            uint8_t hdr[FLAC_HEADER_SIZE];
+            static uint8_t seekBuf[FLAC_SEEKTABLE_BLOCK_SIZE];
 
-        /* Finalize SEEKTABLE with real byte offsets */
-        static uint8_t seekBuf[FLAC_SEEKTABLE_BLOCK_SIZE];
-        flac_enc_finalize_seektable(&flacEncoder, seekBuf);
-        f_write(&wavFile, seekBuf, FLAC_SEEKTABLE_BLOCK_SIZE, &bw);
+            if (f_lseek(&wavFile, 0) != FR_OK && bestEffort) {
+                failedAt = "lseek";
+            } else {
+                flac_enc_finalize_header(&flacEncoder, hdr);
+                hdr[4] &= 0x7F;  /* NOT last — SEEKTABLE follows */
+                if (f_write(&wavFile, hdr, FLAC_HEADER_SIZE, &bw) != FR_OK && bestEffort)
+                    failedAt = "streaminfo";
+            }
 
-        writeFlacVorbisComment(&wavFile); /* replaces PADDING with real metadata */
+            /* Finalize SEEKTABLE with real byte offsets */
+            if (!failedAt) {
+                flac_enc_finalize_seektable(&flacEncoder, seekBuf);
+                if (f_write(&wavFile, seekBuf, FLAC_SEEKTABLE_BLOCK_SIZE, &bw) != FR_OK
+                    && bestEffort)
+                    failedAt = "seektable";
+            }
+
+            /* Metadata only — skipped when the card is failing. */
+            if (!failedAt && !bestEffort)
+                writeFlacVorbisComment(&wavFile);
+        }
 
         f_close(&wavFile);
 
@@ -984,6 +1029,16 @@ void stopRecording(void)
         printf("Recording stopped: %lu bytes (%lus, %lu%% of raw)\r\n",
             (unsigned long)totalDataBytes, (unsigned long)seconds,
             (unsigned long)ratio);
+    }
+
+    if (bestEffort) {
+        if (failedAt)
+            printf("REC: finalise stopped at %s — file closed, audio up to that "
+                   "point is on the card (header/tail may be incomplete)\r\n",
+                   failedAt);
+        else
+            printf("REC: finalised after write error — file is complete and "
+                   "decodable\r\n");
     }
 
     /* Update health stats with completed recording */
