@@ -50,6 +50,9 @@
  * these top pages — and the config — survive a firmware update. */
 #define CONFIG_FLASH_ADDR 0x080FE000   /* last 8 KB page of the 1 MB part */
 
+#define ERRLOG_MAGIC       0x51544C47   /* "QTLG" */
+#define ERRLOG_VERSION     1
+#define ERRLOG_PAGE_OFFSET 256          /* errlog sits right after the 256 B health struct, same page */
 #define HEALTH_MAGIC       0x51544853   /* "QTHS" */
 #define HEALTH_VERSION     1
 #define HEALTH_FLASH_ADDR  0x080FC000   /* one page below config */
@@ -195,6 +198,7 @@ device_config_t cfg __attribute__((aligned(16)));
 
 /* Flash-persisted health statistics */
 health_stats_t health __attribute__((aligned(16)));
+err_log_t errLogData __attribute__((aligned(16)));   /* RAM error log; flash-backed with health */
 static uint32_t lastHealthSaveTick = 0;
 #define HEALTH_SAVE_INTERVAL_MS 300000  /* 5 minutes */
 static uint8_t prevGpsValid = 0;  /* for GPS fix loss detection */
@@ -211,6 +215,11 @@ static uint32_t lastSpiPollTick = 0;
 /* ---- Live audio streaming state ---- */
 static volatile uint8_t streamActive = 0;
 static volatile uint8_t streamChannel = 0;  /* 0=L, 1=R */
+
+/* Set by SPI_CMD_GET_ERRLOG; the next non-streaming frame carries the error log. */
+static volatile uint8_t errlogRequested = 0;
+static void errLogFillPayload(spi_errlog_payload_t *p);
+_Static_assert(SPI_ERRLOG_ROWS == ERR_CODE_COUNT, "SPI_ERRLOG_ROWS must match ERR_CODE_COUNT");
 static uint32_t streamTailL = 0;   /* independent ring tail for left channel */
 static uint32_t streamTailR = 0;   /* independent ring tail for right channel */
 static uint32_t streamLastSpiTick = 0;  /* auto-stop timeout */
@@ -246,6 +255,7 @@ static wake_source_t enterScheduledSleep(uint32_t seconds);
 /* Forward declarations for health functions */
 static void healthLoad(void);
 int healthSave(void);
+static uint32_t errLogComputeCrc(const err_log_t *e);
 void healthReset(void);
 void healthUpdateEnvironment(uint32_t battMv, int32_t tempC100);
 void healthUpdateRecStart(const char *filename);
@@ -733,12 +743,14 @@ void StartAudioTask(void *argument)
           totalDataBytes += bw;
 
           /* Sync on a wall-clock interval (see REC_SYNC_INTERVAL_MS). */
-          if ((HAL_GetTick() - recLastSyncTick) >= REC_SYNC_INTERVAL_MS) {
+          if (isRecording &&
+              (HAL_GetTick() - recLastSyncTick) >= REC_SYNC_INTERVAL_MS) {
+            f_sync(&wavFile);
             recLastSyncTick = HAL_GetTick();
             f_sync(&wavFile);
           }
           osMutexRelease(fileMtxHandle);
-          if (!isRecording) break;   /* write failed and was finalised — stop draining */
+          if (!isRecording) break;   /* write failed → stop draining into a closed file */
         } else {
           /* FLAC encode -accumulates 8 calls into one 4096-sample block */
           uint32_t encoded = flac_enc_process_stereo(&flacEncoder, pcmBuffer, pcmBufferR, blockLen);
@@ -755,12 +767,14 @@ void StartAudioTask(void *argument)
             flac_enc_notify_write(&flacEncoder, bw);
 
             /* Sync on a wall-clock interval (see REC_SYNC_INTERVAL_MS). */
-            if ((HAL_GetTick() - recLastSyncTick) >= REC_SYNC_INTERVAL_MS) {
+            if (isRecording &&
+                (HAL_GetTick() - recLastSyncTick) >= REC_SYNC_INTERVAL_MS) {
+              f_sync(&wavFile);
               recLastSyncTick = HAL_GetTick();
               f_sync(&wavFile);
             }
             osMutexRelease(fileMtxHandle);
-            if (!isRecording) break;   /* write failed and was finalised — stop draining */
+            if (!isRecording) break;   /* write failed → stop draining into a closed file */
           }
         }
         /* Step 7: Check chunk duration — split file if elapsed */
@@ -2197,6 +2211,10 @@ static void StartBridgeTask(void *argument)
                  FW_VERSION, (unsigned long)health.bootCount,
                  (unsigned long)battReadMv());
         diagLog(msg);
+        /* Record why the last run ended (fault / stall-reset) into the error log
+         * + diag, then snapshot the accumulated errors to diag.log. */
+        checkResetCause();
+        errLogDump();
     }
 
     /* Main loop: SPI2 bridge to ESP32 + sensor reads + health saves */
@@ -2225,8 +2243,10 @@ static void StartBridgeTask(void *argument)
             healthUpdateEnvironment(mv, (int32_t)sht30TempC100);
             /* Track GPS fix losses */
             uint8_t curGpsValid = gpsData.valid;
-            if (prevGpsValid && !curGpsValid)
+            if (prevGpsValid && !curGpsValid) {
                 health.gpsFixLosses++;
+                errLog(ERR_GPS_FIX_LOSS, 0);
+            }
             prevGpsValid = curGpsValid;
             /* Refresh cached SD space */
             extern void sd_space_refresh(void);
@@ -2266,14 +2286,25 @@ static void StartBridgeTask(void *argument)
             uint16_t txFlags = (HAL_GetTick() < 8000U) ? SPI_FLAG_BOOT : 0;
             spi_frame_build(&spi_tx_frame, &cfg, &dev, &health, solar_st, txFlags);
 
-            /* Fill the reserved region: audio while streaming, else OTA status
-             * while an A/B update is in progress (mutually exclusive). */
+            /* Fill the reserved region: audio while streaming, else an error-log
+             * snapshot when the web UI asked for one (mutually exclusive — audio
+             * wins, the request just retries). */
             if (streamActive) {
                 spi_audio_payload_t *ap = (spi_audio_payload_t *)spi_tx_frame._reserved;
                 ap->channel = streamChannel;
                 ap->num_samples = decimate_8k(ap->samples, 214);
                 ap->audio_active = (ap->num_samples > 0) ? 1 : 0;
                 /* Recompute CRC since we modified the frame */
+                spi_tx_frame.header.crc16 = spi_frame_crc(&spi_tx_frame);
+            } else if (errlogRequested) {
+                /* Send it on several consecutive frames (countdown), not just one:
+                 * a single frame dropped to a CRC mismatch — more likely exactly
+                 * when the SD/bus is misbehaving, i.e. when you most want the log —
+                 * would otherwise leave the web overlay blank until a manual retry.
+                 * The web render is idempotent, so repeats are harmless. */
+                errlogRequested--;
+                errLogFillPayload((spi_errlog_payload_t *)spi_tx_frame._reserved);
+                spi_tx_frame.header.flags |= SPI_FLAG_ERRLOG;
                 spi_tx_frame.header.crc16 = spi_frame_crc(&spi_tx_frame);
             }
 
@@ -2289,6 +2320,13 @@ static void StartBridgeTask(void *argument)
                 dev.comms.lastSpiTick = HAL_GetTick();
                 if (streamActive)
                     streamLastSpiTick = HAL_GetTick();
+            } else {
+                /* Diagnostics only, deliberately no recovery: R02's resume
+                 * re-inits SPI2 on every wake, and #6's recover-after-2-strikes
+                 * went with it. If these rows ever appear in the error log,
+                 * that decision gets revisited against evidence. */
+                dev.comms.espReady = 0;
+                errLog(ERR_SPI2_TXN, (uint32_t)spiResult);
             }
 
             /* Process received frame — binary protocol */
@@ -2336,6 +2374,14 @@ static void StartBridgeTask(void *argument)
 
                 /* Dispatch command */
                 switch (cmd) {
+                case SPI_CMD_HEALTH_RESET:
+                    healthReset();
+                    printf("SPI cmd: health_reset (stats zeroed)\r\n");
+                    diagLog("Health stats reset");
+                    break;
+                case SPI_CMD_GET_ERRLOG:
+                    errlogRequested = 6;   /* carry it on the next ~6 frames (drop-tolerant) */
+                    break;
                 case SPI_CMD_REC_TOGGLE: {
                     extern volatile uint8_t sdFormatState;
                     if (sdFormatState != 0) {
@@ -2715,6 +2761,7 @@ int configSave(void)
 
     /* config = 8 quad-words (128 bytes) in the inactive bank's top page */
     if (!flashWritePage(CONFIG_FLASH_ADDR, (const uint8_t *)&cfg, 8)) {
+        errLog(ERR_FLASH_WRITE, HAL_FLASH_GetError());
         printf("Config: Flash write FAILED (err=0x%lx)\r\n",
                (unsigned long)HAL_FLASH_GetError());
         return 0;
@@ -2739,6 +2786,16 @@ static int healthValid(const health_stats_t *h)
 
 static void healthLoad(void)
 {
+    /* Error log shares the health page (offset 256). Restore it if valid, else
+     * start empty — first boot on new firmware finds erased 0xFF there. */
+    const err_log_t *ef = (const err_log_t *)(HEALTH_FLASH_ADDR + ERRLOG_PAGE_OFFSET);
+    if (ef->magic == ERRLOG_MAGIC && ef->version == ERRLOG_VERSION &&
+        ef->crc32 == errLogComputeCrc(ef)) {
+        memcpy(&errLogData, ef, sizeof(errLogData));
+    } else {
+        memset(&errLogData, 0, sizeof(errLogData));
+    }
+
     /* Single-bank: health lives at one fixed top page that never moves. */
     const health_stats_t *flash = (const health_stats_t *)HEALTH_FLASH_ADDR;
     if (healthValid(flash)) {
@@ -2760,10 +2817,19 @@ static void healthLoad(void)
 int healthSave(void)
 {
     health.crc32 = healthComputeCrc(&health);
+    errLogData.magic = ERRLOG_MAGIC;
+    errLogData.version = ERRLOG_VERSION;
+    errLogData.crc32 = errLogComputeCrc(&errLogData);
 
-    /* health = 16 quad-words (256 bytes) in the inactive bank, one page below
-     * config. Retries once on the post-swap-boot transient (see flashWritePage). */
-    if (!flashWritePage(HEALTH_FLASH_ADDR, (const uint8_t *)&health, 16)) {
+    /* One page write carries BOTH structs: health at the page base (256 B) and
+     * the error log right after (offset 256). Same erase — the error log is free
+     * to persist, no extra flash wear. 1056 B = 66 quad-words. */
+    static uint8_t page[ERRLOG_PAGE_OFFSET + sizeof(err_log_t)] __attribute__((aligned(16)));
+    memcpy(page, &health, sizeof(health));
+    memcpy(page + ERRLOG_PAGE_OFFSET, &errLogData, sizeof(errLogData));
+
+    if (!flashWritePage(HEALTH_FLASH_ADDR, page, (int)(sizeof(page) / 16))) {
+        errLog(ERR_FLASH_WRITE, HAL_FLASH_GetError());  /* RAM-only; persists next save */
         printf("Health: Flash write FAILED (err=0x%lx)\r\n",
                (unsigned long)HAL_FLASH_GetError());
         return 0;
@@ -2782,6 +2848,139 @@ void healthReset(void)
     health.battMinMv = 0xFFFFFFFF;
     health.tempMinC100 = 32767;
     health.tempMaxC100 = -32768;
+    memset(&errLogData, 0, sizeof(errLogData));   /* clear the error log too */
+    healthSave();
+}
+
+/* ========================= Structured Error Log ========================= */
+
+static const char *const errName[ERR_CODE_COUNT] = {
+    "SHT30_READ", "I2C_RECOVER", "ADC_READ", "ADC_RECOVER",
+    "SPI2_TXN", "SPI2_RECOVER", "SD_WRITE_RETRY", "SD_WRITE_FAIL",
+    "SD_READ_RETRY", "SD_READ_FAIL", "SD_CRC", "REC_RESTART",
+    "REC_ABANDON", "GPS_FIX_LOSS", "FLASH_WRITE", "HARDFAULT", "RESET",
+};
+
+static uint32_t errLogComputeCrc(const err_log_t *e)
+{
+    return crc32_compute((const uint8_t *)e, sizeof(err_log_t) - 4);
+}
+
+/* Record one error occurrence: bump the per-code row and push a ring event.
+ * Best-effort stats — IRQs briefly masked to keep the counters/ring index from
+ * tearing when called from different tasks (or the SD driver). Not for ISRs. */
+void errLog(uint16_t code, uint32_t arg)
+{
+    if (code >= ERR_CODE_COUNT) return;
+    uint32_t now = rtcEpochNow();
+
+    uint32_t primask = __get_PRIMASK();   /* preserve caller's IRQ state */
+    __disable_irq();
+    err_row_t *r = &errLogData.rows[code];
+    if (r->count == 0) r->firstUtc = now;
+    r->count++;
+    r->lastUtc = now;
+    r->lastArg = arg;
+
+    err_event_t *ev = &errLogData.ring[errLogData.ringHead % ERR_RING_LEN];
+    ev->code = code;
+    ev->seq  = (uint16_t)errLogData.totalEvents;
+    ev->utc  = now;
+    ev->arg  = arg;
+    errLogData.ringHead = (errLogData.ringHead + 1u) % ERR_RING_LEN;
+    errLogData.totalEvents++;
+    __set_PRIMASK(primask);
+
+    /* Mirror hard SD data-loss into the persisted health.sdErrors counter — it's
+     * already plumbed to the web "Since Last Visit" card ("N SD errors"), so this
+     * gives an at-a-glance card-health signal without opening the error log.
+     * Only losses (retries/CRC recovered fine and stay in the detailed table). */
+    if (code == ERR_SD_WRITE_FAIL || code == ERR_SD_READ_FAIL)
+        health.sdErrors++;
+}
+
+/* Append a snapshot of the error table (non-zero codes) + the recent ring to
+ * diag.log. One f_open — a single milestone write, NOT per-error. Safe to call
+ * from a task with the SD mounted (e.g. at boot). No-op if nothing logged. */
+void errLogDump(void)
+{
+    if (!sdMounted || errLogData.totalEvents == 0) return;
+    if (osMutexAcquire(fileMtxHandle, 200) != osOK) return;
+
+    FIL f;
+    if (f_open(&f, "logs/diag.log", FA_OPEN_APPEND | FA_WRITE) == FR_OK) {
+        UINT bw;
+        char line[128];
+        int n = snprintf(line, sizeof(line),
+                         "--- ERRORS (%lu events since reset) ---\n",
+                         (unsigned long)errLogData.totalEvents);
+        f_write(&f, line, n, &bw);
+        for (int c = 0; c < ERR_CODE_COUNT; c++) {
+            const err_row_t *r = &errLogData.rows[c];
+            if (r->count == 0) continue;
+            n = snprintf(line, sizeof(line),
+                         "  %-14s x%lu  first=%lu last=%lu arg=0x%lX\n",
+                         errName[c], (unsigned long)r->count,
+                         (unsigned long)r->firstUtc, (unsigned long)r->lastUtc,
+                         (unsigned long)r->lastArg);
+            f_write(&f, line, n, &bw);
+        }
+        f_close(&f);
+    }
+    osMutexRelease(fileMtxHandle);
+}
+
+/* At boot, record why the LAST run ended — into the error log (viewable over
+ * WiFi) and diag.log. A hard fault stashed its registers in TAMP backup regs
+ * before self-resetting; other warm resets (ESP-watchdog NRST after a stall,
+ * software reboot) are inferred from RCC_CSR. A clean power-on (BOR) is skipped.
+ * Call once early, after healthLoad (so errLogData is live). */
+void checkResetCause(void)
+{
+    uint32_t csr = RCC->CSR;   /* reset flags, sticky until RMVF */
+    char m[96];
+
+    if (TAMP->BKP0R == 0xFA017C0DUL) {          /* hard fault last run */
+        uint32_t pc = TAMP->BKP2R, cfsr = TAMP->BKP1R, lr = TAMP->BKP4R;
+        TAMP->BKP0R = 0;
+        errLog(ERR_HARDFAULT, pc);
+        snprintf(m, sizeof(m), "HARDFAULT PC=0x%08lX CFSR=0x%08lX LR=0x%08lX",
+                 (unsigned long)pc, (unsigned long)cfsr, (unsigned long)lr);
+        diagLog(m);
+        printf("RESET: %s\r\n", m);
+    } else if (!(csr & RCC_CSR_BORRSTF)) {      /* warm reset, not a power-on */
+        errLog(ERR_RESET, csr);
+        snprintf(m, sizeof(m), "RESET (warm) RCC_CSR=0x%08lX", (unsigned long)csr);
+        diagLog(m);
+        printf("RESET: %s\r\n", m);
+    }
+
+    RCC->CSR |= RCC_CSR_RMVF;   /* clear so next boot's flags are fresh */
+}
+
+/* Pack the error log into the compact SPI payload for the web UI. Snapshots the
+ * per-code table and the most recent SPI_ERRLOG_RING ring events. */
+static void errLogFillPayload(spi_errlog_payload_t *p)
+{
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    p->totalEvents = errLogData.totalEvents;
+    p->ringHead    = errLogData.ringHead;
+    for (int i = 0; i < SPI_ERRLOG_ROWS; i++) {
+        p->rows[i].count    = errLogData.rows[i].count;
+        p->rows[i].firstUtc = errLogData.rows[i].firstUtc;
+        p->rows[i].lastUtc  = errLogData.rows[i].lastUtc;
+        p->rows[i].lastArg  = errLogData.rows[i].lastArg;
+    }
+    /* Most recent events, newest first: walk back from ringHead. */
+    for (int i = 0; i < SPI_ERRLOG_RING; i++) {
+        uint32_t idx = (errLogData.ringHead + ERR_RING_LEN - 1u - (uint32_t)i) % ERR_RING_LEN;
+        p->ring[i].code = errLogData.ring[idx].code;
+        p->ring[i].seq  = errLogData.ring[idx].seq;
+        p->ring[i].utc  = errLogData.ring[idx].utc;
+        p->ring[i].arg  = errLogData.ring[idx].arg;
+    }
+    __set_PRIMASK(primask);
 }
 
 /* Update battery/temp min/max — called from SHT30 periodic read */

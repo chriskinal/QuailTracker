@@ -2157,6 +2157,27 @@ static void MX_RTC_Init(void)
 }
 
 /* ---- RTC time sync from GPS ---- */
+/* RTC → UNIX epoch seconds (proleptic Gregorian). Returns 0 if the RTC has not
+ * been GPS-disciplined yet, so error timestamps are absolute where available. */
+uint32_t rtcEpochNow(void)
+{
+    if (!dev.pwr.rtcSynced) return 0;
+    uint8_t hh, mm, ss, dd, mo;
+    uint16_t yy;
+    rtcGetTime(&hh, &mm, &ss);
+    rtcGetDate(&dd, &mo, &yy);
+
+    static const uint16_t cumDays[12] = {0,31,59,90,120,151,181,212,243,273,304,334};
+    uint32_t y = yy;
+    uint32_t days = (y - 1970) * 365
+                  + (y - 1969) / 4 - (y - 1901) / 100 + (y - 1601) / 400
+                  + cumDays[(mo - 1u) % 12u]
+                  + (dd - 1u);
+    if (mo > 2 && ((y % 4 == 0 && y % 100 != 0) || y % 400 == 0))
+        days += 1;   /* leap day already passed this year */
+    return days * 86400u + (uint32_t)hh * 3600u + (uint32_t)mm * 60u + ss;
+}
+
 void rtcSyncFromGps(void)
 {
     extern device_state_t dev;
