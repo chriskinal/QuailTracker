@@ -10,6 +10,7 @@ CN1,JST PH 4-pin S4B-PH-SM4-TB,SMD 2.0mm pitch,C265102,1,Cable to main board (SM
 # Mic is bottom-port: mounted on TOP side, sound enters from BOTTOM through PCB hole
 # Ground pour on bottom layer under mic but NO copper under sound hole
 # Order PCB + stencil from JLCPCB (no assembly — hand-built)
+# MIC1 restock alternative: IM73D122V01 (drop-in but 10dB hotter — see mic_breakout_netlist.md)
 # -------------------------------------------------------
 # ASSEMBLY PROCESS
 # -------------------------------------------------------

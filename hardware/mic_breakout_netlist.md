@@ -31,6 +31,25 @@ Cross-reference: `mic_breakout_bom.csv`
 
 ---
 
+## Restock Alternative: IM73D122V01
+
+Drop-in on this board: same package, pinout, supply range (1.62–3.6V), L/R
+convention, 0.8mm sound hole and 3.072MHz clock mode. Datasheet:
+`datasheets/infineon-im73d122-datasheet-en.pdf`.
+
+| | IM72D128V01 | IM73D122V01 |
+|---|---|---|
+| Sensitivity | −36 dBFS | −26 dBFS |
+| SNR @ 3.072MHz | 72 dB(A) | 73 dB(A) |
+| AOP | 128 dBSPL | 122 dBSPL |
+
+- **Gain:** the IM73 output is 10dB hotter. Reduce the MDF gain by ~10dB on
+  IM73 units (default `Gain = 6` in `main.c` → about 3, assuming 3dB/step) so
+  recorded levels and the detector's mel normalization match IM72 units.
+- **Never mix** an IM72 and an IM73 in one stereo pair.
+
+---
+
 ## Solder Jumper (SJ1)
 
 Three-pad jumper to select L/R channel:
